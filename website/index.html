@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>影相對功課</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&display=swap">
+<style>
+  :root{
+    --ink:#3a2b2e; --muted:#9c8288; --card:#ffffff;
+    --pink:#f28ba0; --pink-soft:#fbd9df; --pink-ink:#c23f5b;
+    --yellow:#f6c453; --yellow-soft:#fdedc7;
+    --good:#3fae5c; --bad:#e0483e; --unsure:#e0a13a;
+    --shadow: 0 2px 10px rgba(58,43,46,0.08);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; color:var(--ink);
+    background:linear-gradient(180deg, #fcf2f3 0%, #fffbea 55%, #fffbea 100%);
+    background-attachment:fixed;
+    font-family:"Noto Sans TC","PingFang TC",-apple-system,BlinkMacSystemFont,sans-serif;
+    padding-inline:16px; padding-block:20px 40px;
+  }
+  .page{max-width:460px; margin:0 auto;}
+  .brand{font-weight:800; font-size:1.3rem; color:var(--pink-ink); text-align:center; margin-bottom:2px;}
+  h1{font-size:1.15rem; text-align:center; margin:0 0 4px; font-weight:800;}
+  .sub{font-size:.85rem; color:var(--muted); text-align:center; margin:0 0 20px; line-height:1.55;}
+
+  .card{background:var(--card); border-radius:20px; padding:18px; box-shadow:var(--shadow); margin-bottom:16px;}
+
+  .shots{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px;}
+  .shot{position:relative; width:72px; height:96px; border-radius:12px; overflow:hidden; box-shadow:var(--shadow);}
+  .shot img{width:100%; height:100%; object-fit:cover; display:block;}
+  .shot .rm{position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:12px; line-height:20px; padding:0;}
+  .addbtn{width:72px; height:96px; border-radius:12px; border:2px dashed var(--pink-soft); background:#fff8f9; color:var(--pink-ink); font-size:1.6rem; font-weight:800;}
+
+  button.big{
+    width:100%; padding:15px; border-radius:16px; border:none; font-family:inherit;
+    font-weight:800; font-size:1rem; cursor:pointer; box-shadow:var(--shadow);
+  }
+  .btn-primary{background:var(--pink); color:#fff;}
+  .btn-primary:disabled{background:#e9c4cd; color:#fff8; cursor:default;}
+  .btn-secondary{background:#fff; color:var(--ink); border:1.5px solid var(--pink-soft) !important;}
+
+  .status{text-align:center; font-size:.85rem; color:var(--muted); margin:10px 0;}
+  .status.err{color:var(--bad); font-weight:700;}
+
+  .result-page{margin-bottom:18px;}
+  .result-page .imgwrap{position:relative; border-radius:14px; overflow:hidden; box-shadow:var(--shadow); line-height:0;}
+  .result-page img{width:100%; display:block;}
+  .mark{
+    position:absolute; width:30px; height:30px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:900;
+    transform:translate(-50%,-50%); box-shadow:0 1px 4px rgba(0,0,0,.35); border:2px solid #fff;
+    color:#fff; cursor:default;
+  }
+  .mark.good{background:var(--good);}
+  .mark.bad{background:var(--bad);}
+  .mark.unsure{background:var(--unsure); cursor:pointer;}
+
+  .score-banner{text-align:center; font-weight:800; font-size:1.2rem; margin:14px 0 6px; color:var(--pink-ink);}
+  .weak-areas{font-size:.82rem; color:var(--muted); text-align:center; margin-bottom:10px;}
+
+  .confirm-list{margin-top:6px;}
+  .confirm-item{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:var(--yellow-soft); border-radius:12px; padding:9px 12px; margin-bottom:8px; font-size:.85rem;
+  }
+  .confirm-item .q{font-weight:700;}
+  .confirm-item .btns{display:flex; gap:6px; flex-shrink:0;}
+  .confirm-item button{
+    padding:6px 12px; border-radius:9px; border:none; font-weight:800; font-size:.8rem; font-family:inherit; cursor:pointer;
+  }
+  .confirm-item .ok{background:var(--good); color:#fff;}
+  .confirm-item .no{background:var(--bad); color:#fff;}
+
+  .back{display:inline-flex; align-items:center; gap:6px; color:var(--muted); text-decoration:none; font-size:.85rem; font-weight:700; margin-bottom:16px;}
+  .limit-banner{background:var(--yellow-soft); border-radius:12px; padding:10px 12px; font-size:.8rem; text-align:center; margin-bottom:14px; color:#7a5a1f;}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="brand">影相對功課 ♥</div>
+  <h1>影完相，AI即刻幫你剔同交叉</h1>
+  <p class="sub">影低小朋友做完嘅功課（唔限本網站出嘅卷，乜嘢功課都得），AI會自己諗答案，同你張相標返啱同錯。</p>
+
+  <div id="limitBanner" class="limit-banner" hidden></div>
+
+  <div class="card" id="uploadCard">
+    <div class="shots" id="shots"></div>
+    <input type="file" id="fileInput" accept="image/*" capture="environment" multiple hidden>
+    <button class="big btn-primary" id="submitBtn" disabled>影相對功課</button>
+  </div>
+
+  <div id="statusMsg" class="status" hidden></div>
+
+  <div id="results"></div>
+
+  <div id="againWrap" hidden>
+    <button class="big btn-secondary" id="againBtn">再影過</button>
+  </div>
+</div>
+
+<script>
+const MAX_PAGES = 5;
+const MAX_SUBMISSIONS_PER_MONTH = 30; // soft UX guardrail, not real abuse prevention
+let shots = []; // { dataUrl, base64 }
+
+const shotsEl = document.getElementById('shots');
+const fileInput = document.getElementById('fileInput');
+const submitBtn = document.getElementById('submitBtn');
+const statusEl = document.getElementById('statusMsg');
+const resultsEl = document.getElementById('results');
+const againWrap = document.getElementById('againWrap');
+const uploadCard = document.getElementById('uploadCard');
+
+function renderShots(){
+  shotsEl.innerHTML = '';
+  shots.forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = 'shot';
+    div.innerHTML = `<img src="${s.dataUrl}"><button class="rm" data-i="${i}">×</button>`;
+    shotsEl.appendChild(div);
+  });
+  if (shots.length < MAX_PAGES){
+    const add = document.createElement('button');
+    add.className = 'addbtn';
+    add.textContent = '+';
+    add.onclick = () => fileInput.click();
+    shotsEl.appendChild(add);
+  }
+  submitBtn.disabled = shots.length === 0;
+  shotsEl.querySelectorAll('.rm').forEach(btn => {
+    btn.onclick = () => { shots.splice(+btn.dataset.i, 1); renderShots(); };
+  });
+}
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 1600;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+fileInput.onchange = async () => {
+  const files = Array.from(fileInput.files || []).slice(0, MAX_PAGES - shots.length);
+  for (const f of files) {
+    try { shots.push(await fileToBase64(f)); } catch(e){}
+  }
+  fileInput.value = '';
+  renderShots();
+};
+
+function checkMonthlyLimit(){
+  try {
+    const key = 'hwcheck_submissions';
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(key) || '[]')).filter(t => now - t < 30*24*3600*1000);
+    const banner = document.getElementById('limitBanner');
+    if (list.length >= MAX_SUBMISSIONS_PER_MONTH) {
+      banner.textContent = `本月已用完 ${MAX_SUBMISSIONS_PER_MONTH} 次免費檢查次數，下個月再嚟啦。`;
+      banner.hidden = false;
+      return false;
+    }
+    if (list.length >= MAX_SUBMISSIONS_PER_MONTH - 5) {
+      banner.textContent = `本月仲有 ${MAX_SUBMISSIONS_PER_MONTH - list.length} 次檢查次數。`;
+      banner.hidden = false;
+    }
+    return true;
+  } catch(e){ return true; }
+}
+function recordSubmission(){
+  try {
+    const key = 'hwcheck_submissions';
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(key) || '[]')).filter(t => now - t < 30*24*3600*1000);
+    list.push(now);
+    localStorage.setItem(key, JSON.stringify(list));
+  } catch(e){}
+}
+checkMonthlyLimit();
+
+function markClass(correct){
+  if (correct === true) return 'good';
+  if (correct === false) return 'bad';
+  return 'unsure';
+}
+function markIcon(correct){
+  if (correct === true) return '✓';
+  if (correct === false) return '✗';
+  return '?';
+}
+
+function renderResults(data){
+  resultsEl.innerHTML = '';
+  const byPage = new Map();
+  (data.results || []).forEach(r => {
+    const p = r.page || 0;
+    if (!byPage.has(p)) byPage.set(p, []);
+    byPage.get(p).push(r);
+  });
+
+  shots.forEach((s, pIdx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'result-page';
+    const marksHtml = (byPage.get(pIdx) || []).map((r, ri) => {
+      if (!r.bbox) return '';
+      const cx = (r.bbox.x || 0) + (r.bbox.w || 0) / 2;
+      const cy = (r.bbox.y || 0) + (r.bbox.h || 0) / 2;
+      return `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+    }).join('');
+    wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}">${marksHtml}</div>`;
+    resultsEl.appendChild(wrap);
+  });
+
+  const scoreBanner = document.createElement('div');
+  scoreBanner.className = 'score-banner';
+  scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
+  resultsEl.appendChild(scoreBanner);
+
+  if (Array.isArray(data.weakAreas) && data.weakAreas.length) {
+    const w = document.createElement('div');
+    w.className = 'weak-areas';
+    w.textContent = '弱項：' + data.weakAreas.join('、');
+    resultsEl.appendChild(w);
+  }
+
+  const unsureItems = (data.results || []).filter(r => r.correct === null);
+  if (unsureItems.length) {
+    const list = document.createElement('div');
+    list.className = 'confirm-list';
+    list.innerHTML = `<div class="sub" style="margin-bottom:8px;">呢幾條AI睇得唔清楚，你幫手確認一下：</div>` +
+      unsureItems.map((r) => `
+        <div class="confirm-item" data-page="${r.page}" data-q="${r.question}">
+          <span class="q">第${(r.page||0)+1}頁 · ${r.question}題</span>
+          <span class="btns">
+            <button class="ok">啱</button>
+            <button class="no">錯</button>
+          </span>
+        </div>`).join('');
+    resultsEl.appendChild(list);
+
+    list.querySelectorAll('.confirm-item').forEach(item => {
+      const page = +item.dataset.page, q = item.dataset.q;
+      item.querySelector('.ok').onclick = () => resolveMark(data, page, q, true, item);
+      item.querySelector('.no').onclick = () => resolveMark(data, page, q, false, item);
+    });
+  }
+
+  uploadCard.hidden = true;
+  againWrap.hidden = false;
+}
+
+function resolveMark(data, page, q, correct, itemEl){
+  const r = (data.results || []).find(x => (x.page||0) === page && String(x.question) === String(q));
+  if (r) r.correct = correct;
+  // update the on-photo mark
+  const idx = (data.results || []).filter(x => (x.page||0) === page).indexOf(r);
+  const markEl = document.querySelector(`.mark[data-page="${page}"][data-idx="${idx}"]`);
+  if (markEl) {
+    markEl.className = 'mark ' + markClass(correct);
+    markEl.textContent = markIcon(correct);
+  }
+  // recompute score
+  const graded = data.results.filter(x => x.correct !== null);
+  const correctCount = graded.filter(x => x.correct === true).length;
+  data.score = `${correctCount} / ${graded.length}`;
+  document.querySelector('.score-banner').textContent = `分數：${data.score}`;
+  itemEl.remove();
+}
+
+submitBtn.onclick = async () => {
+  if (!shots.length) return;
+  if (!checkMonthlyLimit()) return;
+  submitBtn.disabled = true;
+  statusEl.hidden = false;
+  statusEl.className = 'status';
+  statusEl.textContent = 'AI檢查緊，請稍等（可能要10-30秒）...';
+  try {
+    const res = await fetch('/api/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })) }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.className = 'status err';
+      statusEl.textContent = data.message || '檢查失敗，請再試一次。';
+      submitBtn.disabled = false;
+      return;
+    }
+    statusEl.hidden = true;
+    recordSubmission();
+    renderResults(data);
+  } catch (e) {
+    statusEl.className = 'status err';
+    statusEl.textContent = '網絡錯誤，請再試一次。';
+    submitBtn.disabled = false;
+  }
+};
+
+document.getElementById('againBtn').onclick = () => {
+  shots = [];
+  renderShots();
+  resultsEl.innerHTML = '';
+  uploadCard.hidden = false;
+  againWrap.hidden = true;
+  statusEl.hidden = true;
+};
+
+renderShots();
+</script>
+</body>
+</html>

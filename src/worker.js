@@ -1,0 +1,202 @@
+// Cloudflare Worker: serves the static site (website/) for everything except
+// /api/check, which calls the Anthropic API to grade an arbitrary photographed
+// homework page. Unlike the sibling hk-maths project, there is NO known
+// answer key here -- the homework can be anything a parent photographs, so
+// the model has to work out the correct answer itself, not just compare
+// against a pre-computed one.
+//
+// Needs an ANTHROPIC_API_KEY bound via Cloudflare's Secrets Store (see
+// wrangler.toml -- same store/secret as hk-maths, since it's the same
+// Anthropic account). A Secrets Store binding is NOT a plain string -- it's
+// an object exposing an async .get(), so read it with
+// `await env.ANTHROPIC_API_KEY.get()`.
+//
+// /api/check is public/unauthenticated -- same per-IP rate limit pattern as
+// hk-maths, ported from the same source (the UK site's feedback-endpoint
+// anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
+const CHECK_RATE_LIMIT = 15; // max /api/check calls per IP per hour
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/check" && request.method === "POST") {
+      return handleCheck(request, env);
+    }
+    return env.ASSETS.fetch(request);
+  },
+};
+
+async function handleCheck(request, env) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json(
+      { error: "not_configured", message: "自動改功課未設定好，請聯絡網站管理員。" },
+      503
+    );
+  }
+  const apiKey = typeof env.ANTHROPIC_API_KEY === "string"
+    ? env.ANTHROPIC_API_KEY
+    : await env.ANTHROPIC_API_KEY.get();
+
+  if (env.RATE_LIMIT_KV) {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rateKey = "checkrate:" + ip;
+    let count = 0;
+    try {
+      const raw = await env.RATE_LIMIT_KV.get(rateKey);
+      count = raw ? (parseInt(raw, 10) || 0) : 0;
+    } catch (e) { /* KV unreachable -- don't block over it */ }
+    if (count >= CHECK_RATE_LIMIT) {
+      return json(
+        { error: "rate_limited", message: "短時間內請求太多，請一小時後再試。" },
+        429
+      );
+    }
+    try {
+      await env.RATE_LIMIT_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
+  }
+
+  let { images, image, mediaType } = body;
+  if (!images && image) images = [{ data: image, mediaType }];
+  if (!images || !images.length) {
+    return json({ error: "bad_request", message: "缺少相片。" }, 400);
+  }
+  const MAX_PAGES = 5;
+  if (images.length > MAX_PAGES) {
+    return json(
+      { error: "too_many_pages", message: `每次最多批改 ${MAX_PAGES} 頁，請分開幾次提交。` },
+      400
+    );
+  }
+
+  // No answer key exists for arbitrary homework -- the model has to solve
+  // each question itself before it can judge the child's handwritten answer.
+  // It also returns an approximate bounding box (as a % of that page's
+  // width/height) near each question, so the client can draw a check/cross
+  // mark directly on the photo instead of just listing results as text.
+  const prompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁，可能來自唔同科目／唔同來源，並非本網站出嘅練習卷）。呢啲係普通功課，冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
+
+要求：
+1. 睇清楚相入面每一條題目（可以係印刷體或手寫題目），自己諗出正確答案，然後同學生手寫嘅作答比較。
+2. 答題位置完全空白、無筆跡，"correct" 設為 false，"note" 填「未作答」。
+3. 只有答題位置確實有筆跡，但寫得太潦草或有歧義而無法判斷，先將 "correct" 設為 null，並喺 "note" 簡短註明原因（例如「字跡不清」），四個字以內。
+4. "note" 只在答錯、未作答或不確定時填寫，答對的一律留空字串。
+5. 對於每一題，喺 "bbox" 提供一個大約嘅方框位置，用百分比（0-100）表示，相對於嗰一頁相片嘅闊度同高度，方框範圍應該喺學生手寫作答附近或題號隔籬，等我哋可以喺相片上面嗰個位置標記剔號或交叉。另外用 "page" 講呢一題喺第幾張相（由0開始計）。
+6. 只回覆一個JSON物件，不要加任何其他文字：
+{
+  "results": [
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0}}
+  ],
+  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
+  "weakAreas": ["按錯誤歸納的弱項"]
+}`;
+
+  let parsed;
+  const usage = { sonnet: null, opus: null };
+  try {
+    const r = await callClaude("claude-sonnet-5", 4096, images, prompt, apiKey);
+    parsed = r.parsed;
+    usage.sonnet = r.usage;
+  } catch (e) {
+    return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
+  }
+
+  // Hybrid pass: only re-send genuinely unsure questions to the pricier
+  // model, and only ask it for a correctness verdict -- the bbox from the
+  // first pass is kept as-is, since the mark's position doesn't change just
+  // because a second look resolves the handwriting.
+  const unsure = (parsed.results || []).filter((r) => r.correct === null);
+  if (unsure.length) {
+    const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目佢睇唔清楚學生寫嘅答案，需要你用更仔細嘅眼光再睇一次相片：
+${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、')}
+
+呢份功課冇標準答案，請你自己諗清楚每一題應該點答，再判斷學生手寫嘅答案。
+
+只需要回覆上面列出嘅題目，要求：
+1. 盡量仔細判斷。如果答題位置完全空白、冇任何筆跡，"correct" 設為 false，"note" 填「未作答」。
+2. 只有答題位置確實有筆跡、但寫得太潦草無法判斷寫嘅係咩，先設 "correct" 為 null。
+3. "note" 最多四個字，答對可留空。
+4. 只回覆JSON，不要其他文字：
+{"results":[{"question":"題號","page":0,"correct":true/false/null,"note":""}]}`;
+
+    try {
+      const rc = await callClaude("claude-opus-5", 2048, images, recheckPrompt, apiKey);
+      const recheck = rc.parsed;
+      usage.opus = rc.usage;
+      const byKey = new Map((recheck.results || []).map((r) => [`${r.page}:${r.question}`, r]));
+      parsed.results = (parsed.results || []).map((r) => {
+        const updated = byKey.get(`${r.page}:${r.question}`);
+        return updated && r.correct === null ? { ...r, correct: updated.correct, note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
+      });
+    } catch (e) {
+      // Opus recheck failing shouldn't sink the whole response.
+    }
+
+    const graded = parsed.results.filter((r) => r.correct !== null);
+    const correctCount = graded.filter((r) => r.correct === true).length;
+    parsed.score = `${correctCount} / ${graded.length}`;
+  }
+
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage }));
+
+  return json(parsed, 200);
+}
+
+async function callClaude(model, maxTokens, images, prompt, apiKey) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      messages: [
+        {
+          role: "user",
+          content: [
+            ...images.map((img) => ({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: img.mediaType || "image/jpeg",
+                data: img.data,
+              },
+            })),
+            { type: "text", text: prompt },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
+  }
+
+  const data = await res.json();
+  const text = (data.content || []).map((b) => b.text || "").join("");
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    return { parsed: JSON.parse(match ? match[0] : text), usage: data.usage || null };
+  } catch (e) {
+    throw { kind: "parse_error", uiMessage: "批改結果解析失敗，請再試一次。", detail: text.slice(0, 500), status: 502 };
+  }
+}
+
+function json(obj, status) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
