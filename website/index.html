@@ -57,6 +57,12 @@
   .mark.good{background:var(--good);}
   .mark.bad{background:var(--bad);}
   .mark.unsure{background:var(--unsure); cursor:pointer;}
+  .mark-answer{
+    position:absolute; transform:translate(4px,-50%); white-space:nowrap;
+    background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
+    padding:1px 5px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.3);
+    margin-left:16px;
+  }
 
   .score-banner{text-align:center; font-weight:800; font-size:1.2rem; margin:14px 0 6px; color:var(--pink-ink);}
   .weak-areas{font-size:.82rem; color:var(--muted); text-align:center; margin-bottom:10px;}
@@ -103,7 +109,12 @@
 
 <script>
 const MAX_PAGES = 5;
-const MAX_SUBMISSIONS_PER_MONTH = 30; // soft UX guardrail, not real abuse prevention
+// Soft UX guardrail only (not real abuse prevention -- that's the server-side
+// per-IP hourly limit in worker.js). Sized for realistic daily homework
+// volume: ~12 pages/day at up to 5 pages/submission needs 3+ submissions/day,
+// i.e. 90+/month just for normal use -- 30 was carried over from a
+// lower-volume context and was too tight.
+const MAX_SUBMISSIONS_PER_MONTH = 120;
 let shots = []; // { dataUrl, base64 }
 
 const shotsEl = document.getElementById('shots');
@@ -222,7 +233,11 @@ function renderResults(data){
       // resumes on that line), so the mark just needs to sit at its center.
       const cx = (r.bbox.x || 0) + (r.bbox.w || 0) / 2;
       const cy = (r.bbox.y || 0) + (r.bbox.h || 0) / 2;
-      return `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+      const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+      const ans = (r.correct === false && r.correctAnswer)
+        ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
+        : '';
+      return mark + ans;
     }).join('');
     wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}">${marksHtml}</div>`;
     resultsEl.appendChild(wrap);
@@ -232,13 +247,6 @@ function renderResults(data){
   scoreBanner.className = 'score-banner';
   scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
   resultsEl.appendChild(scoreBanner);
-
-  if (Array.isArray(data.weakAreas) && data.weakAreas.length) {
-    const w = document.createElement('div');
-    w.className = 'weak-areas';
-    w.textContent = '弱項：' + data.weakAreas.join('、');
-    resultsEl.appendChild(w);
-  }
 
   const unsureItems = (data.results || []).filter(r => r.correct === null);
   if (unsureItems.length) {
@@ -275,6 +283,17 @@ function resolveMark(data, page, q, correct, itemEl){
   if (markEl) {
     markEl.className = 'mark ' + markClass(correct);
     markEl.textContent = markIcon(correct);
+  }
+  const ansEl = document.querySelector(`.mark-answer[data-page="${page}"][data-idx="${idx}"]`);
+  if (!correct && r && r.correctAnswer && !ansEl && markEl) {
+    const div = document.createElement('div');
+    div.className = 'mark-answer';
+    div.style.left = markEl.style.left;
+    div.style.top = markEl.style.top;
+    div.textContent = r.correctAnswer;
+    markEl.parentNode.appendChild(div);
+  } else if (correct && ansEl) {
+    ansEl.remove();
   }
   // recompute score
   const graded = data.results.filter(x => x.correct !== null);

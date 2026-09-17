@@ -88,20 +88,19 @@ async function handleCheck(request, env) {
   // the mark position is upgraded to that OCR box (see refineWithOcr below).
   const prompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁，可能來自唔同科目／唔同來源，並非本網站出嘅練習卷）。呢啲係普通功課，冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
 
-要求：
+要求（保持精簡，減少字數）：
 1. 睇清楚相入面每一條題目（可以係印刷體或手寫題目），自己諗出正確答案，然後同學生手寫嘅作答比較。
 2. 答題位置完全空白、無筆跡，"correct" 設為 false，"note" 填「未作答」。
 3. 只有答題位置確實有筆跡，但寫得太潦草或有歧義而無法判斷，先將 "correct" 設為 null，並喺 "note" 簡短註明原因（例如「字跡不清」），四個字以內。
-4. "note" 只在答錯、未作答或不確定時填寫，答對的一律留空字串。
+4. 只有 "correct" 係 false 先填 "correctAnswer"（即係正確答案應該係咩，愈短愈好），其他情況（答啱或者唔確定）"correctAnswer" 留空字串。"note" 只在未作答或唔確定時填寫，其餘一律留空。
 5. 對於每一題，喺 "bbox" 提供一個大約嘅方框位置，用百分比（0-100）表示，相對於嗰一頁相片嘅闊度同高度，方框範圍應該喺學生手寫作答附近或題號隔籬，等我哋可以喺相片上面嗰個位置標記剔號或交叉。另外用 "page" 講呢一題喺第幾張相（由0開始計）。
 6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號標籤本身，淨係果幾個字符（例如 "1."、"3)"、"(a)"、"四、"），千祈唔好抄埋成句題目或者算式，愈短愈準。搵唔到就填空字串。
-7. 只回覆一個JSON物件，不要加任何其他文字：
+7. 淨係做啱錯判斷，唔使分析弱項或者其他額外內容。只回覆一個JSON物件，不要加任何其他文字：
 {
   "results": [
-    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":""}
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":""}
   ],
-  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
-  "weakAreas": ["按錯誤歸納的弱項"]
+  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）"
 }`;
 
   let parsed;
@@ -128,9 +127,9 @@ ${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、
 只需要回覆上面列出嘅題目，要求：
 1. 盡量仔細判斷。如果答題位置完全空白、冇任何筆跡，"correct" 設為 false，"note" 填「未作答」。
 2. 只有答題位置確實有筆跡、但寫得太潦草無法判斷寫嘅係咩，先設 "correct" 為 null。
-3. "note" 最多四個字，答對可留空。
+3. 只有 "correct" 係 false 先填 "correctAnswer"，其他情況留空。"note" 最多四個字，答對可留空。
 4. 只回覆JSON，不要其他文字：
-{"results":[{"question":"題號","page":0,"correct":true/false/null,"note":""}]}`;
+{"results":[{"question":"題號","page":0,"correct":true/false/null,"correctAnswer":"","note":""}]}`;
 
     try {
       const rc = await callClaude("claude-opus-5", 2048, images, recheckPrompt, apiKey);
@@ -139,7 +138,7 @@ ${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、
       const byKey = new Map((recheck.results || []).map((r) => [`${r.page}:${r.question}`, r]));
       parsed.results = (parsed.results || []).map((r) => {
         const updated = byKey.get(`${r.page}:${r.question}`);
-        return updated && r.correct === null ? { ...r, correct: updated.correct, note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
+        return updated && r.correct === null ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
       });
     } catch (e) {
       // Opus recheck failing shouldn't sink the whole response.
