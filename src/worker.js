@@ -197,15 +197,35 @@ async function refineWithOcr(results, images, visionKey) {
       // line despite being asked not to) spuriously "contain" any short OCR
       // token, causing unrelated questions to collide on the same box.
       if (!needle || needle.length > 6) continue;
-      const hit = ocr.words.find((w) => normalizeAnchor(w.text) === needle);
-      if (hit) {
-        r.bbox = {
-          x: (hit.x / ocr.width) * 100,
-          y: (hit.y / ocr.height) * 100,
-          w: (hit.w / ocr.width) * 100,
-          h: (hit.h / ocr.height) * 100,
-        };
-      }
+      const hitIdx = ocr.words.findIndex((w) => normalizeAnchor(w.text) === needle);
+      if (hitIdx === -1) continue;
+      const hit = ocr.words[hitIdx];
+
+      // The mark should land in the blank space right after whatever the
+      // child wrote -- not on the printed anchor label itself, and not
+      // guaranteed to be free space to the right either, since many
+      // worksheets embed the blank mid-paragraph with more printed text
+      // resuming right after it. OCR can't read the handwriting itself, but
+      // it CAN usually still read that resuming printed text -- so find the
+      // next OCR word on the same line (by y-overlap) to the right of the
+      // anchor, and place the mark in the gap just before it. If nothing
+      // else is on that line, fall back to a modest fixed gap.
+      const hitCy = hit.y + hit.h / 2;
+      const sameLineAfter = ocr.words
+        .filter((w, i) => i !== hitIdx && w.x > hit.x + hit.w && Math.abs((w.y + w.h / 2) - hitCy) < hit.h * 0.7)
+        .sort((a, b) => a.x - b.x);
+      const next = sameLineAfter[0];
+      const gapStart = hit.x + hit.w;
+      const fallbackGap = hit.h * 6; // roughly a few characters' width
+      const gapEnd = next ? next.x : gapStart + fallbackGap;
+      const markX = Math.max(gapStart, gapEnd - hit.h * 1.5);
+
+      r.bbox = {
+        x: (markX / ocr.width) * 100,
+        y: (hit.y / ocr.height) * 100,
+        w: (hit.h / ocr.width) * 100,
+        h: (hit.h / ocr.height) * 100,
+      };
     }
   }
 }

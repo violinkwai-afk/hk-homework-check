@@ -217,13 +217,12 @@ function renderResults(data){
     wrap.className = 'result-page';
     const marksHtml = (byPage.get(pIdx) || []).map((r, ri) => {
       if (!r.bbox) return '';
-      // The bbox marks a printed anchor (a question number/label), and real
-      // homework often has more text continuing on the same line right
-      // after the answer -- placing the mark to the side risks landing on
-      // top of that text. The gap ABOVE the line is reliably blank instead.
+      // The backend already resolves bbox to a spot in the blank space just
+      // after the child's answer (using OCR to find where printed text
+      // resumes on that line), so the mark just needs to sit at its center.
       const cx = (r.bbox.x || 0) + (r.bbox.w || 0) / 2;
-      const topY = Math.max(0, (r.bbox.y || 0) - 3);
-      return `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${topY}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+      const cy = (r.bbox.y || 0) + (r.bbox.h || 0) / 2;
+      return `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
     }).join('');
     wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}">${marksHtml}</div>`;
     resultsEl.appendChild(wrap);
