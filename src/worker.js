@@ -153,18 +153,14 @@ ${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、
   const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
     ? env.GOOGLE_VISION_API_KEY
     : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
-  // TEMP DEBUG (2026-09-17): remove once OCR path is confirmed working --
-  // trying to diagnose why refinement isn't kicking in without server log
-  // access.
-  const _debug = { hasVisionKeyBinding: env.GOOGLE_VISION_API_KEY !== undefined, visionKeyType: typeof env.GOOGLE_VISION_API_KEY, visionKeyResolved: !!visionKey, visionKeyLen: visionKey ? visionKey.length : 0 };
   if (visionKey && parsed.results && parsed.results.length) {
     try {
       await refineWithOcr(parsed.results, images, visionKey);
     } catch (e) {
-      _debug.ocrError = String((e && e.message) || e).slice(0, 300);
+      // OCR is a precision upgrade, not a requirement -- keep the model's
+      // own bbox estimates if anything here goes wrong.
     }
   }
-  parsed._debug = _debug;
 
   console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey }));
 
