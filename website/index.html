@@ -49,19 +49,17 @@
   .result-page .imgwrap{position:relative; border-radius:14px; overflow:hidden; box-shadow:var(--shadow); line-height:0;}
   .result-page img{width:100%; display:block;}
   .mark{
-    position:absolute; width:30px; height:30px; border-radius:50%;
-    display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:900;
-    transform:translate(-50%,-50%); box-shadow:0 1px 4px rgba(0,0,0,.35); border:2px solid #fff;
-    color:#fff; cursor:default;
+    position:absolute; display:flex; align-items:center; justify-content:center;
+    font-size:22px; font-weight:400; transform:translate(0,0);
+    text-shadow:0 1px 2px rgba(255,255,255,.9); cursor:default; line-height:1;
   }
-  .mark.good{background:var(--good);}
-  .mark.bad{background:var(--bad);}
-  .mark.unsure{background:var(--unsure); cursor:pointer;}
+  .mark.good{color:var(--good);}
+  .mark.bad{color:var(--bad);}
+  .mark.unsure{color:var(--unsure); cursor:pointer; font-weight:700; font-size:18px;}
   .mark-answer{
-    position:absolute; transform:translate(4px,-50%); white-space:nowrap;
+    position:absolute; transform:translate(20px,-60%); white-space:nowrap;
     background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
     padding:1px 5px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.3);
-    margin-left:16px;
   }
 
   .score-banner{text-align:center; font-weight:800; font-size:1.2rem; margin:14px 0 6px; color:var(--pink-ink);}
@@ -228,11 +226,10 @@ function renderResults(data){
     wrap.className = 'result-page';
     const marksHtml = (byPage.get(pIdx) || []).map((r, ri) => {
       if (!r.bbox) return '';
-      // The backend already resolves bbox to a spot in the blank space just
-      // after the child's answer (using OCR to find where printed text
-      // resumes on that line), so the mark just needs to sit at its center.
-      const cx = (r.bbox.x || 0) + (r.bbox.w || 0) / 2;
-      const cy = (r.bbox.y || 0) + (r.bbox.h || 0) / 2;
+      // Sit right at the bottom-right corner of the child's answer, like a
+      // real red-pen mark, rather than centered or floating above the line.
+      const cx = (r.bbox.x || 0) + (r.bbox.w || 0);
+      const cy = (r.bbox.y || 0) + (r.bbox.h || 0);
       const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
       const ans = (r.correct === false && r.correctAnswer)
         ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
