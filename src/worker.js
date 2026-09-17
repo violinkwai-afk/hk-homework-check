@@ -81,6 +81,11 @@ async function handleCheck(request, env) {
   // It also returns an approximate bounding box (as a % of that page's
   // width/height) near each question, so the client can draw a check/cross
   // mark directly on the photo instead of just listing results as text.
+  // "anchor" is a short snippet of PRINTED text next to the question (e.g.
+  // its number/label as typeset on the page, not the handwriting) -- when a
+  // Google Vision key is configured, that printed text gets located far more
+  // precisely by real OCR than the model can eyeball pixel coordinates, and
+  // the mark position is upgraded to that OCR box (see refineWithOcr below).
   const prompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁，可能來自唔同科目／唔同來源，並非本網站出嘅練習卷）。呢啲係普通功課，冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
 
 要求：
@@ -89,10 +94,11 @@ async function handleCheck(request, env) {
 3. 只有答題位置確實有筆跡，但寫得太潦草或有歧義而無法判斷，先將 "correct" 設為 null，並喺 "note" 簡短註明原因（例如「字跡不清」），四個字以內。
 4. "note" 只在答錯、未作答或不確定時填寫，答對的一律留空字串。
 5. 對於每一題，喺 "bbox" 提供一個大約嘅方框位置，用百分比（0-100）表示，相對於嗰一頁相片嘅闊度同高度，方框範圍應該喺學生手寫作答附近或題號隔籬，等我哋可以喺相片上面嗰個位置標記剔號或交叉。另外用 "page" 講呢一題喺第幾張相（由0開始計）。
-6. 只回覆一個JSON物件，不要加任何其他文字：
+6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號或標籤文字，即係印出嚟嗰段字（例如 "3)"、"(a)"、"四、"），唔係手寫字，盡量照抄原文一字不漏，方便我哋之後準確定位。搵唔到就填空字串。
+7. 只回覆一個JSON物件，不要加任何其他文字：
 {
   "results": [
-    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0}}
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":""}
   ],
   "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
   "weakAreas": ["按錯誤歸納的弱項"]
@@ -144,9 +150,95 @@ ${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、
     parsed.score = `${correctCount} / ${graded.length}`;
   }
 
-  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage }));
+  const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
+    ? env.GOOGLE_VISION_API_KEY
+    : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
+  if (visionKey && parsed.results && parsed.results.length) {
+    try {
+      await refineWithOcr(parsed.results, images, visionKey);
+    } catch (e) {
+      // OCR is a precision upgrade, not a requirement -- keep the model's
+      // own bbox estimates if anything here goes wrong.
+    }
+  }
+
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey }));
 
   return json(parsed, 200);
+}
+
+// Upgrades each result's bbox from "the model's own guess at pixel
+// coordinates" (imprecise, drifts on a skewed photo) to "a real OCR engine's
+// bounding box for the matching printed anchor text" (precise, but only
+// works for TYPESET text -- which is exactly why the model was asked for the
+// printed question number/label as the anchor, not the handwritten answer;
+// OCR is no better than the model at reading messy handwriting, so it isn't
+// asked to).
+async function refineWithOcr(results, images, visionKey) {
+  const byPage = new Map();
+  results.forEach((r) => {
+    const p = r.page || 0;
+    if (!byPage.has(p)) byPage.set(p, []);
+    byPage.get(p).push(r);
+  });
+
+  for (const [pageIdx, pageResults] of byPage.entries()) {
+    const anchored = pageResults.filter((r) => r.anchor && r.anchor.trim());
+    if (!anchored.length || !images[pageIdx]) continue;
+
+    const ocr = await googleOcr(images[pageIdx].data, visionKey);
+    if (!ocr || !ocr.words.length) continue;
+
+    for (const r of anchored) {
+      const needle = normalizeAnchor(r.anchor);
+      if (!needle) continue;
+      const hit = ocr.words.find((w) => normalizeAnchor(w.text).includes(needle) || needle.includes(normalizeAnchor(w.text)));
+      if (hit) {
+        r.bbox = {
+          x: (hit.x / ocr.width) * 100,
+          y: (hit.y / ocr.height) * 100,
+          w: (hit.w / ocr.width) * 100,
+          h: (hit.h / ocr.height) * 100,
+        };
+      }
+    }
+  }
+}
+
+function normalizeAnchor(s) {
+  return String(s || "").replace(/[\s.()（）、,，]/g, "").toLowerCase();
+}
+
+async function googleOcr(base64Data, apiKey) {
+  const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      requests: [{ image: { content: base64Data }, features: [{ type: "DOCUMENT_TEXT_DETECTION" }] }],
+    }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const page = data.responses && data.responses[0] && data.responses[0].fullTextAnnotation && data.responses[0].fullTextAnnotation.pages && data.responses[0].fullTextAnnotation.pages[0];
+  if (!page) return null;
+
+  // Flatten to word-level boxes -- an "anchor" like "3)" is usually one or
+  // two OCR word tokens, so word granularity matches better than whole
+  // paragraphs.
+  const words = [];
+  for (const block of page.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const word of para.words || []) {
+        const text = (word.symbols || []).map((s) => s.text).join("");
+        const verts = (word.boundingBox || {}).vertices || [];
+        if (!text || verts.length < 4) continue;
+        const xs = verts.map((v) => v.x || 0), ys = verts.map((v) => v.y || 0);
+        const x = Math.min(...xs), y = Math.min(...ys);
+        words.push({ text, x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y });
+      }
+    }
+  }
+  return { width: page.width, height: page.height, words };
 }
 
 async function callClaude(model, maxTokens, images, prompt, apiKey) {
