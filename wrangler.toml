@@ -11,13 +11,18 @@ binding = "ANTHROPIC_API_KEY"
 store_id = "50b964b41eeb46d3bd4be77e059d3324"
 secret_name = "Nn"
 
-# GOOGLE_VISION_API_KEY is NOT declared here on purpose -- it's a plain
-# per-project key (not shared with hk-maths like the Anthropic one above),
-# so it goes in via Cloudflare dashboard -> this Worker -> Settings ->
-# Bindings -> Add binding -> Secret (plain text), variable name
-# GOOGLE_VISION_API_KEY. Never put the real key in this file -- this repo is
-# public. Optional: refineWithOcr() in src/worker.js just falls back to the
-# model's own bbox estimate if this binding isn't present.
+[[secrets_store_secrets]]
+binding = "GOOGLE_VISION_API_KEY"
+store_id = "50b964b41eeb46d3bd4be77e059d3324"
+secret_name = "GOOGLE_VISION_API_KEY"
 
-# RATE_LIMIT_KV is also dashboard-only (Add binding -> KV Namespace),
-# following the same pattern as the sibling hk-maths project.
+# IMPORTANT -- learned the hard way: this Worker auto-deploys from git, and
+# Cloudflare's dashboard-added bindings are NOT version-controlled -- every
+# new deployment resets bindings to exactly what's declared in this file,
+# silently dropping anything added only via the dashboard (this is why the
+# RATE_LIMIT_KV binding below still needs its real "id" filled in: it was
+# briefly bound via the dashboard and got wiped by the very next git push).
+# Never assume a dashboard-added binding survives -- put it here.
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "bf66afcfd7694677be3cef507edea155"
