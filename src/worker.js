@@ -94,7 +94,7 @@ async function handleCheck(request, env) {
 3. 只有答題位置確實有筆跡，但寫得太潦草或有歧義而無法判斷，先將 "correct" 設為 null，並喺 "note" 簡短註明原因（例如「字跡不清」），四個字以內。
 4. "note" 只在答錯、未作答或不確定時填寫，答對的一律留空字串。
 5. 對於每一題，喺 "bbox" 提供一個大約嘅方框位置，用百分比（0-100）表示，相對於嗰一頁相片嘅闊度同高度，方框範圍應該喺學生手寫作答附近或題號隔籬，等我哋可以喺相片上面嗰個位置標記剔號或交叉。另外用 "page" 講呢一題喺第幾張相（由0開始計）。
-6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號或標籤文字，即係印出嚟嗰段字（例如 "3)"、"(a)"、"四、"），唔係手寫字，盡量照抄原文一字不漏，方便我哋之後準確定位。搵唔到就填空字串。
+6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號標籤本身，淨係果幾個字符（例如 "1."、"3)"、"(a)"、"四、"），千祈唔好抄埋成句題目或者算式，愈短愈準。搵唔到就填空字串。
 7. 只回覆一個JSON物件，不要加任何其他文字：
 {
   "results": [
@@ -191,8 +191,13 @@ async function refineWithOcr(results, images, visionKey) {
 
     for (const r of anchored) {
       const needle = normalizeAnchor(r.anchor);
-      if (!needle) continue;
-      const hit = ocr.words.find((w) => normalizeAnchor(w.text).includes(needle) || needle.includes(normalizeAnchor(w.text)));
+      // Anchors are meant to be short printed labels ("1.", "(a)") -- require
+      // an exact match after normalizing. A loose substring match previously
+      // let a long anchor (the model sometimes echoes the whole question
+      // line despite being asked not to) spuriously "contain" any short OCR
+      // token, causing unrelated questions to collide on the same box.
+      if (!needle || needle.length > 6) continue;
+      const hit = ocr.words.find((w) => normalizeAnchor(w.text) === needle);
       if (hit) {
         r.bbox = {
           x: (hit.x / ocr.width) * 100,
