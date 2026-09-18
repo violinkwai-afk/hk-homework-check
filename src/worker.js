@@ -79,17 +79,27 @@ async function handleTestNoAiCheck(request, env) {
   const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
     ? env.GOOGLE_VISION_API_KEY
     : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
+
+  // Same rotation-detection/-correction real submissions get (see
+  // detectAndCorrectRotation) -- exercising the real logic here, not a
+  // simplified stand-in, is what makes this debug endpoint useful for
+  // verifying a rotation fix against an actual problematic photo without
+  // spending on the Anthropic call.
+  const { rotationApplied, ocrCache } = await detectAndCorrectRotation(images, visionKey);
+
   let ocrUsed = false;
   if (visionKey && parsed.results.length) {
     try {
-      await refineWithOcr(parsed.results, images, visionKey);
+      await refineWithOcr(parsed.results, images, visionKey, ocrCache);
       ocrUsed = true;
     } catch (e) {
       return json({ error: "ocr_error", message: String(e && e.message || e) }, 500);
     }
   }
 
-  const finalResult = { ...parsed, ocrUsed };
+  const pageRotations = {};
+  images.forEach((img, i) => { if (rotationApplied[i]) pageRotations[i] = rotationApplied[i]; });
+  const finalResult = { ...parsed, ocrUsed, pageRotations };
 
   // Demo hook: writing this into the SAME idempotency cache the real
   // /api/check endpoint reads means a real submission through the live
@@ -247,52 +257,13 @@ async function handleCheckInner(request, env) {
   // computed against an unrotated frame, landing nowhere near the real
   // answers once the client tries to display them upright (or worse,
   // staying sideways with marks scattered as if the page were straight).
-  // Detected here via the same Vision OCR already used for anchor
-  // refinement below, and physically applied with Photon BEFORE the model
-  // ever sees the image, so grading, bbox coordinates, and the final
-  // display are all consistent with one single upright frame from this
-  // point on. `pageRotations` (built near the end, keyed by real page
-  // number) tells the client how much to rotate its own displayed copy to
-  // match. Best-effort: a detection or rotation failure just leaves that
-  // page as originally photographed rather than failing the whole request.
-  const rotationApplied = images.map(() => 0);
-  // Reused by refineWithOcr below when a page turned out NOT to need
-  // rotating -- its OCR result is still valid for the (unchanged) image,
-  // so anchor refinement doesn't need to pay for a second, near-identical
-  // Vision call on the exact same bytes. A rotated page's cache entry is
-  // deliberately NOT populated: its OCR word positions describe the
-  // PRE-rotation frame and would misplace every mark if reused as-is.
-  const ocrCache = new Map();
-  if (visionKey) {
-    for (let i = 0; i < images.length; i++) {
-      try {
-        // One quiet retry on a transient failure (a flaky connection drops
-        // the Vision call) -- without this, a real network hiccup on just
-        // ONE page in a multi-page submission left that page silently
-        // un-rotated while its siblings succeeded, which read as random,
-        // inconsistent behaviour ("有啲又轉到90度，有啲冇") rather than the
-        // occasional network blip it actually was.
-        let ocrCheck;
-        try { ocrCheck = await googleOcr(images[i].data, visionKey); }
-        catch (e) { ocrCheck = await googleOcr(images[i].data, visionKey); }
-        if (ocrCheck && ocrCheck.rotationDeg) {
-          const correction = (360 - ocrCheck.rotationDeg) % 360;
-          const bytes = base64ToBytes(images[i].data);
-          const photonImg = PhotonImage.new_from_byteslice(bytes);
-          try {
-            const rotatedImg = rotate(photonImg, correction);
-            try {
-              images[i].data = bytesToBase64(rotatedImg.get_bytes_jpeg(90));
-              images[i].mediaType = "image/jpeg";
-              rotationApplied[i] = correction;
-            } finally { rotatedImg.free(); }
-          } finally { photonImg.free(); }
-        } else if (ocrCheck) {
-          ocrCache.set(i, ocrCheck);
-        }
-      } catch (e) { /* best-effort -- an ungraded-but-sideways page beats a crashed request */ }
-    }
-  }
+  // Detected via the same Vision OCR already used for anchor refinement
+  // below, and physically applied with Photon BEFORE the model ever sees
+  // the image, so grading, bbox coordinates, and the final display are
+  // all consistent with one single upright frame from this point on.
+  // `pageRotations` (built near the end, keyed by real page number) tells
+  // the client how much to rotate its own displayed copy to match.
+  const { rotationApplied, ocrCache } = await detectAndCorrectRotation(images, visionKey);
 
   // No answer key exists for arbitrary homework -- the model has to solve
   // each question itself before it can judge the child's handwritten answer.
@@ -488,6 +459,59 @@ async function handleCheckInner(request, env) {
   }
 
   return json(parsed, 200);
+}
+
+// Shared by both /api/check and the /api/test-noai-check debug endpoint,
+// so the free demo path exercises the exact same rotation-detection/
+// -correction logic real submissions do, not a simplified stand-in --
+// this is the only way to verify a fix here against a real problematic
+// photo without spending on the Anthropic call. Mutates `images` in place
+// (replacing a page's data/mediaType when it gets rotated) and returns
+// `rotationApplied` (per local image index, in degrees) plus `ocrCache` (a
+// Map of local index -> already-fetched OCR result, for refineWithOcr to
+// reuse on pages that turned out not to need rotating). Best-effort
+// throughout: a detection or rotation failure just leaves that one page
+// as originally photographed rather than failing the whole request.
+async function detectAndCorrectRotation(images, visionKey) {
+  const rotationApplied = images.map(() => 0);
+  const ocrCache = new Map();
+  if (!visionKey) return { rotationApplied, ocrCache };
+  for (let i = 0; i < images.length; i++) {
+    try {
+      // One quiet retry on a transient failure (a flaky connection drops
+      // the Vision call) -- without this, a real network hiccup on just
+      // ONE page in a multi-page submission left that page silently
+      // un-rotated while its siblings succeeded, which read as random,
+      // inconsistent behaviour ("有啲又轉到90度，有啲冇") rather than the
+      // occasional network blip it actually was.
+      let ocrCheck;
+      try { ocrCheck = await googleOcr(images[i].data, visionKey); }
+      catch (e) { ocrCheck = await googleOcr(images[i].data, visionKey); }
+      if (ocrCheck && ocrCheck.rotationDeg) {
+        const correction = (360 - ocrCheck.rotationDeg) % 360;
+        const bytes = base64ToBytes(images[i].data);
+        const photonImg = PhotonImage.new_from_byteslice(bytes);
+        try {
+          const rotatedImg = rotate(photonImg, correction);
+          try {
+            images[i].data = bytesToBase64(rotatedImg.get_bytes_jpeg(90));
+            images[i].mediaType = "image/jpeg";
+            rotationApplied[i] = correction;
+          } finally { rotatedImg.free(); }
+        } finally { photonImg.free(); }
+      } else if (ocrCheck) {
+        // Reused by refineWithOcr when a page turned out NOT to need
+        // rotating -- its OCR result is still valid for the (unchanged)
+        // image, so anchor refinement doesn't need to pay for a second,
+        // near-identical Vision call on the exact same bytes. A rotated
+        // page's cache entry is deliberately NOT populated: its OCR word
+        // positions describe the PRE-rotation frame and would misplace
+        // every mark if reused as-is.
+        ocrCache.set(i, ocrCheck);
+      }
+    } catch (e) { /* best-effort -- an ungraded-but-sideways page beats a crashed request */ }
+  }
+  return { rotationApplied, ocrCache };
 }
 
 // Upgrades each result's bbox from "the model's own guess at pixel
