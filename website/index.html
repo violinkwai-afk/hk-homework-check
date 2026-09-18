@@ -51,12 +51,14 @@
   .mark{
     position:absolute; display:flex; align-items:center; justify-content:center;
     font-size:28px; font-weight:400; transform:translate(0,0);
-    filter:drop-shadow(0 1px 1.5px rgba(255,255,255,.9)); cursor:default; line-height:1;
+    filter:drop-shadow(0 1px 1.5px rgba(255,255,255,.9)); cursor:pointer; line-height:1;
+    padding:10px; margin:-10px; /* bigger invisible tap target than the visible stroke */
   }
+  .mark:active{transform:translate(0,0) scale(0.85);}
   .mark svg{display:block;}
   .mark.good{color:var(--good);}
   .mark.bad{color:var(--bad);}
-  .mark.unsure{color:var(--unsure); cursor:pointer; font-weight:700; font-size:26px; text-shadow:0 1px 2px rgba(255,255,255,.9);}
+  .mark.unsure{color:var(--unsure); font-weight:700; font-size:26px; text-shadow:0 1px 2px rgba(255,255,255,.9);}
   .mark-answer{
     position:absolute; transform:translate(20px,-60%); white-space:nowrap;
     background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
@@ -301,6 +303,14 @@ function renderResults(data){
     resultsEl.appendChild(wrap);
   });
 
+  // Every mark on the photo is directly tappable to flip it -- AI can be
+  // confidently wrong, not just uncertain, so the override isn't limited to
+  // "?" items. Purely optional: not tapping a mark leaves it exactly as AI
+  // left it, nothing is forced or blocking.
+  resultsEl.querySelectorAll('.mark').forEach(el => {
+    el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
+  });
+
   const scoreBanner = document.createElement('div');
   scoreBanner.className = 'score-banner';
   scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
@@ -323,8 +333,9 @@ function renderResults(data){
 
     list.querySelectorAll('.confirm-item').forEach(item => {
       const page = +item.dataset.page, q = item.dataset.q;
-      item.querySelector('.ok').onclick = () => resolveMark(data, page, q, true, item);
-      item.querySelector('.no').onclick = () => resolveMark(data, page, q, false, item);
+      const idx = findResultIdx(data, page, q);
+      item.querySelector('.ok').onclick = () => applyMarkCorrect(data, page, idx, true);
+      item.querySelector('.no').onclick = () => applyMarkCorrect(data, page, idx, false);
     });
   }
 
@@ -332,33 +343,57 @@ function renderResults(data){
   againWrap.hidden = false;
 }
 
-function resolveMark(data, page, q, correct, itemEl){
-  const r = (data.results || []).find(x => (x.page||0) === page && String(x.question) === String(q));
-  if (r) r.correct = correct;
-  // update the on-photo mark
-  const idx = (data.results || []).filter(x => (x.page||0) === page).indexOf(r);
+function findResultIdx(data, page, question){
+  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
+  return pageItems.findIndex(x => String(x.question) === String(question));
+}
+
+// Tapping a mark on the photo flips it -- true/false swap directly; an
+// unresolved "?" resolves to true on first tap (a second tap then flips it
+// to false like any other mark), since a bare tap can't distinguish "mark
+// as correct" from "mark as wrong" the way the confirm-list's two buttons
+// can for genuinely ambiguous items.
+function toggleMarkOnPhoto(data, page, idx){
+  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
+  const r = pageItems[idx];
+  if (!r) return;
+  applyMarkCorrect(data, page, idx, r.correct === true ? false : true);
+}
+
+function applyMarkCorrect(data, page, idx, correct){
+  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
+  const r = pageItems[idx];
+  if (!r) return;
+  r.correct = correct;
+
   const markEl = document.querySelector(`.mark[data-page="${page}"][data-idx="${idx}"]`);
   if (markEl) {
     markEl.className = 'mark ' + markClass(correct);
     markEl.innerHTML = markIcon(correct);
   }
   const ansEl = document.querySelector(`.mark-answer[data-page="${page}"][data-idx="${idx}"]`);
-  if (!correct && r && r.correctAnswer && !ansEl && markEl) {
+  if (correct === false && r.correctAnswer && !ansEl && markEl) {
     const div = document.createElement('div');
     div.className = 'mark-answer';
     div.style.left = markEl.style.left;
     div.style.top = markEl.style.top;
     div.textContent = r.correctAnswer;
     markEl.parentNode.appendChild(div);
-  } else if (correct && ansEl) {
+  } else if (correct !== false && ansEl) {
     ansEl.remove();
   }
+
   // recompute score
   const graded = data.results.filter(x => x.correct !== null);
   const correctCount = graded.filter(x => x.correct === true).length;
   data.score = `${correctCount} / ${graded.length}`;
-  document.querySelector('.score-banner').textContent = `分數：${data.score}`;
-  itemEl.remove();
+  const banner = document.querySelector('.score-banner');
+  if (banner) banner.textContent = `分數：${data.score}`;
+
+  // this item is resolved now -- drop its row from the confirm-list if it had one
+  document.querySelectorAll('.confirm-item').forEach(item => {
+    if (+item.dataset.page === page && String(item.dataset.q) === String(r.question)) item.remove();
+  });
 }
 
 submitBtn.onclick = async () => {
