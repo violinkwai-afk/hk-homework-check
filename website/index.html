@@ -93,6 +93,17 @@
   .hw-profile{display:flex; align-items:flex-start; gap:8px; font-size:.76rem; color:var(--muted); margin-top:12px; line-height:1.5;}
   .hw-profile input{margin-top:2px; flex-shrink:0;}
   .hw-profile .forget{color:var(--pink-ink); text-decoration:underline; background:none; border:none; padding:0; font:inherit; cursor:pointer;}
+
+  .result-page .imgwrap{cursor:zoom-in;}
+  .lightbox{position:fixed; inset:0; background:rgba(20,10,12,.94); z-index:1000; overflow:auto; -webkit-overflow-scrolling:touch;}
+  .lightbox.hidden{display:none;}
+  .lightbox-inner{min-height:100%; display:flex; align-items:center; justify-content:center; padding:20px; cursor:zoom-in;}
+  .lightbox-inner.zoomed{display:block; padding:0; cursor:zoom-out;}
+  .lightbox-inner .imgwrap{position:relative; line-height:0; max-width:100%;}
+  .lightbox-inner.zoomed .imgwrap{max-width:none; width:230%;}
+  .lightbox-inner img{width:100%; display:block;}
+  .lightbox-close{position:fixed; top:14px; right:14px; width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.95); border:none; font-size:20px; font-weight:800; z-index:1001; line-height:38px; padding:0;}
+  .lightbox-hint{position:fixed; bottom:18px; left:0; right:0; text-align:center; color:rgba(255,255,255,.75); font-size:.8rem; z-index:1001; pointer-events:none;}
 </style>
 </head>
 <body>
@@ -124,6 +135,12 @@
   <div style="text-align:center; margin-top:18px;">
     <a href="terms.html" style="color:var(--muted); font-size:.78rem; text-decoration:underline;">使用條款及免責聲明</a>
   </div>
+</div>
+
+<div class="lightbox hidden" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose" aria-label="關閉">×</button>
+  <div class="lightbox-inner" id="lightboxInner"></div>
+  <div class="lightbox-hint" id="lightboxHint">㩒相可以放大／縮小</div>
 </div>
 
 <script>
@@ -191,6 +208,63 @@ const resultsEl = document.getElementById('results');
 const againWrap = document.getElementById('againWrap');
 const uploadCard = document.getElementById('uploadCard');
 
+// Tap-to-zoom a marked-up photo: view-only (marks inside the lightbox
+// don't toggle correct/incorrect -- that stays on the small inline photo
+// so we don't have to re-bind every mark's click handler onto a cloned
+// copy), a second tap toggles between "fit the screen" and "zoomed in,
+// pan by scrolling" so a parent can actually read a small tick mark
+// clearly on a real phone screen.
+const lightboxEl = document.getElementById('lightbox');
+const lightboxInner = document.getElementById('lightboxInner');
+const lightboxHint = document.getElementById('lightboxHint');
+function openLightbox(imgwrapHtml){
+  lightboxInner.innerHTML = imgwrapHtml;
+  lightboxInner.classList.remove('zoomed');
+  lightboxEl.classList.remove('hidden');
+  lightboxEl.scrollTop = 0; lightboxEl.scrollLeft = 0;
+  lightboxHint.hidden = false;
+}
+function closeLightbox(){
+  lightboxEl.classList.add('hidden');
+  lightboxInner.classList.remove('zoomed');
+  lightboxInner.innerHTML = '';
+}
+document.getElementById('lightboxClose').onclick = closeLightbox;
+lightboxInner.onclick = () => {
+  lightboxInner.classList.toggle('zoomed');
+  lightboxHint.hidden = true;
+};
+resultsEl.addEventListener('click', (e) => {
+  if (e.target.closest('.mark')) return; // let the mark's own tap-to-toggle handle this
+  const imgwrap = e.target.closest('.result-page .imgwrap');
+  if (!imgwrap) return;
+  openLightbox(imgwrap.innerHTML);
+});
+
+// A parent who photographs 5 pages then accidentally refreshes (or the
+// browser reloads the tab in the background) used to lose the whole queue
+// with no accounts/login needed to fix it -- just keep it in this
+// browser's own localStorage. Includes each shot's requestId, which is a
+// nice side effect: if some pages had already been successfully graded
+// before the refresh, resubmitting after restore hits the server's
+// existing idempotency cache for those instead of paying for them again.
+const PENDING_SHOTS_KEY = 'hwcheck_pending_shots';
+function saveShots(){
+  try {
+    localStorage.setItem(PENDING_SHOTS_KEY, JSON.stringify(
+      shots.map(s => ({ dataUrl: s.dataUrl, base64: s.base64, requestId: s.requestId || null }))
+    ));
+  } catch (e) { /* storage full/unavailable -- losing the convenience beats crashing */ }
+}
+function loadSavedShots(){
+  try {
+    const raw = localStorage.getItem(PENDING_SHOTS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (Array.isArray(saved) && saved.length) shots = saved.slice(0, MAX_PAGES);
+  } catch (e) { /* corrupted/unavailable storage -- just start with an empty queue */ }
+}
+
 // Does NOT reset requestId itself -- called once at page load too (where a
 // ?demoId= override must survive), so callers that actually change the
 // photo set reset requestId themselves right before calling this.
@@ -213,6 +287,7 @@ function renderShots(){
   shotsEl.querySelectorAll('.rm').forEach(btn => {
     btn.onclick = () => { shots.splice(+btn.dataset.i, 1); requestId = null; renderShots(); };
   });
+  saveShots();
 }
 
 function fileToBase64(file){
@@ -654,6 +729,10 @@ submitBtn.onclick = async () => {
     statusEl.textContent = '網絡錯誤，請再試一次。';
   }
 };
+
+// Only restore a saved queue on a plain page load, not a ?demoId= link --
+// that flow is meant to start from a clean, predictable slate.
+if (!requestId) loadSavedShots();
 
 document.getElementById('againBtn').onclick = () => {
   shots = [];
