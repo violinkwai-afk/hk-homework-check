@@ -259,7 +259,15 @@ async function handleCheckInner(request, env) {
   if (visionKey) {
     for (let i = 0; i < images.length; i++) {
       try {
-        const ocrCheck = await googleOcr(images[i].data, visionKey);
+        // One quiet retry on a transient failure (a flaky connection drops
+        // the Vision call) -- without this, a real network hiccup on just
+        // ONE page in a multi-page submission left that page silently
+        // un-rotated while its siblings succeeded, which read as random,
+        // inconsistent behaviour ("有啲又轉到90度，有啲冇") rather than the
+        // occasional network blip it actually was.
+        let ocrCheck;
+        try { ocrCheck = await googleOcr(images[i].data, visionKey); }
+        catch (e) { ocrCheck = await googleOcr(images[i].data, visionKey); }
         if (ocrCheck && ocrCheck.rotationDeg) {
           const correction = (360 - ocrCheck.rotationDeg) % 360;
           const bytes = base64ToBytes(images[i].data);
