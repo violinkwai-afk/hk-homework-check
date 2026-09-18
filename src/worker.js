@@ -16,7 +16,12 @@
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
 import { PhotonImage, crop } from "@cf-wasm/photon/workerd";
 
-const CHECK_RATE_LIMIT = 15; // max /api/check calls per IP per hour
+// Client now sends one /api/check call PER PAGE (see website/index.html), so
+// this counts pages, not submissions -- a single 5-page homework already
+// spends 5 of these. 15 meant just 3 real five-page submissions per hour
+// before every subsequent page started failing with "短時間內請求太多",
+// which is easy to mistake for a generic error during real testing.
+const CHECK_RATE_LIMIT = 40; // max /api/check calls per IP per hour
 const MAX_HANDWRITING_SAMPLES = 12; // per device, oldest evicted first
 const HANDWRITING_SAMPLE_TTL = 60 * 60 * 24 * 90; // 90 days
 const HANDWRITING_SAMPLES_PER_REQUEST = 3; // new exemplars captured per submission
@@ -278,7 +283,7 @@ async function handleCheck(request, env) {
   let parsed;
   const usage = { sonnet: null, sonnetZoom: null, opus: null };
   try {
-    const r = await callClaude("claude-sonnet-5", 4096, images.concat(exemplars), prompt, apiKey);
+    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
     parsed = r.parsed;
     usage.sonnet = r.usage;
   } catch (e) {
@@ -609,7 +614,39 @@ async function googleOcr(base64Data, apiKey) {
   return { width: page.width, height: page.height, words };
 }
 
-async function callClaude(model, maxTokens, images, prompt, apiKey) {
+async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...images.map((img) => ({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: img.mediaType || "image/jpeg",
+              data: img.data,
+            },
+          })),
+          { type: "text", text: prompt },
+        ],
+      },
+    ],
+  };
+  // The API defaults every call to "high" effort (full adaptive-thinking
+  // depth) unless told otherwise -- that's appropriate for the recheck tiers
+  // (they exist specifically to look harder at something), but the main
+  // pass was silently paying full deep-reasoning latency on every question
+  // including trivial ones like "3+5=", which is a large chunk of why a
+  // single page's first pass alone could take many seconds. "medium" (not
+  // "low") is used here deliberately: this project has many hard-won
+  // prompt rules for subtle failure modes (misread beakers, pyramid vs
+  // prism, place-value traps) and "low" risks eroding exactly that
+  // capability -- "medium" trades some of that latency for keeping more
+  // reasoning headroom, verify against known-bad cases before going lower.
+  if (effort) body.output_config = { effort };
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -617,26 +654,7 @@ async function callClaude(model, maxTokens, images, prompt, apiKey) {
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...images.map((img) => ({
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: img.mediaType || "image/jpeg",
-                data: img.data,
-              },
-            })),
-            { type: "text", text: prompt },
-          ],
-        },
-      ],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -701,16 +719,27 @@ ${listText}
   try {
     const rc = await callClaude(model, maxTokens, recheckImages, recheckPrompt, apiKey);
     usage[usageKey] = rc.usage;
-    const byKey = new Map((rc.parsed.results || []).map((r) => [`${r.page}:${r.question}`, r]));
-    parsed.results = (parsed.results || []).map((r) => {
-      const updated = byKey.get(`${r.page}:${r.question}`);
-      // Overwrite whenever this item was actually part of THIS recheck batch
-      // (byKey only contains what was sent) -- not just when it was null.
-      // A riskyDiagram item that was already "correct:true" still gets
-      // re-verified here and its result replaced, since the whole point of
-      // routing it through this tier is a genuine second look, not a
-      // rubber stamp.
-      return updated ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer, verifiedBy: usageKey } : r;
+    // Matched POSITIONALLY against `unsure` (the prompt explicitly asks the
+    // model to reply "按圖片次序" -- in image order), not by a "page:question"
+    // key. The prompt's own listText tells the model "第1頁" (1-indexed, for
+    // readability) right next to a JSON schema example showing "page":0 --
+    // a model that echoes back the human-facing "1" it just read instead of
+    // the 0-indexed value the schema actually wants silently breaks a
+    // key-based match, discarding every result in the batch with no error.
+    // Position doesn't depend on the model getting that number (or the
+    // exact question-string formatting) right at all.
+    // `unsure` items are the SAME object references filtered out of
+    // `parsed.results` (not copies), so mutating them here updates
+    // `parsed.results` too -- no separate merge-back step needed.
+    const updates = rc.parsed.results || [];
+    unsure.forEach((r, i) => {
+      const updated = updates[i];
+      if (!updated) return;
+      r.correct = updated.correct === undefined ? null : updated.correct;
+      r.correctAnswer = updated.correctAnswer || '';
+      r.note = updated.note || '';
+      if (updated.studentAnswer) r.studentAnswer = updated.studentAnswer;
+      r.verifiedBy = usageKey;
     });
   } catch (e) {
     // A recheck tier failing shouldn't sink the whole response -- whatever
