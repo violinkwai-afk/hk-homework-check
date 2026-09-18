@@ -119,6 +119,25 @@ async function handleTestNoAiCheck(request, env) {
 const REQUEST_TIME_BUDGET_MS = 25000;
 
 async function handleCheck(request, env) {
+  // Top-level safety net: ANY uncaught exception anywhere below (a
+  // malformed model response, an edge case in a photo the code didn't
+  // anticipate -- e.g. an unusual aspect ratio from a sideways photo) used
+  // to propagate all the way out of fetch(), which Cloudflare renders as
+  // its own HTML "Worker threw exception" error page, NOT JSON. The client
+  // calls res.json() on that and THAT throws, landing in the generic
+  // "呢頁網絡錯誤" catch-all -- indistinguishable from an actual dropped
+  // connection, even though the request reached the server fine and the
+  // real cause was a code bug. Wrapping the whole handler guarantees the
+  // client always gets back valid, readable JSON with a real status code.
+  try {
+    return await handleCheckInner(request, env);
+  } catch (e) {
+    console.log(JSON.stringify({ event: "check_crash", message: String((e && e.message) || e), stack: e && e.stack ? String(e.stack).slice(0, 500) : null }));
+    return json({ error: "internal_error", message: "批改服務暫時出錯，請再試一次。", detail: String((e && e.message) || e).slice(0, 300) }, 500);
+  }
+}
+
+async function handleCheckInner(request, env) {
   const startedAt = Date.now();
   if (!env.ANTHROPIC_API_KEY) {
     return json(
