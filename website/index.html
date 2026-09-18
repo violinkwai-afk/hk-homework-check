@@ -133,7 +133,12 @@ let shots = []; // { dataUrl, base64 }
 // recognised as "the same submission" instead of re-running the AI pipeline
 // (and paying for it) a second time. Reset whenever the photo set actually
 // changes (see renderShots) or after a submission succeeds.
-let requestId = null;
+// A ?demoId=... URL param overrides the very first requestId -- used only
+// to drive a real demo of this exact page/UI against a pre-solved result
+// cached server-side under that id (see /api/test-noai-check), so the
+// real interface can be tried end-to-end without spending on that
+// specific request.
+let requestId = new URLSearchParams(location.search).get('demoId') || null;
 
 // Handwriting profile: fully opt-in (checkbox defaults unchecked, and its
 // state is remembered so a parent who turns it on doesn't have to re-tick
@@ -179,8 +184,10 @@ const resultsEl = document.getElementById('results');
 const againWrap = document.getElementById('againWrap');
 const uploadCard = document.getElementById('uploadCard');
 
+// Does NOT reset requestId itself -- called once at page load too (where a
+// ?demoId= override must survive), so callers that actually change the
+// photo set reset requestId themselves right before calling this.
 function renderShots(){
-  requestId = null; // photo set changed -- this is a new submission
   shotsEl.innerHTML = '';
   shots.forEach((s, i) => {
     const div = document.createElement('div');
@@ -197,7 +204,7 @@ function renderShots(){
   }
   submitBtn.disabled = shots.length === 0;
   shotsEl.querySelectorAll('.rm').forEach(btn => {
-    btn.onclick = () => { shots.splice(+btn.dataset.i, 1); renderShots(); };
+    btn.onclick = () => { shots.splice(+btn.dataset.i, 1); requestId = null; renderShots(); };
   });
 }
 
@@ -226,6 +233,7 @@ fileInput.onchange = async () => {
     try { shots.push(await fileToBase64(f)); } catch(e){}
   }
   fileInput.value = '';
+  requestId = null;
   renderShots();
 };
 
@@ -432,6 +440,7 @@ submitBtn.onclick = async () => {
 
 document.getElementById('againBtn').onclick = () => {
   shots = [];
+  requestId = null;
   renderShots();
   resultsEl.innerHTML = '';
   uploadCard.hidden = false;

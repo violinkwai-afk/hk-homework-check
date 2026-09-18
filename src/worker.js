@@ -66,7 +66,7 @@ async function handleTestNoAiCheck(request, env) {
   } catch (e) {
     return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
   }
-  const { images, parsed } = body;
+  const { images, parsed, demoRequestId } = body;
   if (!images || !images.length || !parsed || !parsed.results) {
     return json({ error: "bad_request", message: "缺少images或parsed。" }, 400);
   }
@@ -84,7 +84,23 @@ async function handleTestNoAiCheck(request, env) {
     }
   }
 
-  return json({ ...parsed, ocrUsed }, 200);
+  const finalResult = { ...parsed, ocrUsed };
+
+  // Demo hook: writing this into the SAME idempotency cache the real
+  // /api/check endpoint reads means a real submission through the live
+  // site's actual UI, using this exact requestId, is served this
+  // pre-solved-for-free result instead of calling Anthropic -- letting
+  // someone drive the real interface end-to-end (camera, loading state,
+  // marked photo, tap-to-toggle) without spending on that specific
+  // request. Only ever set by us for a specific pre-agreed demo, never by
+  // a real parent's submission.
+  if (demoRequestId && env.RATE_LIMIT_KV) {
+    try {
+      await env.RATE_LIMIT_KV.put("idem:" + String(demoRequestId).slice(0, 100), JSON.stringify(finalResult), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
+  return json(finalResult, 200);
 }
 
 async function handleCheck(request, env) {
