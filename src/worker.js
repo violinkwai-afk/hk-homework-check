@@ -14,6 +14,8 @@
 // /api/check is public/unauthenticated -- same per-IP rate limit pattern as
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
+import { PhotonImage, crop } from "@cf-wasm/photon/workerd";
+
 const CHECK_RATE_LIMIT = 15; // max /api/check calls per IP per hour
 
 export default {
@@ -104,7 +106,7 @@ async function handleCheck(request, env) {
 }`;
 
   let parsed;
-  const usage = { sonnet: null, opus: null };
+  const usage = { sonnet: null, sonnetZoom: null, opus: null };
   try {
     const r = await callClaude("claude-sonnet-5", 4096, images, prompt, apiKey);
     parsed = r.parsed;
@@ -113,42 +115,11 @@ async function handleCheck(request, env) {
     return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
   }
 
-  // Hybrid pass: only re-send genuinely unsure questions to the pricier
-  // model, and only ask it for a correctness verdict -- the bbox from the
-  // first pass is kept as-is, since the mark's position doesn't change just
-  // because a second look resolves the handwriting.
-  const unsure = (parsed.results || []).filter((r) => r.correct === null);
-  if (unsure.length) {
-    const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目佢睇唔清楚學生寫嘅答案，需要你用更仔細嘅眼光再睇一次相片：
-${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、')}
-
-呢份功課冇標準答案，請你自己諗清楚每一題應該點答，再判斷學生手寫嘅答案。
-
-只需要回覆上面列出嘅題目，要求：
-1. 盡量仔細判斷。如果答題位置完全空白、冇任何筆跡，"correct" 設為 false，"note" 填「未作答」。
-2. 只有答題位置確實有筆跡、但寫得太潦草無法判斷寫嘅係咩，先設 "correct" 為 null。
-3. 只有 "correct" 係 false 先填 "correctAnswer"，其他情況留空。"note" 最多四個字，答對可留空。
-4. 只回覆JSON，不要其他文字：
-{"results":[{"question":"題號","page":0,"correct":true/false/null,"correctAnswer":"","note":""}]}`;
-
-    try {
-      const rc = await callClaude("claude-opus-5", 2048, images, recheckPrompt, apiKey);
-      const recheck = rc.parsed;
-      usage.opus = rc.usage;
-      const byKey = new Map((recheck.results || []).map((r) => [`${r.page}:${r.question}`, r]));
-      parsed.results = (parsed.results || []).map((r) => {
-        const updated = byKey.get(`${r.page}:${r.question}`);
-        return updated && r.correct === null ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
-      });
-    } catch (e) {
-      // Opus recheck failing shouldn't sink the whole response.
-    }
-
-    const graded = parsed.results.filter((r) => r.correct !== null);
-    const correctCount = graded.filter((r) => r.correct === true).length;
-    parsed.score = `${correctCount} / ${graded.length}`;
-  }
-
+  // Position refinement runs BEFORE the recheck (not after) so that if we
+  // need to crop a zoomed-in close-up for the recheck pass below, the crop
+  // is centered on OCR's precise position rather than the model's own
+  // rougher guess -- exactly the cases where that guess is least reliable
+  // are the ones about to get rechecked.
   const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
     ? env.GOOGLE_VISION_API_KEY
     : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
@@ -159,6 +130,25 @@ ${unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、
       // OCR is a precision upgrade, not a requirement -- keep the model's
       // own bbox estimates if anything here goes wrong.
     }
+  }
+
+  // Three-tier hybrid: the zoom-crop is what actually helps read messy
+  // handwriting, and that benefit doesn't require the expensive model --
+  // so retry unsure items with a cheap Sonnet call FIRST using zoomed
+  // crops, and only escalate to Opus for whatever is still unresolved
+  // after that. Most "illegible" cases are really just "too small in the
+  // full-page image" and get caught by the cheap zoom retry.
+  let unsure = (parsed.results || []).filter((r) => r.correct === null);
+  if (unsure.length) {
+    unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom");
+  }
+  if (unsure.length) {
+    unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-opus-5", 2048, usage, "opus");
+  }
+  if (parsed.results && parsed.results.length) {
+    const graded = parsed.results.filter((r) => r.correct !== null);
+    const correctCount = graded.filter((r) => r.correct === true).length;
+    parsed.score = `${correctCount} / ${graded.length}`;
   }
 
   console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey }));
@@ -355,6 +345,107 @@ async function callClaude(model, maxTokens, images, prompt, apiKey) {
   } catch (e) {
     throw { kind: "parse_error", uiMessage: "批改結果解析失敗，請再試一次。", detail: text.slice(0, 500), status: 502 };
   }
+}
+
+// Re-sends only the still-unsure items to `model`, using a zoomed-in crop
+// around each one's own position (falling back to the whole page if
+// cropping isn't possible) rather than the whole page again -- same idea as
+// a parent pinch-zooming a photo to read messy handwriting. Returns the
+// list of items still unresolved afterward, for a possible further tier.
+async function recheckPass(parsed, unsure, images, apiKey, model, maxTokens, usage, usageKey) {
+  let cropImages = [];
+  try {
+    const built = await buildCrops(unsure, images);
+    cropImages = built.cropImages;
+  } catch (e) {
+    cropImages = [];
+  }
+  const useCrops = cropImages.length === unsure.length;
+  const recheckImages = useCrops ? cropImages : images;
+  const listText = useCrops
+    ? unsure.map((r, i) => `圖${i + 1}：第${r.page + 1}頁，題號「${r.question}」嘅放大近鏡`).join('、')
+    : unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、');
+
+  const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目佢睇唔清楚學生寫嘅答案，需要你用更仔細嘅眼光再睇一次：
+${listText}
+
+${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你睇清楚啲字。留意有啲字可能潦草或者被擦改過，如果單睇一個字睇唔出，試吓連埋前後字一齊估係咪一個詞語，唔好淨係逐粒字咁樣睇。' : ''}
+
+呢份功課冇標準答案，請你自己諗清楚每一題應該點答，再判斷學生手寫嘅答案。
+
+只需要回覆上面列出嘅題目，按${useCrops ? '圖片次序' : '題號'}回覆，要求：
+1. 盡量仔細判斷。如果答題位置完全空白、冇任何筆跡，"correct" 設為 false，"note" 填「未作答」。
+2. 只有答題位置確實有筆跡、但寫得太潦草無法判斷寫嘅係咩，先設 "correct" 為 null。
+3. 只有 "correct" 係 false 先填 "correctAnswer"，其他情況留空。"note" 最多四個字，答對可留空。
+4. 只回覆JSON，不要其他文字：
+{"results":[{"question":"題號","page":0,"correct":true/false/null,"correctAnswer":"","note":""}]}`;
+
+  try {
+    const rc = await callClaude(model, maxTokens, recheckImages, recheckPrompt, apiKey);
+    usage[usageKey] = rc.usage;
+    const byKey = new Map((rc.parsed.results || []).map((r) => [`${r.page}:${r.question}`, r]));
+    parsed.results = (parsed.results || []).map((r) => {
+      const updated = byKey.get(`${r.page}:${r.question}`);
+      return updated && r.correct === null ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
+    });
+  } catch (e) {
+    // A recheck tier failing shouldn't sink the whole response -- whatever
+    // was still null just stays null and falls through to the next tier
+    // (or to the human-confirm "?" in the UI if this was the last one).
+  }
+  return parsed.results.filter((r) => r.correct === null);
+}
+
+// Crops a zoomed-in close-up around each unsure item's bbox (falling back
+// to the whole page if a given item has no bbox), for the Opus recheck pass.
+// Uses Photon (a WASM image library bundled specifically for Workers) --
+// verified locally with a real photo before wiring in: crop(image, x1, y1,
+// x2, y2) in pixel coordinates, confirmed against the library's own source.
+async function buildCrops(unsure, images) {
+  const cropImages = [];
+  const cropLabels = [];
+  // Cache one decoded PhotonImage per page so re-cropping multiple items on
+  // the same page doesn't re-decode the JPEG each time.
+  const decoded = new Map();
+  for (const r of unsure) {
+    if (!r.bbox || !images[r.page]) throw new Error("missing bbox or page for crop");
+    let photonImg = decoded.get(r.page);
+    if (!photonImg) {
+      const bytes = base64ToBytes(images[r.page].data);
+      photonImg = PhotonImage.new_from_byteslice(bytes);
+      decoded.set(r.page, photonImg);
+    }
+    const W = photonImg.get_width(), H = photonImg.get_height();
+    const padX = Math.max(60, W * 0.1), padY = Math.max(50, H * 0.04);
+    const x1 = Math.max(0, Math.round((r.bbox.x / 100) * W - padX));
+    const y1 = Math.max(0, Math.round((r.bbox.y / 100) * H - padY));
+    const x2 = Math.min(W, Math.round(((r.bbox.x + r.bbox.w) / 100) * W + padX));
+    const y2 = Math.min(H, Math.round(((r.bbox.y + r.bbox.h) / 100) * H + padY));
+    if (x2 <= x1 || y2 <= y1) throw new Error("degenerate crop rectangle");
+    const cropped = crop(photonImg, x1, y1, x2, y2);
+    const outBytes = cropped.get_bytes_jpeg(90);
+    cropImages.push({ data: bytesToBase64(outBytes), mediaType: "image/jpeg" });
+    cropLabels.push(`page ${r.page} ${r.question}`);
+    cropped.free();
+  }
+  for (const img of decoded.values()) img.free();
+  return { cropImages, cropLabels };
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  let bin = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
 }
 
 function json(obj, status) {

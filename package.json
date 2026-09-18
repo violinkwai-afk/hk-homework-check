@@ -1,0 +1,7 @@
+{
+  "name": "hk-homework-check",
+  "private": true,
+  "dependencies": {
+    "@cf-wasm/photon": "^0.4.0"
+  }
+}
