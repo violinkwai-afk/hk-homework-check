@@ -210,10 +210,12 @@ async function handleCheck(request, env) {
 4. 只有 "correct" 係 false 先填 "correctAnswer"（即係正確答案應該係咩，愈短愈好），其他情況（答啱或者唔確定）"correctAnswer" 留空字串。"note" 只在未作答或唔確定時填寫，其餘一律留空。
 5. 對於每一題，喺 "bbox" 提供一個大約嘅方框位置，用百分比（0-100）表示，相對於嗰一頁相片嘅闊度同高度，方框範圍應該喺學生手寫作答附近或題號隔籬，等我哋可以喺相片上面嗰個位置標記剔號或交叉。另外用 "page" 講呢一題喺第幾張相（由0開始計）。
 6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號標籤本身，淨係果幾個字符（例如 "1."、"3)"、"(a)"、"四、"），千祈唔好抄埋成句題目或者算式，愈短愈準。搵唔到就填空字串。
-7. 淨係做啱錯判斷，唔使分析弱項或者其他額外內容。只回覆一個JSON物件，不要加任何其他文字：
+7. 淨係做啱錯判斷，唔使分析弱項或者其他額外內容。
+8. "riskyDiagram" 設為 true，如果呢一題屬於以下容易睇錯嘅類型（唔理你自己覺得幾肯定都好，只要屬於呢啲類型都要老實填true）：睇刻度／量表／燒杯水位、量度長度、判斷角度大小或直角、分辨立體圖形（prism/pyramid/cylinder/cone）、硬幣/銀紙面額、圈出加埋等於某金額嘅組合、方向/指南針、分數塗色部分、算柱/珠算數珠、位值比較（邊個數字表示最大/最小）、tally記數。純文字計算、普通選擇題、清清楚楚嘅填空（例如"3+5="）呢類唔使設true。
+只回覆一個JSON物件，不要加任何其他文字：
 {
   "results": [
-    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":""}
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":"","riskyDiagram":false}
   ],
   "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）"
 }`
@@ -248,24 +250,34 @@ async function handleCheck(request, env) {
     }
   }
 
-  // Three-tier hybrid: the zoom-crop is what actually helps read messy
-  // handwriting, and that benefit doesn't require the expensive model --
-  // so retry unsure items with a cheap Sonnet call FIRST using zoomed
-  // crops, and only escalate to Opus for whatever is still unresolved
-  // after that. Most "illegible" cases are really just "too small in the
-  // full-page image" and get caught by the cheap zoom retry.
+  // Three-tier hybrid, targeted rather than blanket: zooming EVERY item
+  // would double cost for no benefit on plain arithmetic/MC that's never
+  // actually gone wrong; zooming only self-reported-uncertain items misses
+  // the "confidently wrong" cases entirely (the model doesn't know it's
+  // wrong, so it never flags null) -- exactly what today's real errors
+  // (a misread beaker, a misclassified pyramid, a wrong "smallest digit")
+  // all had in common. The middle ground: the first pass tags each item
+  // "riskyDiagram" if it's one of the categories that has actually
+  // produced errors (scales, angles, shapes, coins, directions, fractions,
+  // abacus, place-value comparisons -- see rules 1a/1e-1q above), and
+  // those get a cheap Sonnet-zoom second look regardless of confidence,
+  // same as genuinely-uncertain items. Only what's STILL null after that
+  // escalates to Opus -- a risky item the zoom pass confirmed doesn't need
+  // the expensive model just because it started risky.
   //
   // photonCache is shared across BOTH tiers so a page only gets decoded
-  // from JPEG once even if items on it are still unsure after tier 1 and
-  // need cropping again for tier 2 -- freed once at the very end.
+  // from JPEG once even if items on it need cropping again for tier 2 --
+  // freed once at the very end.
   const photonCache = new Map();
-  let unsure = (parsed.results || []).filter((r) => r.correct === null);
+  (parsed.results || []).forEach((r) => { r.verifiedBy = "sonnet"; });
+  let unsure = (parsed.results || []).filter((r) => r.correct === null || r.riskyDiagram === true);
   try {
     if (unsure.length) {
-      unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
+      await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
     }
-    if (unsure.length) {
-      unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
+    let stillNull = (parsed.results || []).filter((r) => r.correct === null);
+    if (stillNull.length) {
+      await recheckPass(parsed, stillNull, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
     }
     // Capture a few confirmed-correct answers as new handwriting exemplars
     // for next time -- reuses whatever pages recheck already decoded via
@@ -291,7 +303,16 @@ async function handleCheck(request, env) {
     parsed.score = `${correctCount} / ${graded.length}`;
   }
 
-  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey }));
+  // verifiedByCounts + opusItems make it possible to answer "where exactly
+  // did the expensive tier get used" from the logs alone, without needing
+  // to inspect the full response payload.
+  const verifiedByCounts = {};
+  const opusItems = [];
+  for (const r of parsed.results || []) {
+    verifiedByCounts[r.verifiedBy || "sonnet"] = (verifiedByCounts[r.verifiedBy || "sonnet"] || 0) + 1;
+    if (r.verifiedBy === "opus") opusItems.push(`p${r.page}:${r.question}`);
+  }
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, opusItems }));
 
   if (idemKey && env.RATE_LIMIT_KV) {
     try {
@@ -583,7 +604,7 @@ async function recheckPass(parsed, unsure, images, apiKey, model, maxTokens, usa
     ? unsure.map((r, i) => `圖${i + 1}：第${r.page + 1}頁，題號「${r.question}」嘅放大近鏡`).join('、')
     : unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、');
 
-  const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目佢睇唔清楚學生寫嘅答案，需要你用更仔細嘅眼光再睇一次：
+  const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目要你用更仔細嘅眼光再核實一次先——有啲係佢睇唔清楚學生寫嘅答案，有啲係題目本身容易睇錯（例如刻度、角度、立體圖形、硬幣、位值比較呢類），所以無論你上次判斷幾肯定，都要當呢張圖係新嘅重新諗一次：
 ${listText}
 
 ${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你睇清楚啲字。留意有啲字可能潦草或者被擦改過，如果單睇一個字睇唔出，試吓連埋前後字一齊估係咪一個詞語，唔好淨係逐粒字咁樣睇。' : ''}
@@ -603,7 +624,13 @@ ${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你
     const byKey = new Map((rc.parsed.results || []).map((r) => [`${r.page}:${r.question}`, r]));
     parsed.results = (parsed.results || []).map((r) => {
       const updated = byKey.get(`${r.page}:${r.question}`);
-      return updated && r.correct === null ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer } : r;
+      // Overwrite whenever this item was actually part of THIS recheck batch
+      // (byKey only contains what was sent) -- not just when it was null.
+      // A riskyDiagram item that was already "correct:true" still gets
+      // re-verified here and its result replaced, since the whole point of
+      // routing it through this tier is a genuine second look, not a
+      // rubber stamp.
+      return updated ? { ...r, correct: updated.correct, correctAnswer: updated.correctAnswer || '', note: updated.note, studentAnswer: updated.studentAnswer || r.studentAnswer, verifiedBy: usageKey } : r;
     });
   } catch (e) {
     // A recheck tier failing shouldn't sink the whole response -- whatever
