@@ -363,12 +363,16 @@ function markClass(correct){
 }
 function markIcon(correct){
   // Hand-drawn-looking pen strokes (curved, tapered via round linecaps) so
-  // marks read as "red pen check", not a typeset glyph.
+  // marks read as "red pen check", not a typeset glyph. Sized down from
+  // 34x30/28x28 after a live report the marks looked oversized on a busy,
+  // small-print page -- viewBox unchanged (same stroke shape), just
+  // rendered smaller so it sits tighter against the actual answer instead
+  // of dominating the space around it.
   if (correct === true) {
-    return '<svg width="34" height="30" viewBox="0 0 34 30"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return '<svg width="24" height="21" viewBox="0 0 34 30"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   }
   if (correct === false) {
-    return '<svg width="28" height="28" viewBox="0 0 28 28"><path d="M3,3 Q14,13 25,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M25,3 Q14,13 3,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+    return '<svg width="20" height="20" viewBox="0 0 28 28"><path d="M3,3 Q14,13 25,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M25,3 Q14,13 3,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
   }
   return '?';
 }
