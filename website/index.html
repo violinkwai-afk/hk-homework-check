@@ -297,8 +297,11 @@ function fileToBase64(file){
       // 1568 matches Claude's own long-edge downscale cap, so nothing above
       // that resolution is actually seen by the model anyway -- sending it
       // was pure wasted upload bandwidth (real 4G is often the bottleneck,
-      // not the request itself). Quality kept fairly high (0.85, not lower)
-      // since fine pencil handwriting is exactly what accuracy depends on.
+      // not the request itself). Quality reverted to 0.9 (was briefly 0.85)
+      // after a live report of confidently-wrong grading on trivial,
+      // unambiguous arithmetic -- reading fine pencil handwriting on a busy
+      // photographed page is exactly what extra JPEG compression hurts
+      // first, and accuracy is the one non-negotiable requirement here.
       const maxDim = 1568;
       const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
       const canvas = document.createElement('canvas');
@@ -306,7 +309,7 @@ function fileToBase64(file){
       canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(img.src);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
       resolve({ dataUrl, base64: dataUrl.split(',')[1] });
     };
     img.onerror = reject;

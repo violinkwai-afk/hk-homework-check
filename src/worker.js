@@ -343,7 +343,14 @@ async function handleCheckInner(request, env) {
   let parsed;
   const usage = { sonnet: null, sonnetZoom: null, opus: null };
   try {
-    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
+    // Reverted from "medium" effort after a live report of confidently-wrong
+    // grading on trivial, unambiguous arithmetic (10+4=14 marked wrong) --
+    // exactly the accuracy risk flagged when "medium" was first tried, now
+    // confirmed for real. Accuracy is the one non-negotiable requirement
+    // here ("一定要準確"); the latency this bought back is not worth trading
+    // against it. max_tokens 8192 (up from the original 4096) is kept --
+    // that only prevents truncation, it doesn't reduce reasoning depth.
+    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey);
     parsed = r.parsed;
     usage.sonnet = r.usage;
   } catch (e) {
@@ -827,6 +834,14 @@ ${listText}
     unsure.forEach((r, i) => {
       const updated = updates[i];
       if (!updated) return;
+      // Extra guard on top of positional matching: the schema still asks
+      // for "question" in the reply, so if the model happens to include it
+      // AND it doesn't match what was actually sent at this position, the
+      // model most likely skipped, merged, or reordered an item -- every
+      // later index would then be silently shifted. Skip that one item
+      // (leave its original main-pass verdict standing) rather than risk
+      // applying a shifted verdict to the wrong question.
+      if (updated.question !== undefined && updated.question !== null && String(updated.question) !== String(r.question)) return;
       r.correct = updated.correct === undefined ? null : updated.correct;
       r.correctAnswer = updated.correctAnswer || '';
       r.note = updated.note || '';
