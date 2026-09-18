@@ -65,7 +65,7 @@ async function handleCheck(request, env) {
     return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
   }
 
-  let { images, image, mediaType } = body;
+  let { images, image, mediaType, requestId } = body;
   if (!images && image) images = [{ data: image, mediaType }];
   if (!images || !images.length) {
     return json({ error: "bad_request", message: "缺少相片。" }, 400);
@@ -76,6 +76,21 @@ async function handleCheck(request, env) {
       { error: "too_many_pages", message: `每次最多批改 ${MAX_PAGES} 頁，請分開幾次提交。` },
       400
     );
+  }
+
+  // Idempotency: a client retry (network blip, double-tap before the button
+  // disabled) re-sends the same requestId. Without this, a retry re-runs the
+  // full Sonnet/Opus pipeline and pays for it twice for work already done --
+  // fine while this is free, but a real problem once this is a paid product.
+  // Fails open (no dedup) if the client omits requestId or KV is unbound.
+  const idemKey = typeof requestId === "string" && requestId ? "idem:" + requestId.slice(0, 100) : null;
+  if (idemKey && env.RATE_LIMIT_KV) {
+    try {
+      const cached = await env.RATE_LIMIT_KV.get(idemKey);
+      if (cached) {
+        return new Response(cached, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+    } catch (e) { /* best-effort -- fall through and process normally */ }
   }
 
   // No answer key exists for arbitrary homework -- the model has to solve
@@ -138,12 +153,21 @@ async function handleCheck(request, env) {
   // crops, and only escalate to Opus for whatever is still unresolved
   // after that. Most "illegible" cases are really just "too small in the
   // full-page image" and get caught by the cheap zoom retry.
+  //
+  // photonCache is shared across BOTH tiers so a page only gets decoded
+  // from JPEG once even if items on it are still unsure after tier 1 and
+  // need cropping again for tier 2 -- freed once at the very end.
+  const photonCache = new Map();
   let unsure = (parsed.results || []).filter((r) => r.correct === null);
-  if (unsure.length) {
-    unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom");
-  }
-  if (unsure.length) {
-    unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-opus-5", 2048, usage, "opus");
+  try {
+    if (unsure.length) {
+      unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
+    }
+    if (unsure.length) {
+      unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
+    }
+  } finally {
+    for (const img of photonCache.values()) img.free();
   }
   if (parsed.results && parsed.results.length) {
     const graded = parsed.results.filter((r) => r.correct !== null);
@@ -152,6 +176,12 @@ async function handleCheck(request, env) {
   }
 
   console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey }));
+
+  if (idemKey && env.RATE_LIMIT_KV) {
+    try {
+      await env.RATE_LIMIT_KV.put(idemKey, JSON.stringify(parsed), { expirationTtl: 1800 });
+    } catch (e) { /* best-effort */ }
+  }
 
   return json(parsed, 200);
 }
@@ -175,7 +205,16 @@ async function refineWithOcr(results, images, visionKey) {
     const anchored = pageResults.filter((r) => r.anchor && r.anchor.trim());
     if (!anchored.length || !images[pageIdx]) continue;
 
-    const ocr = await googleOcr(images[pageIdx].data, visionKey);
+    // Scoped per page: one page's OCR call failing (bad image data, a
+    // transient Vision API error) must not skip refinement for every OTHER
+    // page in the same submission -- those are independent images and
+    // independently likely to succeed.
+    let ocr;
+    try {
+      ocr = await googleOcr(images[pageIdx].data, visionKey);
+    } catch (e) {
+      continue;
+    }
     if (!ocr || !ocr.words.length) continue;
 
     const usedIdx = new Set();
@@ -352,10 +391,10 @@ async function callClaude(model, maxTokens, images, prompt, apiKey) {
 // cropping isn't possible) rather than the whole page again -- same idea as
 // a parent pinch-zooming a photo to read messy handwriting. Returns the
 // list of items still unresolved afterward, for a possible further tier.
-async function recheckPass(parsed, unsure, images, apiKey, model, maxTokens, usage, usageKey) {
+async function recheckPass(parsed, unsure, images, apiKey, model, maxTokens, usage, usageKey, photonCache) {
   let cropImages = [];
   try {
-    const built = await buildCrops(unsure, images);
+    const built = await buildCrops(unsure, images, photonCache);
     cropImages = built.cropImages;
   } catch (e) {
     cropImages = [];
@@ -401,19 +440,23 @@ ${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你
 // Uses Photon (a WASM image library bundled specifically for Workers) --
 // verified locally with a real photo before wiring in: crop(image, x1, y1,
 // x2, y2) in pixel coordinates, confirmed against the library's own source.
-async function buildCrops(unsure, images) {
+//
+// `photonCache` (page index -> decoded PhotonImage) is owned by the caller
+// (handleCheck), not this function -- it's shared across both the
+// sonnet-zoom and opus tiers so a page already decoded for tier 1 isn't
+// decoded from JPEG bytes a second time if it's still unsure in tier 2.
+// The caller is responsible for calling .free() on every cached image once
+// all tiers are done.
+async function buildCrops(unsure, images, photonCache) {
   const cropImages = [];
   const cropLabels = [];
-  // Cache one decoded PhotonImage per page so re-cropping multiple items on
-  // the same page doesn't re-decode the JPEG each time.
-  const decoded = new Map();
   for (const r of unsure) {
     if (!r.bbox || !images[r.page]) throw new Error("missing bbox or page for crop");
-    let photonImg = decoded.get(r.page);
+    let photonImg = photonCache.get(r.page);
     if (!photonImg) {
       const bytes = base64ToBytes(images[r.page].data);
       photonImg = PhotonImage.new_from_byteslice(bytes);
-      decoded.set(r.page, photonImg);
+      photonCache.set(r.page, photonImg);
     }
     const W = photonImg.get_width(), H = photonImg.get_height();
     const padX = Math.max(60, W * 0.1), padY = Math.max(50, H * 0.04);
@@ -428,7 +471,6 @@ async function buildCrops(unsure, images) {
     cropLabels.push(`page ${r.page} ${r.question}`);
     cropped.free();
   }
-  for (const img of decoded.values()) img.free();
   return { cropImages, cropLabels };
 }
 

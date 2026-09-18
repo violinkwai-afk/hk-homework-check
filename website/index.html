@@ -119,6 +119,12 @@ const MAX_PAGES = 5;
 // lower-volume context and was too tight.
 const MAX_SUBMISSIONS_PER_MONTH = 120;
 let shots = []; // { dataUrl, base64 }
+// One id per distinct photo set, sent to the server so a retry (network
+// blip, or the fetch failing after the server already finished work) can be
+// recognised as "the same submission" instead of re-running the AI pipeline
+// (and paying for it) a second time. Reset whenever the photo set actually
+// changes (see renderShots) or after a submission succeeds.
+let requestId = null;
 
 const shotsEl = document.getElementById('shots');
 const fileInput = document.getElementById('fileInput');
@@ -129,6 +135,7 @@ const againWrap = document.getElementById('againWrap');
 const uploadCard = document.getElementById('uploadCard');
 
 function renderShots(){
+  requestId = null; // photo set changed -- this is a new submission
   shotsEl.innerHTML = '';
   shots.forEach((s, i) => {
     const div = document.createElement('div');
@@ -260,7 +267,7 @@ function renderResults(data){
   if (unsureItems.length) {
     const list = document.createElement('div');
     list.className = 'confirm-list';
-    list.innerHTML = `<div class="sub" style="margin-bottom:8px;">呢幾條AI睇得唔清楚，你幫手確認一下：</div>` +
+    list.innerHTML = `<div class="sub" style="margin-bottom:8px;">相上面「?」嘅幾題AI睇得唔清楚，得閒可以撳一撳確認，唔撳都冇問題：</div>` +
       unsureItems.map((r) => `
         <div class="confirm-item" data-page="${r.page}" data-q="${r.question}">
           <span class="q">第${(r.page||0)+1}頁 · ${r.question}題</span>
@@ -290,7 +297,7 @@ function resolveMark(data, page, q, correct, itemEl){
   const markEl = document.querySelector(`.mark[data-page="${page}"][data-idx="${idx}"]`);
   if (markEl) {
     markEl.className = 'mark ' + markClass(correct);
-    markEl.textContent = markIcon(correct);
+    markEl.innerHTML = markIcon(correct);
   }
   const ansEl = document.querySelector(`.mark-answer[data-page="${page}"][data-idx="${idx}"]`);
   if (!correct && r && r.correctAnswer && !ansEl && markEl) {
@@ -318,11 +325,12 @@ submitBtn.onclick = async () => {
   statusEl.hidden = false;
   statusEl.className = 'status';
   statusEl.textContent = 'AI檢查緊，請稍等（可能要10-30秒）...';
+  if (!requestId) requestId = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
   try {
     const res = await fetch('/api/check', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })) }),
+      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })), requestId }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -332,6 +340,7 @@ submitBtn.onclick = async () => {
       return;
     }
     statusEl.hidden = true;
+    requestId = null; // succeeded -- next submit (even of the same photos) is a fresh one
     recordSubmission();
     renderResults(data);
   } catch (e) {
