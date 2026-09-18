@@ -31,9 +31,61 @@ export default {
     if (url.pathname === "/api/forget-handwriting" && request.method === "POST") {
       return handleForgetHandwriting(request, env);
     }
+    // TEMPORARY debug route -- exercises the real rate-limit KV and real
+    // Google Vision OCR refinement against a caller-supplied "parsed" result
+    // (skipping the Anthropic call entirely), so infra behavior/cost can be
+    // checked without spending on the metered Claude key. Remove before
+    // leaving this in production long-term.
+    if (url.pathname === "/api/test-noai-check" && request.method === "POST") {
+      return handleTestNoAiCheck(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
+
+async function handleTestNoAiCheck(request, env) {
+  if (env.RATE_LIMIT_KV) {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rateKey = "checkrate:" + ip;
+    let count = 0;
+    try {
+      const raw = await env.RATE_LIMIT_KV.get(rateKey);
+      count = raw ? (parseInt(raw, 10) || 0) : 0;
+    } catch (e) { /* KV unreachable -- don't block over it */ }
+    if (count >= CHECK_RATE_LIMIT) {
+      return json({ error: "rate_limited", message: "短時間內請求太多，請一小時後再試。" }, 429);
+    }
+    try {
+      await env.RATE_LIMIT_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
+  }
+  const { images, parsed } = body;
+  if (!images || !images.length || !parsed || !parsed.results) {
+    return json({ error: "bad_request", message: "缺少images或parsed。" }, 400);
+  }
+
+  const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
+    ? env.GOOGLE_VISION_API_KEY
+    : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
+  let ocrUsed = false;
+  if (visionKey && parsed.results.length) {
+    try {
+      await refineWithOcr(parsed.results, images, visionKey);
+      ocrUsed = true;
+    } catch (e) {
+      return json({ error: "ocr_error", message: String(e && e.message || e) }, 500);
+    }
+  }
+
+  return json({ ...parsed, ocrUsed }, 200);
+}
 
 async function handleCheck(request, env) {
   if (!env.ANTHROPIC_API_KEY) {
