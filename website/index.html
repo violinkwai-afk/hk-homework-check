@@ -624,15 +624,15 @@ submitBtn.onclick = async () => {
   // Limited concurrency, not fully sequential and not fully parallel:
   // firing ALL pages' uploads at once competes for the same limited
   // mobile-upload bandwidth (confirmed live -- every page failed at once
-  // on a real 4G connection), but one-at-a-time was reported as too slow
-  // for a 5-page submission. 2 concurrent uploads is a middle ground --
-  // still some contention, but nowhere near firing 5 large image bodies
-  // down one mobile uplink simultaneously, while roughly halving total
-  // wait versus strictly sequential. priorPagesContext still gets
-  // whatever earlier pages had ALREADY finished by the time a given page
-  // starts (may be one page "behind" when two pages start close
-  // together) -- an imperfect but reasonable trade for the speed gained.
-  const CONCURRENCY = 2;
+  // on a real 4G connection). CONCURRENCY=2 was tried as a middle ground
+  // for speed, but a further live report ("5張得1張剔到" -- only 1 of 5
+  // pages came back) on a real, unstable connection tonight showed even 2
+  // concurrent requests is still too much contention for THIS kind of
+  // connection to survive reliably. Reverted to strictly 1-at-a-time:
+  // slower, but reliability/accuracy matters more than speed, and a
+  // sequential request is also the simplest case to reason about while
+  // real-world reliability is still the open problem.
+  const CONCURRENCY = 1;
   let nextIdx = 0;
   async function runOne(pIdx){
     const s = shots[pIdx];
