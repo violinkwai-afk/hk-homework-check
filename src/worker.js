@@ -188,6 +188,7 @@ async function refineWithOcr(results, images, visionKey) {
     const ocr = await googleOcr(images[pageIdx].data, visionKey);
     if (!ocr || !ocr.words.length) continue;
 
+    const usedIdx = new Set();
     for (const r of anchored) {
       const needle = normalizeAnchor(r.anchor);
       // Anchors are meant to be short printed labels ("1.", "(a)") -- require
@@ -196,8 +197,17 @@ async function refineWithOcr(results, images, visionKey) {
       // line despite being asked not to) spuriously "contain" any short OCR
       // token, causing unrelated questions to collide on the same box.
       if (!needle || needle.length > 6) continue;
-      const hitIdx = ocr.words.findIndex((w) => normalizeAnchor(w.text) === needle);
+      let hitIdx = ocr.words.findIndex((w, i) => !usedIdx.has(i) && normalizeAnchor(w.text) === needle);
+      if (hitIdx === -1) {
+        // Chinese text that touches the anchor with no space (e.g. "的E."
+        // right before a blank) often gets OCR'd as one merged token instead
+        // of splitting cleanly -- fall back to a word that ENDS with the
+        // anchor's own characters, capped in extra length so it can't match
+        // an unrelated longer word by coincidence.
+        hitIdx = ocr.words.findIndex((w, i) => !usedIdx.has(i) && normalizeAnchor(w.text).endsWith(needle) && normalizeAnchor(w.text).length <= needle.length + 3);
+      }
       if (hitIdx === -1) continue;
+      usedIdx.add(hitIdx);
       const hit = ocr.words[hitIdx];
 
       // The mark should land in the blank space right after whatever the
