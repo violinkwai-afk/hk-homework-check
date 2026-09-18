@@ -50,12 +50,13 @@
   .result-page img{width:100%; display:block;}
   .mark{
     position:absolute; display:flex; align-items:center; justify-content:center;
-    font-size:34px; font-weight:400; transform:translate(0,0);
-    text-shadow:0 1px 2px rgba(255,255,255,.9); cursor:default; line-height:1;
+    font-size:28px; font-weight:400; transform:translate(0,0);
+    filter:drop-shadow(0 1px 1.5px rgba(255,255,255,.9)); cursor:default; line-height:1;
   }
+  .mark svg{display:block;}
   .mark.good{color:var(--good);}
   .mark.bad{color:var(--bad);}
-  .mark.unsure{color:var(--unsure); cursor:pointer; font-weight:700; font-size:28px;}
+  .mark.unsure{color:var(--unsure); cursor:pointer; font-weight:700; font-size:26px; text-shadow:0 1px 2px rgba(255,255,255,.9);}
   .mark-answer{
     position:absolute; transform:translate(20px,-60%); white-space:nowrap;
     background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
@@ -207,8 +208,14 @@ function markClass(correct){
   return 'unsure';
 }
 function markIcon(correct){
-  if (correct === true) return '✓';
-  if (correct === false) return '✗';
+  // Hand-drawn-looking pen strokes (curved, tapered via round linecaps) so
+  // marks read as "red pen check", not a typeset glyph.
+  if (correct === true) {
+    return '<svg width="34" height="30" viewBox="0 0 34 30"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  if (correct === false) {
+    return '<svg width="28" height="28" viewBox="0 0 28 28"><path d="M3,3 Q14,13 25,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M25,3 Q14,13 3,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  }
   return '?';
 }
 

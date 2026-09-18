@@ -189,7 +189,9 @@ async function refineWithOcr(results, images, visionKey) {
     if (!ocr || !ocr.words.length) continue;
 
     const usedIdx = new Set();
-    for (const r of anchored) {
+    const matched = new Array(anchored.length).fill(false);
+    for (let ai = 0; ai < anchored.length; ai++) {
+      const r = anchored[ai];
       const needle = normalizeAnchor(r.anchor);
       // Anchors are meant to be short printed labels ("1.", "(a)") -- require
       // an exact match after normalizing. A loose substring match previously
@@ -235,6 +237,36 @@ async function refineWithOcr(results, images, visionKey) {
         w: (hit.h / ocr.width) * 100,
         h: (hit.h / ocr.height) * 100,
       };
+      matched[ai] = true;
+    }
+
+    // Questions are printed in reading order, so an anchor OCR couldn't find
+    // at all (not even the merged-token fallback) can still be positioned
+    // reliably by interpolating between whichever neighbors DID get a real
+    // OCR match -- e.g. if B and D both matched but C didn't, C is probably
+    // roughly between them. Falls back to nudging off a single matched
+    // neighbor (by that neighbor's own height, as a rough line-step guess)
+    // when there's a match on only one side.
+    for (let ai = 0; ai < anchored.length; ai++) {
+      if (matched[ai]) continue;
+      let prevIdx = -1, nextIdx = -1;
+      for (let j = ai - 1; j >= 0; j--) { if (matched[j]) { prevIdx = j; break; } }
+      for (let j = ai + 1; j < anchored.length; j++) { if (matched[j]) { nextIdx = j; break; } }
+      const prevBox = prevIdx !== -1 ? anchored[prevIdx].bbox : null;
+      const nextBox = nextIdx !== -1 ? anchored[nextIdx].bbox : null;
+      if (prevBox && nextBox) {
+        const t = (ai - prevIdx) / (nextIdx - prevIdx);
+        anchored[ai].bbox = {
+          x: prevBox.x + (nextBox.x - prevBox.x) * t,
+          y: prevBox.y + (nextBox.y - prevBox.y) * t,
+          w: prevBox.w, h: prevBox.h,
+        };
+      } else if (prevBox) {
+        anchored[ai].bbox = { x: prevBox.x, y: prevBox.y + prevBox.h * 1.3, w: prevBox.w, h: prevBox.h };
+      } else if (nextBox) {
+        anchored[ai].bbox = { x: nextBox.x, y: Math.max(0, nextBox.y - nextBox.h * 1.3), w: nextBox.w, h: nextBox.h };
+      }
+      // if neither neighbor matched either, leave the model's own bbox guess as-is
     }
   }
 }
