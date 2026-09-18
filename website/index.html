@@ -81,6 +81,9 @@
 
   .back{display:inline-flex; align-items:center; gap:6px; color:var(--muted); text-decoration:none; font-size:.85rem; font-weight:700; margin-bottom:16px;}
   .limit-banner{background:var(--yellow-soft); border-radius:12px; padding:10px 12px; font-size:.8rem; text-align:center; margin-bottom:14px; color:#7a5a1f;}
+  .hw-profile{display:flex; align-items:flex-start; gap:8px; font-size:.76rem; color:var(--muted); margin-top:12px; line-height:1.5;}
+  .hw-profile input{margin-top:2px; flex-shrink:0;}
+  .hw-profile .forget{color:var(--pink-ink); text-decoration:underline; background:none; border:none; padding:0; font:inherit; cursor:pointer;}
 </style>
 </head>
 <body>
@@ -95,6 +98,10 @@
     <div class="shots" id="shots"></div>
     <input type="file" id="fileInput" accept="image/*" capture="environment" multiple hidden>
     <button class="big btn-primary" id="submitBtn" disabled>影相對功課</button>
+    <label class="hw-profile">
+      <input type="checkbox" id="rememberHwToggle">
+      <span id="hwProfileLabel">記住呢個小朋友嘅字跡，幫AI下次睇得更準（唔開都一樣用得，隨時可以<button type="button" class="forget" id="forgetHwBtn">忘記已記住嘅字跡</button>）</span>
+    </label>
   </div>
 
   <div id="statusMsg" class="status" hidden></div>
@@ -125,6 +132,42 @@ let shots = []; // { dataUrl, base64 }
 // (and paying for it) a second time. Reset whenever the photo set actually
 // changes (see renderShots) or after a submission succeeds.
 let requestId = null;
+
+// Handwriting profile: fully opt-in (checkbox defaults unchecked, and its
+// state is remembered so a parent who turns it on doesn't have to re-tick
+// it every time). deviceId is a random id kept only in this browser's
+// localStorage -- never sent anywhere until the checkbox is actually on.
+function getOrCreateDeviceId(){
+  try {
+    let id = localStorage.getItem('hwcheck_device_id');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+      localStorage.setItem('hwcheck_device_id', id);
+    }
+    return id;
+  } catch(e) { return null; }
+}
+const rememberHwToggle = document.getElementById('rememberHwToggle');
+const forgetHwBtn = document.getElementById('forgetHwBtn');
+try { rememberHwToggle.checked = localStorage.getItem('hwcheck_remember_hw') === '1'; } catch(e){}
+rememberHwToggle.onchange = () => {
+  try { localStorage.setItem('hwcheck_remember_hw', rememberHwToggle.checked ? '1' : '0'); } catch(e){}
+};
+forgetHwBtn.onclick = async (e) => {
+  e.preventDefault();
+  const id = getOrCreateDeviceId();
+  forgetHwBtn.textContent = '刪除緊...';
+  try {
+    await fetch('/api/forget-handwriting', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId: id }),
+    });
+  } catch(e){}
+  try { localStorage.removeItem('hwcheck_remember_hw'); } catch(e){}
+  rememberHwToggle.checked = false;
+  forgetHwBtn.textContent = '已忘記';
+  setTimeout(() => { forgetHwBtn.textContent = '忘記已記住嘅字跡'; }, 2000);
+};
 
 const shotsEl = document.getElementById('shots');
 const fileInput = document.getElementById('fileInput');
@@ -326,11 +369,13 @@ submitBtn.onclick = async () => {
   statusEl.className = 'status';
   statusEl.textContent = 'AI檢查緊，請稍等（可能要10-30秒）...';
   if (!requestId) requestId = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+  const rememberHandwriting = !!rememberHwToggle.checked;
+  const deviceId = rememberHandwriting ? getOrCreateDeviceId() : null;
   try {
     const res = await fetch('/api/check', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })), requestId }),
+      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })), requestId, deviceId, rememberHandwriting }),
     });
     const data = await res.json();
     if (!res.ok) {

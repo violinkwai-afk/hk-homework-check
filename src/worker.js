@@ -17,12 +17,19 @@
 import { PhotonImage, crop } from "@cf-wasm/photon/workerd";
 
 const CHECK_RATE_LIMIT = 15; // max /api/check calls per IP per hour
+const MAX_HANDWRITING_SAMPLES = 12; // per device, oldest evicted first
+const HANDWRITING_SAMPLE_TTL = 60 * 60 * 24 * 90; // 90 days
+const HANDWRITING_SAMPLES_PER_REQUEST = 3; // new exemplars captured per submission
+const HANDWRITING_EXEMPLARS_USED = 4; // most recent samples sent as reference
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/api/check" && request.method === "POST") {
       return handleCheck(request, env);
+    }
+    if (url.pathname === "/api/forget-handwriting" && request.method === "POST") {
+      return handleForgetHandwriting(request, env);
     }
     return env.ASSETS.fetch(request);
   },
@@ -65,7 +72,7 @@ async function handleCheck(request, env) {
     return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
   }
 
-  let { images, image, mediaType, requestId } = body;
+  let { images, image, mediaType, requestId, deviceId, rememberHandwriting } = body;
   if (!images && image) images = [{ data: image, mediaType }];
   if (!images || !images.length) {
     return json({ error: "bad_request", message: "缺少相片。" }, 400);
@@ -93,6 +100,21 @@ async function handleCheck(request, env) {
     } catch (e) { /* best-effort -- fall through and process normally */ }
   }
 
+  // Handwriting profile (opt-in, per-device, no accounts): if this device has
+  // previously confirmed-correct handwriting samples on file, send a handful
+  // of them as reference images alongside the actual homework pages -- same
+  // child, same pen, same letterforms, so a few worked examples of "this is
+  // how THIS kid writes" measurably helps the model disambiguate genuinely
+  // ambiguous strokes on this new page. This only ever runs when the client
+  // sent both an explicit opt-in flag and its own deviceId -- never silently.
+  const deviceKey = typeof deviceId === "string" && /^[a-zA-Z0-9-]{8,100}$/.test(deviceId) ? deviceId : null;
+  let exemplars = [];
+  if (rememberHandwriting && deviceKey && env.RATE_LIMIT_KV) {
+    try {
+      exemplars = await loadHandwritingExemplars(env.RATE_LIMIT_KV, deviceKey);
+    } catch (e) { /* profile lookup failing should never block a normal check */ }
+  }
+
   // No answer key exists for arbitrary homework -- the model has to solve
   // each question itself before it can judge the child's handwritten answer.
   // It also returns an approximate bounding box (as a % of that page's
@@ -118,12 +140,15 @@ async function handleCheck(request, env) {
     {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":""}
   ],
   "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）"
-}`;
+}`
+    + (exemplars.length
+      ? `\n\n附加：最後${exemplars.length}張圖係同一個小朋友之前已確認啱嘅字跡樣本，純粹俾你熟悉佢寫字嘅風格，唔屬於今次功課，唔使批改，"page"編號同"bbox"都唔關呢幾張事。`
+      : '');
 
   let parsed;
   const usage = { sonnet: null, sonnetZoom: null, opus: null };
   try {
-    const r = await callClaude("claude-sonnet-5", 4096, images, prompt, apiKey);
+    const r = await callClaude("claude-sonnet-5", 4096, images.concat(exemplars), prompt, apiKey);
     parsed = r.parsed;
     usage.sonnet = r.usage;
   } catch (e) {
@@ -165,6 +190,21 @@ async function handleCheck(request, env) {
     }
     if (unsure.length) {
       unsure = await recheckPass(parsed, unsure, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
+    }
+    // Capture a few confirmed-correct answers as new handwriting exemplars
+    // for next time -- reuses whatever pages recheck already decoded via
+    // photonCache, so this rarely needs a fresh decode of its own. Only
+    // "correct: true" items qualify: a wrong or still-uncertain answer is
+    // exactly the messy handwriting we do NOT want to teach the model as a
+    // reference example.
+    if (rememberHandwriting && deviceKey && env.RATE_LIMIT_KV) {
+      const goodOnes = (parsed.results || []).filter((r) => r.correct === true && r.bbox && images[r.page]).slice(0, HANDWRITING_SAMPLES_PER_REQUEST);
+      for (const r of goodOnes) {
+        try {
+          const sample = cropItem(r, images, photonCache);
+          await saveHandwritingSample(env.RATE_LIMIT_KV, deviceKey, sample);
+        } catch (e) { /* one bad crop shouldn't stop the others from being saved */ }
+      }
     }
   } finally {
     for (const img of photonCache.values()) img.free();
@@ -298,6 +338,68 @@ async function refineWithOcr(results, images, visionKey) {
       // if neither neighbor matched either, leave the model's own bbox guess as-is
     }
   }
+}
+
+// Handwriting profile storage. Keyed entirely by an opaque client-generated
+// deviceId (a random UUID the client keeps in localStorage) -- never an
+// account, an IP, or anything else that identifies a real person. Reuses
+// the RATE_LIMIT_KV binding as a plain key-value store (its name reflects
+// its original purpose, not everything stored in it); a dedicated KV
+// namespace could be split out later if this ever needs different
+// retention/ops handling than the rate limiter.
+function handwritingMetaKey(deviceKey) { return `hwprofile:${deviceKey}:meta`; }
+function handwritingSampleKey(deviceKey, sampleId) { return `hwprofile:${deviceKey}:${sampleId}`; }
+
+async function loadHandwritingExemplars(kv, deviceKey) {
+  const raw = await kv.get(handwritingMetaKey(deviceKey));
+  if (!raw) return [];
+  let sampleIds;
+  try { sampleIds = JSON.parse(raw); } catch (e) { return []; }
+  if (!Array.isArray(sampleIds) || !sampleIds.length) return [];
+  const recent = sampleIds.slice(-HANDWRITING_EXEMPLARS_USED);
+  const samples = await Promise.all(recent.map(async (id) => {
+    try {
+      const raw2 = await kv.get(handwritingSampleKey(deviceKey, id));
+      return raw2 ? JSON.parse(raw2) : null;
+    } catch (e) { return null; }
+  }));
+  return samples.filter(Boolean).map((s) => ({ data: s.data, mediaType: s.mediaType || "image/jpeg" }));
+}
+
+async function saveHandwritingSample(kv, deviceKey, sample) {
+  const metaRaw = await kv.get(handwritingMetaKey(deviceKey));
+  let sampleIds = [];
+  if (metaRaw) {
+    try { sampleIds = JSON.parse(metaRaw); if (!Array.isArray(sampleIds)) sampleIds = []; } catch (e) { sampleIds = []; }
+  }
+  const sampleId = crypto.randomUUID();
+  await kv.put(handwritingSampleKey(deviceKey, sampleId), JSON.stringify(sample), { expirationTtl: HANDWRITING_SAMPLE_TTL });
+  sampleIds.push(sampleId);
+  // Evict oldest first once over the cap -- delete the KV entry too, not
+  // just drop it from the index, or it'd sit there unreferenced until its
+  // TTL happened to expire.
+  while (sampleIds.length > MAX_HANDWRITING_SAMPLES) {
+    const evicted = sampleIds.shift();
+    try { await kv.delete(handwritingSampleKey(deviceKey, evicted)); } catch (e) { /* best-effort */ }
+  }
+  await kv.put(handwritingMetaKey(deviceKey), JSON.stringify(sampleIds), { expirationTtl: HANDWRITING_SAMPLE_TTL });
+}
+
+async function handleForgetHandwriting(request, env) {
+  if (!env.RATE_LIMIT_KV) return json({ ok: true }, 200);
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: "bad_request" }, 400); }
+  const deviceKey = typeof body.deviceId === "string" && /^[a-zA-Z0-9-]{8,100}$/.test(body.deviceId) ? body.deviceId : null;
+  if (!deviceKey) return json({ error: "bad_request", message: "缺少deviceId。" }, 400);
+  try {
+    const raw = await env.RATE_LIMIT_KV.get(handwritingMetaKey(deviceKey));
+    const sampleIds = raw ? (JSON.parse(raw) || []) : [];
+    for (const id of sampleIds) {
+      try { await env.RATE_LIMIT_KV.delete(handwritingSampleKey(deviceKey, id)); } catch (e) { /* best-effort */ }
+    }
+    await env.RATE_LIMIT_KV.delete(handwritingMetaKey(deviceKey));
+  } catch (e) { /* best-effort -- deletion should still report success to the user */ }
+  return json({ ok: true }, 200);
 }
 
 function normalizeAnchor(s) {
@@ -451,27 +553,35 @@ async function buildCrops(unsure, images, photonCache) {
   const cropImages = [];
   const cropLabels = [];
   for (const r of unsure) {
-    if (!r.bbox || !images[r.page]) throw new Error("missing bbox or page for crop");
-    let photonImg = photonCache.get(r.page);
-    if (!photonImg) {
-      const bytes = base64ToBytes(images[r.page].data);
-      photonImg = PhotonImage.new_from_byteslice(bytes);
-      photonCache.set(r.page, photonImg);
-    }
-    const W = photonImg.get_width(), H = photonImg.get_height();
-    const padX = Math.max(60, W * 0.1), padY = Math.max(50, H * 0.04);
-    const x1 = Math.max(0, Math.round((r.bbox.x / 100) * W - padX));
-    const y1 = Math.max(0, Math.round((r.bbox.y / 100) * H - padY));
-    const x2 = Math.min(W, Math.round(((r.bbox.x + r.bbox.w) / 100) * W + padX));
-    const y2 = Math.min(H, Math.round(((r.bbox.y + r.bbox.h) / 100) * H + padY));
-    if (x2 <= x1 || y2 <= y1) throw new Error("degenerate crop rectangle");
-    const cropped = crop(photonImg, x1, y1, x2, y2);
-    const outBytes = cropped.get_bytes_jpeg(90);
-    cropImages.push({ data: bytesToBase64(outBytes), mediaType: "image/jpeg" });
+    cropImages.push(cropItem(r, images, photonCache));
     cropLabels.push(`page ${r.page} ${r.question}`);
-    cropped.free();
   }
   return { cropImages, cropLabels };
+}
+
+// Crops a padded region around one result's bbox on its page. Shared by the
+// recheck zoom tiers above and the handwriting-sample capture below, so the
+// padding/crop math (and the Photon decode-cache convention) only exists in
+// one place.
+function cropItem(r, images, photonCache) {
+  if (!r.bbox || !images[r.page]) throw new Error("missing bbox or page for crop");
+  let photonImg = photonCache.get(r.page);
+  if (!photonImg) {
+    const bytes = base64ToBytes(images[r.page].data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    photonCache.set(r.page, photonImg);
+  }
+  const W = photonImg.get_width(), H = photonImg.get_height();
+  const padX = Math.max(60, W * 0.1), padY = Math.max(50, H * 0.04);
+  const x1 = Math.max(0, Math.round((r.bbox.x / 100) * W - padX));
+  const y1 = Math.max(0, Math.round((r.bbox.y / 100) * H - padY));
+  const x2 = Math.min(W, Math.round(((r.bbox.x + r.bbox.w) / 100) * W + padX));
+  const y2 = Math.min(H, Math.round(((r.bbox.y + r.bbox.h) / 100) * H + padY));
+  if (x2 <= x1 || y2 <= y1) throw new Error("degenerate crop rectangle");
+  const cropped = crop(photonImg, x1, y1, x2, y2);
+  const outBytes = cropped.get_bytes_jpeg(90);
+  cropped.free();
+  return { data: bytesToBase64(outBytes), mediaType: "image/jpeg" };
 }
 
 function base64ToBytes(b64) {
