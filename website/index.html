@@ -496,19 +496,20 @@ submitBtn.onclick = async () => {
   let anySuccess = false, anyError = false;
   const priorPagesContext = [];
 
-  // Sequential, NOT parallel: firing all pages' image uploads at once
-  // sounds faster but competes for the same limited mobile-upload
-  // bandwidth (confirmed live -- simultaneous uploads on a real 4G
-  // connection caused every page to fail with a network error, not just
-  // slow down). One page's photo at a time is more bytes-on-the-wire at
-  // once per request but far more reliable overall, and each page still
-  // shows up as its own request finishes rather than waiting for all 5 --
-  // just not all starting at literally the same instant. This also
-  // carries each completed page's answers forward as text context (not
-  // images) to the next page's request, so a question that continues
-  // across a page boundary can still be answered correctly, which pure
-  // parallel per-page requests could never do.
-  for (let pIdx = 0; pIdx < shots.length; pIdx++) {
+  // Limited concurrency, not fully sequential and not fully parallel:
+  // firing ALL pages' uploads at once competes for the same limited
+  // mobile-upload bandwidth (confirmed live -- every page failed at once
+  // on a real 4G connection), but one-at-a-time was reported as too slow
+  // for a 5-page submission. 2 concurrent uploads is a middle ground --
+  // still some contention, but nowhere near firing 5 large image bodies
+  // down one mobile uplink simultaneously, while roughly halving total
+  // wait versus strictly sequential. priorPagesContext still gets
+  // whatever earlier pages had ALREADY finished by the time a given page
+  // starts (may be one page "behind" when two pages start close
+  // together) -- an imperfect but reasonable trade for the speed gained.
+  const CONCURRENCY = 2;
+  let nextIdx = 0;
+  async function runOne(pIdx){
     const s = shots[pIdx];
     if (!s.requestId) {
       s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
@@ -520,7 +521,7 @@ submitBtn.onclick = async () => {
       body: JSON.stringify({
         images: [{ data: s.base64, mediaType: 'image/jpeg' }],
         pageIndex: pIdx,
-        priorPagesContext,
+        priorPagesContext: priorPagesContext.slice(),
         requestId: s.requestId,
         deviceId, rememberHandwriting,
       }),
@@ -535,7 +536,7 @@ submitBtn.onclick = async () => {
       if (!res.ok) {
         anyError = true;
         markPageFailed(pIdx, data.message || '呢頁檢查失敗');
-        continue;
+        return;
       }
       anySuccess = true;
       currentData.results = currentData.results.concat(data.results || []);
@@ -549,12 +550,19 @@ submitBtn.onclick = async () => {
       // -- literally continuing, e.g. a diagram or word problem that runs
       // onto the next page). priorPagesContext (text-only) can't fix that,
       // since the earlier page never saw the rest of the question as an
-      // image. When THIS page says it ends mid-question and the PREVIOUS
-      // page already said it expected exactly that, re-solve just those
-      // two pages together with both images -- a rare extra call, only
-      // when there's real evidence of a split, not for every submission.
-      if (pIdx > 0 && data.continuesFromPrevious && shots[pIdx - 1]._continuesToNext) {
-        await restitchSplitPages(currentData, pIdx - 1, pIdx, deviceId, rememberHandwriting);
+      // image. Deliberately searches ALL earlier-completed pages for an
+      // unconsumed continuesToNext flag, not just the immediately-prior
+      // upload -- a parent photographing out of order (e.g. page1, page3,
+      // page2) means the TRUE neighbour isn't necessarily the previous
+      // shot in the array; this still finds page1 as page2's match even
+      // with page3 uploaded in between. Only fires on real evidence of a
+      // split from both sides, not for every submission.
+      if (data.continuesFromPrevious) {
+        const matchIdx = shots.findIndex((sh, i) => i < pIdx && sh._continuesToNext && !sh._stitched);
+        if (matchIdx !== -1) {
+          shots[matchIdx]._stitched = true;
+          await restitchSplitPages(currentData, matchIdx, pIdx, deviceId, rememberHandwriting);
+        }
       }
       s._continuesToNext = !!data.continuesToNext;
     } catch (e) {
@@ -562,6 +570,19 @@ submitBtn.onclick = async () => {
       markPageFailed(pIdx, '呢頁網絡錯誤');
     }
   }
+
+  // Worker-pool driver: CONCURRENCY workers, each pulling the next
+  // not-yet-started page index off a shared counter until none remain --
+  // keeps exactly CONCURRENCY requests in flight at once (not more), and
+  // starts a new one the instant a slot frees up rather than waiting for
+  // a whole fixed batch to finish.
+  async function worker(){
+    while (nextIdx < shots.length) {
+      const myIdx = nextIdx++;
+      await runOne(myIdx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, shots.length) }, worker));
 
   statusEl.hidden = true;
   submitBtn.disabled = false; // re-enable in case they want to start an unrelated new batch, even while reviewing this one
