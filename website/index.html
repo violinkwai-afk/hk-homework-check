@@ -445,16 +445,41 @@ function applyMarkCorrect(data, page, idx, correct){
 // implying something's wrong.
 function genId(){ return crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)); }
 
-// Each page is now its own independent request, fired in parallel with the
-// others (not one-after-another) -- with up to 5 pages, waiting for them
-// sequentially could easily take much longer than people are willing to
-// wait, and a parent doesn't need to see page 1 before page 2 starts; each
-// page's own marked-up result appears the moment ITS request finishes,
-// filling in whichever pending slot is that page's, regardless of finish
-// order. The tradeoff: because pages are graded independently and at the
-// same time, one page's result can't factor in another page's answer
-// (no cross-page consistency-checking) -- a real accuracy tradeoff made
-// deliberately for speed.
+// Each page is its own request, sent one at a time (not all at once --
+// see the note inside submitBtn.onclick for why parallel uploads turned
+// out to be unreliable on real mobile connections), carrying forward
+// prior pages' already-graded answers as text context. Each page's own
+// marked-up result still appears the moment ITS request finishes, so a
+// parent sees page 1 well before page 5 is ready, without needing to wait
+// for the whole batch.
+async function restitchSplitPages(currentData, pageA, pageB, deviceId, rememberHandwriting){
+  try {
+    const res = await fetch('/api/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        images: [
+          { data: shots[pageA].base64, mediaType: 'image/jpeg' },
+          { data: shots[pageB].base64, mediaType: 'image/jpeg' },
+        ],
+        stitchPages: [pageA, pageB],
+        requestId: genId(),
+        deviceId, rememberHandwriting,
+      }),
+    });
+    if (!res.ok) return; // best-effort -- the two pages' independent answers just stand as-is
+    const data = await res.json();
+    if (!data.results) return;
+    // Replace both pages' results with the jointly-solved version, which
+    // saw the full spanning question and so should be strictly better
+    // informed than either page's standalone guess.
+    currentData.results = currentData.results.filter(r => (r.page || 0) !== pageA && (r.page || 0) !== pageB);
+    currentData.results = currentData.results.concat(data.results);
+    fillPageResult(currentData, pageA);
+    fillPageResult(currentData, pageB);
+  } catch (e) { /* best-effort -- leave the two pages' independent answers as-is */ }
+}
+
 submitBtn.onclick = async () => {
   if (!shots.length) return;
   if (!checkMonthlyLimit()) return;
@@ -469,42 +494,74 @@ submitBtn.onclick = async () => {
   const deviceId = rememberHandwriting ? getOrCreateDeviceId() : null;
   const currentData = { results: [], score: '' };
   let anySuccess = false, anyError = false;
+  const priorPagesContext = [];
 
-  await Promise.all(shots.map(async (s, pIdx) => {
+  // Sequential, NOT parallel: firing all pages' image uploads at once
+  // sounds faster but competes for the same limited mobile-upload
+  // bandwidth (confirmed live -- simultaneous uploads on a real 4G
+  // connection caused every page to fail with a network error, not just
+  // slow down). One page's photo at a time is more bytes-on-the-wire at
+  // once per request but far more reliable overall, and each page still
+  // shows up as its own request finishes rather than waiting for all 5 --
+  // just not all starting at literally the same instant. This also
+  // carries each completed page's answers forward as text context (not
+  // images) to the next page's request, so a question that continues
+  // across a page boundary can still be answered correctly, which pure
+  // parallel per-page requests could never do.
+  for (let pIdx = 0; pIdx < shots.length; pIdx++) {
+    const s = shots[pIdx];
+    if (!s.requestId) {
+      s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
+      if (pIdx === 0) requestId = null; // demoId (if any) only ever applies to the first submission
+    }
+    const attemptOnce = () => fetch('/api/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        images: [{ data: s.base64, mediaType: 'image/jpeg' }],
+        pageIndex: pIdx,
+        priorPagesContext,
+        requestId: s.requestId,
+        deviceId, rememberHandwriting,
+      }),
+    });
     try {
-      // Stable per-photo id (not regenerated each click) so retrying the
-      // same batch after a network blip on one page hits that page's
-      // idempotency cache server-side instead of paying for it twice. Page
-      // 0 honours a ?demoId= override (see `requestId` above) so the demo
-      // mechanism still works now that submissions are per-page.
-      if (!s.requestId) {
-        s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
-        if (pIdx === 0) requestId = null; // demoId (if any) only ever applies to the first submission
-      }
-      const res = await fetch('/api/check', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          images: [{ data: s.base64, mediaType: 'image/jpeg' }],
-          pageIndex: pIdx,
-          requestId: s.requestId,
-          deviceId, rememberHandwriting,
-        }),
-      });
+      // One quiet retry on a transient network hiccup before giving up on
+      // this page -- the stable per-page requestId makes this safe (a
+      // retry that hits the idempotency cache costs nothing extra).
+      let res;
+      try { res = await attemptOnce(); } catch (e) { res = await attemptOnce(); }
       const data = await res.json();
       if (!res.ok) {
         anyError = true;
         markPageFailed(pIdx, data.message || '呢頁檢查失敗');
-        return;
+        continue;
       }
       anySuccess = true;
       currentData.results = currentData.results.concat(data.results || []);
       fillPageResult(currentData, pIdx);
+      priorPagesContext.push({
+        page: pIdx,
+        results: (data.results || []).map(r => ({ question: r.question, studentAnswer: r.studentAnswer, correct: r.correct, correctAnswer: r.correctAnswer })),
+      });
+
+      // A question can be split across a page boundary (not just "related"
+      // -- literally continuing, e.g. a diagram or word problem that runs
+      // onto the next page). priorPagesContext (text-only) can't fix that,
+      // since the earlier page never saw the rest of the question as an
+      // image. When THIS page says it ends mid-question and the PREVIOUS
+      // page already said it expected exactly that, re-solve just those
+      // two pages together with both images -- a rare extra call, only
+      // when there's real evidence of a split, not for every submission.
+      if (pIdx > 0 && data.continuesFromPrevious && shots[pIdx - 1]._continuesToNext) {
+        await restitchSplitPages(currentData, pIdx - 1, pIdx, deviceId, rememberHandwriting);
+      }
+      s._continuesToNext = !!data.continuesToNext;
     } catch (e) {
       anyError = true;
       markPageFailed(pIdx, '呢頁網絡錯誤');
     }
-  }));
+  }
 
   statusEl.hidden = true;
   submitBtn.disabled = false; // re-enable in case they want to start an unrelated new batch, even while reviewing this one

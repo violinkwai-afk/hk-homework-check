@@ -151,7 +151,7 @@ async function handleCheck(request, env) {
     return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
   }
 
-  let { images, image, mediaType, requestId, deviceId, rememberHandwriting, pageIndex, priorPagesContext } = body;
+  let { images, image, mediaType, requestId, deviceId, rememberHandwriting, pageIndex, priorPagesContext, stitchPages } = body;
   if (!images && image) images = [{ data: image, mediaType }];
   if (!images || !images.length) {
     return json({ error: "bad_request", message: "缺少相片。" }, 400);
@@ -165,6 +165,14 @@ async function handleCheck(request, env) {
   // returned (see near the bottom of this function), so everything
   // upstream of that (OCR refinement, crop-recheck, handwriting capture)
   // keeps working against local index 0 unchanged.
+  //
+  // `stitchPages` is the rare exception: exactly two real page numbers,
+  // sent when a question was detected as literally continuing across
+  // those two pages' boundary (see rule 9 in the prompt below). Both
+  // images are sent together so the model can actually see the whole
+  // spanning question, and each local image index (0, 1) remaps to its
+  // own real page number, not a single shared one.
+  const isStitch = Array.isArray(stitchPages) && stitchPages.length === images.length;
   const realPageIndex = Number.isInteger(pageIndex) ? pageIndex : 0;
   const MAX_PAGES = 5;
   if (images.length > MAX_PAGES) {
@@ -250,12 +258,15 @@ async function handleCheck(request, env) {
 6. 喺 "anchor" 填低嗰一題「印刷體」嘅題號標籤本身，淨係果幾個字符（例如 "1."、"3)"、"(a)"、"四、"），千祈唔好抄埋成句題目或者算式，愈短愈準。搵唔到就填空字串。
 7. 淨係做啱錯判斷，唔使分析弱項或者其他額外內容。
 8. "riskyDiagram" 設為 true，如果呢一題屬於以下容易睇錯嘅類型（唔理你自己覺得幾肯定都好，只要屬於呢啲類型都要老實填true）：睇刻度／量表／燒杯水位、量度長度、判斷角度大小或直角、分辨立體圖形（prism/pyramid/cylinder/cone）、硬幣/銀紙面額、圈出加埋等於某金額嘅組合、方向/指南針、分數塗色部分、算柱/珠算數珠、位值比較（邊個數字表示最大/最小）、tally記數。純文字計算、普通選擇題、清清楚楚嘅填空（例如"3+5="）呢類唔使設true。
+9. 呢張相可能只係一份多頁功課入面嘅其中一頁。留意張相嘅最頂同最底：如果最頂一開始就係一題嘅中間部分（冇題號、冇上文，好似接住上一頁未完嘅嘢），"continuesFromPrevious" 設為true；如果最底最後一題睇落未完（例如題目敘述好似仲未問完、冇答題位置、圖表被切斷），"continuesToNext" 設為true。兩個都預設false，唔好亂咁當有延續，要真係見到明顯線索先設true。
 只回覆一個JSON物件，不要加任何其他文字：
 {
   "results": [
     {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":"","riskyDiagram":false}
   ],
-  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）"
+  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
+  "continuesFromPrevious": false,
+  "continuesToNext": false
 }`
     + (exemplars.length
       ? `\n\n附加：最後${exemplars.length}張圖係同一個小朋友之前已確認啱嘅字跡樣本，純粹俾你熟悉佢寫字嘅風格，唔屬於今次功課，唔使批改，"page"編號同"bbox"都唔關呢幾張事。`
@@ -345,12 +356,17 @@ async function handleCheck(request, env) {
   }
   if (parsed.results && parsed.results.length) {
     // Everything above (OCR refinement, crop-recheck, handwriting capture)
-    // ran against local page 0, since every request now carries exactly one
-    // image -- only now, right before the response goes out, do results get
+    // ran against local page indices matching the images actually sent --
+    // only now, right before the response goes out, do results get
     // relabelled with the REAL page index within the parent's whole photo
     // set, so the client can place this page's marks/confirm-list rows
-    // correctly alongside pages graded by other (parallel) requests.
-    parsed.results.forEach((r) => { r.page = realPageIndex; });
+    // correctly alongside pages graded by other requests. Normally every
+    // request carries exactly one image (local page always 0), remapped to
+    // `realPageIndex`; a stitch request carries two and each local index
+    // remaps to its own real page number from `stitchPages`.
+    parsed.results.forEach((r) => {
+      r.page = isStitch ? (stitchPages[r.page || 0] ?? realPageIndex) : realPageIndex;
+    });
     const graded = parsed.results.filter((r) => r.correct !== null);
     const correctCount = graded.filter((r) => r.correct === true).length;
     parsed.score = `${correctCount} / ${graded.length}`;
