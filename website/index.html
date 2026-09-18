@@ -51,6 +51,10 @@
   .result-page{margin-bottom:18px;}
   .result-page .imgwrap{position:relative; border-radius:14px; overflow:hidden; box-shadow:var(--shadow); line-height:0;}
   .result-page img{width:100%; display:block;}
+  .result-page.pending .imgwrap{opacity:.55;}
+  .result-page .page-spinner{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;}
+  .result-page .page-spinner .spinner{width:28px; height:28px; border-radius:50%; border:3px solid var(--pink-soft); border-top-color:var(--pink-ink); animation:spin .8s linear infinite;}
+  @media (prefers-reduced-motion: reduce){ .result-page .page-spinner .spinner{animation:none;} }
   .mark{
     position:absolute; display:flex; align-items:center; justify-content:center;
     font-size:28px; font-weight:400; transform:translate(0,0);
@@ -286,74 +290,100 @@ function markIcon(correct){
   return '?';
 }
 
-function renderResults(data){
+// Pages are now graded by independent, parallel requests (see
+// submitBtn.onclick below) so each page's marked-up result can appear the
+// moment IT finishes, instead of the parent waiting for every page in one
+// big request. This builds an empty "pending" slot per page up front, in
+// the right order, then fillPageResult() below drops each page's real
+// marks in as its own request resolves -- slots fill out of order exactly
+// as fast as each page actually finishes, but always stay visually in
+// their original page order.
+function renderResultShells(){
   resultsEl.innerHTML = '';
-  const byPage = new Map();
-  (data.results || []).forEach(r => {
-    const p = r.page || 0;
-    if (!byPage.has(p)) byPage.set(p, []);
-    byPage.get(p).push(r);
-  });
-
   shots.forEach((s, pIdx) => {
     const wrap = document.createElement('div');
-    wrap.className = 'result-page';
-    const marksHtml = (byPage.get(pIdx) || []).map((r, ri) => {
-      if (!r.bbox) return '';
-      // Sit right at the bottom-right corner of the child's answer, like a
-      // real red-pen mark, rather than centered or floating above the line.
-      const cx = (r.bbox.x || 0) + (r.bbox.w || 0);
-      const cy = (r.bbox.y || 0) + (r.bbox.h || 0);
-      const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
-      const ans = (r.correct === false && r.correctAnswer)
-        ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
-        : '';
-      return mark + ans;
-    }).join('');
-    wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}">${marksHtml}</div>`;
+    wrap.className = 'result-page pending';
+    wrap.dataset.page = pIdx;
+    wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}"><div class="page-spinner"><span class="spinner"></span></div></div>`;
     resultsEl.appendChild(wrap);
   });
-
-  // Every mark on the photo is directly tappable to flip it -- AI can be
-  // confidently wrong, not just uncertain, so the override isn't limited to
-  // "?" items. Purely optional: not tapping a mark leaves it exactly as AI
-  // left it, nothing is forced or blocking.
-  resultsEl.querySelectorAll('.mark').forEach(el => {
-    el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
-  });
-
   const scoreBanner = document.createElement('div');
   scoreBanner.className = 'score-banner';
-  scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
   resultsEl.appendChild(scoreBanner);
-
-  const unsureItems = (data.results || []).filter(r => r.correct === null);
-  if (unsureItems.length) {
-    const list = document.createElement('div');
-    list.className = 'confirm-list';
-    list.innerHTML = `<div class="sub" style="margin-bottom:8px;">相上面「?」嘅幾題AI睇得唔清楚，得閒可以撳一撳確認，唔撳都冇問題：</div>` +
-      unsureItems.map((r) => `
-        <div class="confirm-item" data-page="${r.page}" data-q="${r.question}">
-          <span class="q">第${(r.page||0)+1}頁 · ${r.question}題</span>
-          <span class="btns">
-            <button class="ok">啱</button>
-            <button class="no">錯</button>
-          </span>
-        </div>`).join('');
-    resultsEl.appendChild(list);
-
-    list.querySelectorAll('.confirm-item').forEach(item => {
-      const page = +item.dataset.page, q = item.dataset.q;
-      const idx = findResultIdx(data, page, q);
-      item.querySelector('.ok').onclick = () => applyMarkCorrect(data, page, idx, true);
-      item.querySelector('.no').onclick = () => applyMarkCorrect(data, page, idx, false);
-    });
-  }
-
+  const list = document.createElement('div');
+  list.className = 'confirm-list';
+  resultsEl.appendChild(list);
   uploadCard.hidden = true;
   againWrap.hidden = false;
 }
 
+// Fills in one page's slot once that page's own request has resolved.
+// `data` is the single shared results object accumulated across all pages
+// (so mark-tap/confirm handlers below keep working against the whole set,
+// same as before this page split).
+function fillPageResult(data, pIdx){
+  const wrap = resultsEl.querySelector(`.result-page[data-page="${pIdx}"]`);
+  if (!wrap) return;
+  wrap.classList.remove('pending');
+  const pageItems = (data.results || []).filter(r => (r.page || 0) === pIdx);
+  const marksHtml = pageItems.map((r, ri) => {
+    if (!r.bbox) return '';
+    const cx = (r.bbox.x || 0) + (r.bbox.w || 0);
+    const cy = (r.bbox.y || 0) + (r.bbox.h || 0);
+    const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+    const ans = (r.correct === false && r.correctAnswer)
+      ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
+      : '';
+    return mark + ans;
+  }).join('');
+  const img = wrap.querySelector('img');
+  wrap.querySelector('.imgwrap').innerHTML = `<img src="${img.src}">${marksHtml}`;
+  wrap.querySelectorAll('.mark').forEach(el => {
+    el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
+  });
+  updateSummary(data);
+}
+
+function markPageFailed(pIdx, message){
+  const wrap = resultsEl.querySelector(`.result-page[data-page="${pIdx}"]`);
+  if (!wrap) return;
+  wrap.classList.remove('pending');
+  wrap.querySelector('.imgwrap').insertAdjacentHTML('beforeend', `<div class="page-spinner"><span class="sub" style="background:#fff; padding:6px 10px; border-radius:8px;">${message}</span></div>`);
+}
+
+// Re-draws the running score banner and the "?" confirm-list from whatever
+// is in `data.results` so far -- called after every page fills in, so both
+// stay live as pages keep arriving instead of only appearing once at the
+// very end.
+function updateSummary(data){
+  const scoreBanner = resultsEl.querySelector('.score-banner');
+  if (scoreBanner) {
+    const graded = (data.results || []).filter(x => x.correct !== null);
+    const correctCount = graded.filter(x => x.correct === true).length;
+    data.score = graded.length ? `${correctCount} / ${graded.length}` : '';
+    scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
+  }
+
+  const list = resultsEl.querySelector('.confirm-list');
+  if (!list) return;
+  const unsureItems = (data.results || []).filter(r => r.correct === null);
+  if (!unsureItems.length) { list.innerHTML = ''; return; }
+  list.innerHTML = `<div class="sub" style="margin-bottom:8px;">相上面「?」嘅幾題AI睇得唔清楚，得閒可以撳一撳確認，唔撳都冇問題：</div>` +
+    unsureItems.map((r) => `
+      <div class="confirm-item" data-page="${r.page}" data-q="${r.question}">
+        <span class="q">第${(r.page||0)+1}頁 · ${r.question}題</span>
+        <span class="btns">
+          <button class="ok">啱</button>
+          <button class="no">錯</button>
+        </span>
+      </div>`).join('');
+  list.querySelectorAll('.confirm-item').forEach(item => {
+    const page = +item.dataset.page, q = item.dataset.q;
+    const idx = findResultIdx(data, page, q);
+    item.querySelector('.ok').onclick = () => applyMarkCorrect(data, page, idx, true);
+    item.querySelector('.no').onclick = () => applyMarkCorrect(data, page, idx, false);
+  });
+}
 function findResultIdx(data, page, question){
   const pageItems = (data.results || []).filter(x => (x.page||0) === page);
   return pageItems.findIndex(x => String(x.question) === String(question));
@@ -413,60 +443,75 @@ function applyMarkCorrect(data, page, idx, correct){
 // literal progress bar. Timed roughly to how long each real stage tends to
 // take; the last message repeats if it somehow runs long instead of
 // implying something's wrong.
-const PROGRESS_MESSAGES = [
-  'AI開始睇緊啲題目...',
-  '度緊啲圖表、刻度、計數...',
-  '覆核緊睇得唔夠清楚嘅題目...',
-  '就快好喇，多等一陣...',
-];
-let progressTimer = null;
-function startProgressAnimation(){
-  let i = 0;
-  statusEl.innerHTML = '<span class="spinner"></span><span></span>';
-  const textEl = statusEl.querySelector('span:last-child');
-  textEl.textContent = PROGRESS_MESSAGES[0];
-  progressTimer = setInterval(() => {
-    i = Math.min(i + 1, PROGRESS_MESSAGES.length - 1);
-    textEl.textContent = PROGRESS_MESSAGES[i];
-  }, 6000);
-}
-function stopProgressAnimation(){
-  if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-}
+function genId(){ return crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)); }
 
+// Each page is now its own independent request, fired in parallel with the
+// others (not one-after-another) -- with up to 5 pages, waiting for them
+// sequentially could easily take much longer than people are willing to
+// wait, and a parent doesn't need to see page 1 before page 2 starts; each
+// page's own marked-up result appears the moment ITS request finishes,
+// filling in whichever pending slot is that page's, regardless of finish
+// order. The tradeoff: because pages are graded independently and at the
+// same time, one page's result can't factor in another page's answer
+// (no cross-page consistency-checking) -- a real accuracy tradeoff made
+// deliberately for speed.
 submitBtn.onclick = async () => {
   if (!shots.length) return;
   if (!checkMonthlyLimit()) return;
   submitBtn.disabled = true;
+  recordSubmission(); // once per batch, not per page
+  renderResultShells();
   statusEl.hidden = false;
   statusEl.className = 'status';
-  startProgressAnimation();
-  if (!requestId) requestId = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+  statusEl.innerHTML = '<span class="spinner"></span><span>AI檢查緊，逐頁載入緊...</span>';
+
   const rememberHandwriting = !!rememberHwToggle.checked;
   const deviceId = rememberHandwriting ? getOrCreateDeviceId() : null;
-  try {
-    const res = await fetch('/api/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ images: shots.map(s => ({ data: s.base64, mediaType: 'image/jpeg' })), requestId, deviceId, rememberHandwriting }),
-    });
-    const data = await res.json();
-    stopProgressAnimation();
-    if (!res.ok) {
-      statusEl.className = 'status err';
-      statusEl.textContent = data.message || '檢查失敗，請再試一次。';
-      submitBtn.disabled = false;
-      return;
+  const currentData = { results: [], score: '' };
+  let anySuccess = false, anyError = false;
+
+  await Promise.all(shots.map(async (s, pIdx) => {
+    try {
+      // Stable per-photo id (not regenerated each click) so retrying the
+      // same batch after a network blip on one page hits that page's
+      // idempotency cache server-side instead of paying for it twice. Page
+      // 0 honours a ?demoId= override (see `requestId` above) so the demo
+      // mechanism still works now that submissions are per-page.
+      if (!s.requestId) {
+        s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
+        if (pIdx === 0) requestId = null; // demoId (if any) only ever applies to the first submission
+      }
+      const res = await fetch('/api/check', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          images: [{ data: s.base64, mediaType: 'image/jpeg' }],
+          pageIndex: pIdx,
+          requestId: s.requestId,
+          deviceId, rememberHandwriting,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        anyError = true;
+        markPageFailed(pIdx, data.message || '呢頁檢查失敗');
+        return;
+      }
+      anySuccess = true;
+      currentData.results = currentData.results.concat(data.results || []);
+      fillPageResult(currentData, pIdx);
+    } catch (e) {
+      anyError = true;
+      markPageFailed(pIdx, '呢頁網絡錯誤');
     }
-    statusEl.hidden = true;
-    requestId = null; // succeeded -- next submit (even of the same photos) is a fresh one
-    recordSubmission();
-    renderResults(data);
-  } catch (e) {
-    stopProgressAnimation();
+  }));
+
+  statusEl.hidden = true;
+  submitBtn.disabled = false; // re-enable in case they want to start an unrelated new batch, even while reviewing this one
+  if (!anySuccess && anyError) {
+    statusEl.hidden = false;
     statusEl.className = 'status err';
     statusEl.textContent = '網絡錯誤，請再試一次。';
-    submitBtn.disabled = false;
   }
 };
 

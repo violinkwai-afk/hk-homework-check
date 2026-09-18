@@ -151,11 +151,21 @@ async function handleCheck(request, env) {
     return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
   }
 
-  let { images, image, mediaType, requestId, deviceId, rememberHandwriting } = body;
+  let { images, image, mediaType, requestId, deviceId, rememberHandwriting, pageIndex, priorPagesContext } = body;
   if (!images && image) images = [{ data: image, mediaType }];
   if (!images || !images.length) {
     return json({ error: "bad_request", message: "缺少相片。" }, 400);
   }
+  // Client now submits one page per request (see website/index.html) so
+  // each page shows up as soon as it's graded, instead of the parent
+  // waiting for every page in one big multi-image call. `pageIndex` is
+  // this page's REAL position in the parent's whole photo set; the model
+  // itself always sees exactly one image so it always reports "page":0 --
+  // that gets remapped to the real pageIndex right before the response is
+  // returned (see near the bottom of this function), so everything
+  // upstream of that (OCR refinement, crop-recheck, handwriting capture)
+  // keeps working against local index 0 unchanged.
+  const realPageIndex = Number.isInteger(pageIndex) ? pageIndex : 0;
   const MAX_PAGES = 5;
   if (images.length > MAX_PAGES) {
     return json(
@@ -249,6 +259,9 @@ async function handleCheck(request, env) {
 }`
     + (exemplars.length
       ? `\n\n附加：最後${exemplars.length}張圖係同一個小朋友之前已確認啱嘅字跡樣本，純粹俾你熟悉佢寫字嘅風格，唔屬於今次功課，唔使批改，"page"編號同"bbox"都唔關呢幾張事。`
+      : '')
+    + (Array.isArray(priorPagesContext) && priorPagesContext.length
+      ? `\n\n附加：呢頁屬於同一份功課嘅其中一部份，以下係其他頁面已經批改咗嘅結果（僅供參考，唔使批改，亦睇唔到嗰啲頁面嘅相）：${JSON.stringify(priorPagesContext).slice(0, 3000)}。如果依家呢頁嘅題目同上面嘅結果有數值關係（例如加減關係），可以用嚟核對，但如果冇睇到相關題目就照舊自己判斷，唔使勉強搵關係。`
       : '');
 
   let parsed;
@@ -331,6 +344,13 @@ async function handleCheck(request, env) {
     for (const img of photonCache.values()) img.free();
   }
   if (parsed.results && parsed.results.length) {
+    // Everything above (OCR refinement, crop-recheck, handwriting capture)
+    // ran against local page 0, since every request now carries exactly one
+    // image -- only now, right before the response goes out, do results get
+    // relabelled with the REAL page index within the parent's whole photo
+    // set, so the client can place this page's marks/confirm-list rows
+    // correctly alongside pages graded by other (parallel) requests.
+    parsed.results.forEach((r) => { r.page = realPageIndex; });
     const graded = parsed.results.filter((r) => r.correct !== null);
     const correctCount = graded.filter((r) => r.correct === true).length;
     parsed.score = `${correctCount} / ${graded.length}`;
