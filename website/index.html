@@ -326,10 +326,51 @@ function renderResultShells(){
 // `data` is the single shared results object accumulated across all pages
 // (so mark-tap/confirm handlers below keep working against the whole set,
 // same as before this page split).
-function fillPageResult(data, pIdx){
+// Rotates a data URL by `deg` (90/180/270, CLOCKWISE -- same convention the
+// server's Photon rotate() uses) via canvas, so the client's own displayed
+// copy matches whatever upright frame the server computed bbox percentages
+// against. Canvas ctx.rotate() is clockwise for positive angles (its Y axis
+// also points down, same as image pixel coordinates), so this deliberately
+// mirrors the server's convention rather than re-deriving it independently.
+function rotateDataUrl(dataUrl, deg){
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      const w = im.naturalWidth, h = im.naturalHeight;
+      const canvas = document.createElement('canvas');
+      const swapped = (deg === 90 || deg === 270);
+      canvas.width = swapped ? h : w;
+      canvas.height = swapped ? w : h;
+      const ctx = canvas.getContext('2d');
+      if (deg === 90) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
+      else if (deg === 180) { ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); }
+      else if (deg === 270) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
+      ctx.drawImage(im, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
+    };
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+}
+
+async function fillPageResult(data, pIdx){
   const wrap = resultsEl.querySelector(`.result-page[data-page="${pIdx}"]`);
   if (!wrap) return;
   wrap.classList.remove('pending');
+  const s = shots[pIdx];
+  // A sideways/upside-down photo: the server already rotated its own copy
+  // before grading (so bbox percentages are relative to that upright
+  // frame) and reports how much here. Apply the SAME rotation to the
+  // photo actually shown to the parent, or the marks below would land as
+  // if the visible photo were upright when it isn't. Only ever done once
+  // per page (rotationApplied guards a fillPageResult that runs again
+  // later, e.g. after a manual confirm tap, from re-rotating an
+  // already-corrected image).
+  const rot = data.pageRotations && data.pageRotations[pIdx];
+  if (rot && s && s._rotationApplied !== rot) {
+    try { s.dataUrl = await rotateDataUrl(s.dataUrl, rot); s._rotationApplied = rot; }
+    catch (e) { /* best-effort -- an unrotated photo beats a broken one */ }
+  }
   const pageItems = (data.results || []).filter(r => (r.page || 0) === pIdx);
   const marksHtml = pageItems.map((r, ri) => {
     if (!r.bbox) return '';
@@ -342,7 +383,7 @@ function fillPageResult(data, pIdx){
     return mark + ans;
   }).join('');
   const img = wrap.querySelector('img');
-  wrap.querySelector('.imgwrap').innerHTML = `<img src="${img.src}">${marksHtml}`;
+  wrap.querySelector('.imgwrap').innerHTML = `<img src="${s ? s.dataUrl : img.src}">${marksHtml}`;
   wrap.querySelectorAll('.mark').forEach(el => {
     el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
   });
@@ -480,8 +521,9 @@ async function restitchSplitPages(currentData, pageA, pageB, deviceId, rememberH
     // informed than either page's standalone guess.
     currentData.results = currentData.results.filter(r => (r.page || 0) !== pageA && (r.page || 0) !== pageB);
     currentData.results = currentData.results.concat(data.results);
-    fillPageResult(currentData, pageA);
-    fillPageResult(currentData, pageB);
+    if (data.pageRotations) Object.assign(currentData.pageRotations || (currentData.pageRotations = {}), data.pageRotations);
+    await fillPageResult(currentData, pageA);
+    await fillPageResult(currentData, pageB);
   } catch (e) { /* best-effort -- leave the two pages' independent answers as-is */ }
 }
 
@@ -555,7 +597,12 @@ submitBtn.onclick = async () => {
       }
       anySuccess = true;
       currentData.results = currentData.results.concat(data.results || []);
-      fillPageResult(currentData, pIdx);
+      // Merged (not replaced) into the shared accumulator, same idea as
+      // `results` above -- fillPageResult reads pageRotations off
+      // whatever's passed as its first arg, and every caller passes
+      // currentData, not this request's own raw response.
+      if (data.pageRotations) Object.assign(currentData.pageRotations || (currentData.pageRotations = {}), data.pageRotations);
+      await fillPageResult(currentData, pIdx);
       priorPagesContext.push({
         page: pIdx,
         results: (data.results || []).map(r => ({ question: r.question, studentAnswer: r.studentAnswer, correct: r.correct, correctAnswer: r.correctAnswer })),

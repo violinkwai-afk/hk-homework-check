@@ -14,7 +14,7 @@
 // /api/check is public/unauthenticated -- same per-IP rate limit pattern as
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
-import { PhotonImage, crop } from "@cf-wasm/photon/workerd";
+import { PhotonImage, crop, rotate } from "@cf-wasm/photon/workerd";
 
 // Client now sends one /api/check call PER PAGE (see website/index.html), so
 // this counts pages, not submissions -- a single 5-page homework already
@@ -236,6 +236,47 @@ async function handleCheckInner(request, env) {
     } catch (e) { /* profile lookup failing should never block a normal check */ }
   }
 
+  const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
+    ? env.GOOGLE_VISION_API_KEY
+    : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
+
+  // A parent's photo is often genuinely sideways or upside-down, not just
+  // skewed a little -- rule 0 below asks the model to compensate mentally
+  // when READING it, but that does nothing for what the user actually
+  // SEES: a still-sideways photo with marks whose bbox percentages were
+  // computed against an unrotated frame, landing nowhere near the real
+  // answers once the client tries to display them upright (or worse,
+  // staying sideways with marks scattered as if the page were straight).
+  // Detected here via the same Vision OCR already used for anchor
+  // refinement below, and physically applied with Photon BEFORE the model
+  // ever sees the image, so grading, bbox coordinates, and the final
+  // display are all consistent with one single upright frame from this
+  // point on. `pageRotations` (built near the end, keyed by real page
+  // number) tells the client how much to rotate its own displayed copy to
+  // match. Best-effort: a detection or rotation failure just leaves that
+  // page as originally photographed rather than failing the whole request.
+  const rotationApplied = images.map(() => 0);
+  if (visionKey) {
+    for (let i = 0; i < images.length; i++) {
+      try {
+        const ocrCheck = await googleOcr(images[i].data, visionKey);
+        if (ocrCheck && ocrCheck.rotationDeg) {
+          const correction = (360 - ocrCheck.rotationDeg) % 360;
+          const bytes = base64ToBytes(images[i].data);
+          const photonImg = PhotonImage.new_from_byteslice(bytes);
+          try {
+            const rotatedImg = rotate(photonImg, correction);
+            try {
+              images[i].data = bytesToBase64(rotatedImg.get_bytes_jpeg(90));
+              images[i].mediaType = "image/jpeg";
+              rotationApplied[i] = correction;
+            } finally { rotatedImg.free(); }
+          } finally { photonImg.free(); }
+        }
+      } catch (e) { /* best-effort -- an ungraded-but-sideways page beats a crashed request */ }
+    }
+  }
+
   // No answer key exists for arbitrary homework -- the model has to solve
   // each question itself before it can judge the child's handwritten answer.
   // It also returns an approximate bounding box (as a % of that page's
@@ -313,10 +354,9 @@ async function handleCheckInner(request, env) {
   // need to crop a zoomed-in close-up for the recheck pass below, the crop
   // is centered on OCR's precise position rather than the model's own
   // rougher guess -- exactly the cases where that guess is least reliable
-  // are the ones about to get rechecked.
-  const visionKey = typeof env.GOOGLE_VISION_API_KEY === "string"
-    ? env.GOOGLE_VISION_API_KEY
-    : (env.GOOGLE_VISION_API_KEY ? await env.GOOGLE_VISION_API_KEY.get() : null);
+  // are the ones about to get rechecked. `images` here is already the
+  // rotation-corrected version from above, so this OCR call (and the bbox
+  // it produces) is relative to the same upright frame.
   if (visionKey && parsed.results && parsed.results.length) {
     try {
       await refineWithOcr(parsed.results, images, visionKey);
@@ -395,6 +435,16 @@ async function handleCheckInner(request, env) {
     const correctCount = graded.filter((r) => r.correct === true).length;
     parsed.score = `${correctCount} / ${graded.length}`;
   }
+
+  // Tells the client how much to rotate its own DISPLAYED copy of each
+  // page so it matches the upright frame the bbox coordinates above were
+  // computed against -- keyed by real page number, same remap as above.
+  parsed.pageRotations = {};
+  images.forEach((img, i) => {
+    if (!rotationApplied[i]) return;
+    const realP = isStitch ? (stitchPages[i] ?? realPageIndex) : realPageIndex;
+    parsed.pageRotations[realP] = rotationApplied[i];
+  });
 
   // verifiedByCounts + opusItems make it possible to answer "where exactly
   // did the expensive tier get used" from the logs alone, without needing
@@ -614,6 +664,29 @@ async function googleOcr(base64Data, apiKey) {
   const page = data.responses && data.responses[0] && data.responses[0].fullTextAnnotation && data.responses[0].fullTextAnnotation.pages && data.responses[0].fullTextAnnotation.pages[0];
   if (!page) return null;
 
+  // Orientation detection: each block's boundingBox vertices are ordered in
+  // the TEXT's own reading direction (vertex 0 = start of the line, vertex
+  // 1 = further along the same baseline) regardless of how the physical
+  // page happens to sit in the photo -- so the clockwise angle of that
+  // vertex0->vertex1 vector, measured in image pixel space (y grows
+  // downward, same convention Photon's rotate() uses), IS exactly how far
+  // clockwise the printed page itself is tilted relative to upright.
+  // Rounded to the nearest 90 and taken as a mode across every block (not
+  // just the first) so one skewed or misread block can't decide it alone.
+  const angleVotes = {};
+  for (const block of page.blocks || []) {
+    const v = (block.boundingBox || {}).vertices || [];
+    if (v.length < 2) continue;
+    const dx = (v[1].x || 0) - (v[0].x || 0), dy = (v[1].y || 0) - (v[0].y || 0);
+    if (!dx && !dy) continue;
+    const deg = (((Math.round((Math.atan2(dy, dx) * 180) / Math.PI / 90) * 90) % 360) + 360) % 360;
+    angleVotes[deg] = (angleVotes[deg] || 0) + 1;
+  }
+  let rotationDeg = 0, bestVotes = 0;
+  for (const deg of Object.keys(angleVotes)) {
+    if (angleVotes[deg] > bestVotes) { bestVotes = angleVotes[deg]; rotationDeg = Number(deg); }
+  }
+
   // Flatten to word-level boxes -- an "anchor" like "3)" is usually one or
   // two OCR word tokens, so word granularity matches better than whole
   // paragraphs.
@@ -630,7 +703,7 @@ async function googleOcr(base64Data, apiKey) {
       }
     }
   }
-  return { width: page.width, height: page.height, words };
+  return { width: page.width, height: page.height, words, rotationDeg };
 }
 
 async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
