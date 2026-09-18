@@ -256,6 +256,13 @@ async function handleCheckInner(request, env) {
   // match. Best-effort: a detection or rotation failure just leaves that
   // page as originally photographed rather than failing the whole request.
   const rotationApplied = images.map(() => 0);
+  // Reused by refineWithOcr below when a page turned out NOT to need
+  // rotating -- its OCR result is still valid for the (unchanged) image,
+  // so anchor refinement doesn't need to pay for a second, near-identical
+  // Vision call on the exact same bytes. A rotated page's cache entry is
+  // deliberately NOT populated: its OCR word positions describe the
+  // PRE-rotation frame and would misplace every mark if reused as-is.
+  const ocrCache = new Map();
   if (visionKey) {
     for (let i = 0; i < images.length; i++) {
       try {
@@ -280,6 +287,8 @@ async function handleCheckInner(request, env) {
               rotationApplied[i] = correction;
             } finally { rotatedImg.free(); }
           } finally { photonImg.free(); }
+        } else if (ocrCheck) {
+          ocrCache.set(i, ocrCheck);
         }
       } catch (e) { /* best-effort -- an ungraded-but-sideways page beats a crashed request */ }
     }
@@ -374,7 +383,7 @@ async function handleCheckInner(request, env) {
   // it produces) is relative to the same upright frame.
   if (visionKey && parsed.results && parsed.results.length) {
     try {
-      await refineWithOcr(parsed.results, images, visionKey);
+      await refineWithOcr(parsed.results, images, visionKey, ocrCache);
     } catch (e) {
       // OCR is a precision upgrade, not a requirement -- keep the model's
       // own bbox estimates if anything here goes wrong.
@@ -488,7 +497,7 @@ async function handleCheckInner(request, env) {
 // printed question number/label as the anchor, not the handwritten answer;
 // OCR is no better than the model at reading messy handwriting, so it isn't
 // asked to).
-async function refineWithOcr(results, images, visionKey) {
+async function refineWithOcr(results, images, visionKey, ocrCache) {
   const byPage = new Map();
   results.forEach((r) => {
     const p = r.page || 0;
@@ -500,15 +509,24 @@ async function refineWithOcr(results, images, visionKey) {
     const anchored = pageResults.filter((r) => r.anchor && r.anchor.trim());
     if (!anchored.length || !images[pageIdx]) continue;
 
-    // Scoped per page: one page's OCR call failing (bad image data, a
-    // transient Vision API error) must not skip refinement for every OTHER
-    // page in the same submission -- those are independent images and
-    // independently likely to succeed.
-    let ocr;
-    try {
-      ocr = await googleOcr(images[pageIdx].data, visionKey);
-    } catch (e) {
-      continue;
+    // A page whose rotation-detection pass already found no rotation
+    // needed has its OCR result cached (see handleCheckInner) -- still
+    // valid here since the image bytes didn't change, and re-fetching the
+    // exact same page from Vision again would just be a second network
+    // call for identical data. A rotated page is deliberately never
+    // cached (its OCR describes the pre-rotation frame), so it still
+    // falls through to a fresh call against the now-rotated bytes below.
+    let ocr = ocrCache && ocrCache.get(pageIdx);
+    if (!ocr) {
+      // Scoped per page: one page's OCR call failing (bad image data, a
+      // transient Vision API error) must not skip refinement for every
+      // OTHER page in the same submission -- those are independent images
+      // and independently likely to succeed.
+      try {
+        ocr = await googleOcr(images[pageIdx].data, visionKey);
+      } catch (e) {
+        continue;
+      }
     }
     if (!ocr || !ocr.words.length) continue;
 
