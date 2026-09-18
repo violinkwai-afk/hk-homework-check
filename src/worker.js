@@ -103,7 +103,18 @@ async function handleTestNoAiCheck(request, env) {
   return json(finalResult, 200);
 }
 
+// Overall soft deadline for the whole /api/check pipeline (main pass + OCR +
+// both recheck tiers). Real cause of the "網絡錯誤" report: with many
+// riskyDiagram items in one submission, unbounded sequential tiers could run
+// long enough for the client's mobile connection to give up first, leaving
+// the user with nothing at all even though most of the grading had already
+// finished server-side. Past this budget, remaining tiers are skipped and
+// whatever's already resolved is returned -- a partial result the user can
+// see and manually confirm the rest of, instead of a blank error screen.
+const REQUEST_TIME_BUDGET_MS = 25000;
+
 async function handleCheck(request, env) {
+  const startedAt = Date.now();
   if (!env.ANTHROPIC_API_KEY) {
     return json(
       { error: "not_configured", message: "自動改功課未設定好，請聯絡網站管理員。" },
@@ -196,6 +207,7 @@ async function handleCheck(request, env) {
   const prompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁，可能來自唔同科目／唔同來源，並非本網站出嘅練習卷）。呢啲係普通功課，冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
 
 要求（保持精簡，減少字數）：
+0. 家長影相好多時求其影，成張相／成頁可能係打橫、上下顛倒或者斜咗，唔一定啱啱好直望。開始答題目之前，先睇下成頁嘅文字／版面方向係咪同正常閱讀方向一致，如果成頁明顯轉咗90度或者180度，先喺腦入面轉返正常方向再讀，唔好因為得個角度奇怪就衝口而出讀錯（尤其係數字，例如6同9、顛倒咗好易搞錯）。
 1. 睇清楚相入面每一條題目（可以係印刷體或手寫題目），自己諗出正確答案，然後同學生手寫嘅作答比較。如果題目要睇圖表／刻度先答到（例如燒杯水位、尺、鐘面），一定要搵返個刻度線實際喺邊度，唔好單憑感覺假設「啱啱注滿到頂」或者「啱啱指住嗰粒」，睇唔清就寧願設 "correct" 為 null，唔好肯定咁答錯。
 1a. 數圖形／物件數量嗰陣，記住連埋結構性、唔顯眼嘅元件都要數（例如天平嘅橫樑本身都算一個長方形，唔淨係數天平掛住嗰啲圖案），唔好淨係數最搶眼嗰幾件。算柱／珠算圖（萬千百十個嗰種）要逐條柱仔細數珠，數完可以自我檢查：每一條柱代表一個數位，正常應該係0-9粒，如果數到10粒或以上，好大機會數錯咗，要重新數過。
 1b. 如果幾條題目喺數值上有關係（例如後面一題係前面幾題相加或相減），計埋條數check吓學生嘅幾個答案夾唔夾得埋，先落判斷——夾得埋通常代表學生方法啱，唔好淨係逐題獨立咁睇。
@@ -287,13 +299,18 @@ async function handleCheck(request, env) {
   const photonCache = new Map();
   (parsed.results || []).forEach((r) => { r.verifiedBy = "sonnet"; });
   let unsure = (parsed.results || []).filter((r) => r.correct === null || r.riskyDiagram === true);
+  let timedOut = false;
   try {
-    if (unsure.length) {
+    if (unsure.length && Date.now() - startedAt < REQUEST_TIME_BUDGET_MS) {
       await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
+    } else if (unsure.length) {
+      timedOut = true;
     }
     let stillNull = (parsed.results || []).filter((r) => r.correct === null);
-    if (stillNull.length) {
+    if (stillNull.length && Date.now() - startedAt < REQUEST_TIME_BUDGET_MS) {
       await recheckPass(parsed, stillNull, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
+    } else if (stillNull.length) {
+      timedOut = true;
     }
     // Capture a few confirmed-correct answers as new handwriting exemplars
     // for next time -- reuses whatever pages recheck already decoded via
@@ -328,7 +345,7 @@ async function handleCheck(request, env) {
     verifiedByCounts[r.verifiedBy || "sonnet"] = (verifiedByCounts[r.verifiedBy || "sonnet"] || 0) + 1;
     if (r.verifiedBy === "opus") opusItems.push(`p${r.page}:${r.question}`);
   }
-  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, opusItems }));
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, opusItems, timedOut, elapsedMs: Date.now() - startedAt }));
 
   if (idemKey && env.RATE_LIMIT_KV) {
     try {
@@ -607,27 +624,38 @@ async function callClaude(model, maxTokens, images, prompt, apiKey) {
 // a parent pinch-zooming a photo to read messy handwriting. Returns the
 // list of items still unresolved afterward, for a possible further tier.
 async function recheckPass(parsed, unsure, images, apiKey, model, maxTokens, usage, usageKey, photonCache) {
-  let cropImages = [];
-  try {
-    const built = await buildCrops(unsure, images, photonCache);
-    cropImages = built.cropImages;
-  } catch (e) {
-    cropImages = [];
+  // Per-item crop, not all-or-nothing: one item's crop failing (missing
+  // bbox, a degenerate rectangle right at a page edge) used to invalidate
+  // EVERY item's crop for the whole batch, falling back to re-sending all
+  // original full-size pages -- harmless with 1-2 unsure items, but with
+  // riskyDiagram now able to put a dozen-plus items in one batch, a single
+  // bad crop meant a much bigger, slower fallback call far more often than
+  // before. Each item now gets its own crop attempt; only items that
+  // genuinely fail fall back to their own full page.
+  const cropImages = [];
+  const isFallback = [];
+  for (const r of unsure) {
+    try {
+      cropImages.push(cropItem(r, images, photonCache));
+      isFallback.push(false);
+    } catch (e) {
+      cropImages.push(images[r.page] || images[0]);
+      isFallback.push(true);
+    }
   }
-  const useCrops = cropImages.length === unsure.length;
-  const recheckImages = useCrops ? cropImages : images;
-  const listText = useCrops
-    ? unsure.map((r, i) => `圖${i + 1}：第${r.page + 1}頁，題號「${r.question}」嘅放大近鏡`).join('、')
-    : unsure.map((r) => `第${r.page + 1}頁，題號「${r.question}」`).join('、');
+  const recheckImages = cropImages;
+  const listText = unsure
+    .map((r, i) => `圖${i + 1}：第${r.page + 1}頁，題號「${r.question}」${isFallback[i] ? '（呢張係成頁，唔係近鏡）' : '嘅放大近鏡'}`)
+    .join('、');
 
   const recheckPrompt = `你是一位細心的小學老師。另一位老師已經批改咗呢份功課嘅大部分題目，但以下題目要你用更仔細嘅眼光再核實一次先——有啲係佢睇唔清楚學生寫嘅答案，有啲係題目本身容易睇錯（例如刻度、角度、立體圖形、硬幣、位值比較呢類），所以無論你上次判斷幾肯定，都要當呢張圖係新嘅重新諗一次：
 ${listText}
 
-${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你睇清楚啲字。留意有啲字可能潦草或者被擦改過，如果單睇一個字睇唔出，試吓連埋前後字一齊估係咪一個詞語，唔好淨係逐粒字咁樣睇。' : ''}
+每張圖對應返上面列出嘅其中一條題目（跟返嗰個次序）——大部分係題目答案位置嘅放大近鏡相，方便你睇清楚啲字，留意有啲字可能潦草或者被擦改過，如果單睇一個字睇唔出，試吓連埋前後字一齊估係咪一個詞語，唔好淨係逐粒字咁樣睇；標明「成頁」嗰幾張就係冇裁到，睇成頁嚟判斷。
 
 呢份功課冇標準答案，請你自己諗清楚每一題應該點答，再判斷學生手寫嘅答案。
 
-只需要回覆上面列出嘅題目，按${useCrops ? '圖片次序' : '題號'}回覆，要求：
+只需要回覆上面列出嘅題目，按圖片次序回覆，要求：
 1. 盡量仔細判斷。如果答題位置完全空白、冇任何筆跡，"correct" 設為 false，"note" 填「未作答」。
 2. 只有答題位置確實有筆跡、但寫得太潦草無法判斷寫嘅係咩，先設 "correct" 為 null。
 3. 只有 "correct" 係 false 先填 "correctAnswer"，其他情況留空。"note" 最多四個字，答對可留空。
@@ -654,28 +682,6 @@ ${useCrops ? '每張圖係一條題目答案位置嘅放大近鏡相，方便你
     // (or to the human-confirm "?" in the UI if this was the last one).
   }
   return parsed.results.filter((r) => r.correct === null);
-}
-
-// Crops a zoomed-in close-up around each unsure item's bbox (falling back
-// to the whole page if a given item has no bbox), for the Opus recheck pass.
-// Uses Photon (a WASM image library bundled specifically for Workers) --
-// verified locally with a real photo before wiring in: crop(image, x1, y1,
-// x2, y2) in pixel coordinates, confirmed against the library's own source.
-//
-// `photonCache` (page index -> decoded PhotonImage) is owned by the caller
-// (handleCheck), not this function -- it's shared across both the
-// sonnet-zoom and opus tiers so a page already decoded for tier 1 isn't
-// decoded from JPEG bytes a second time if it's still unsure in tier 2.
-// The caller is responsible for calling .free() on every cached image once
-// all tiers are done.
-async function buildCrops(unsure, images, photonCache) {
-  const cropImages = [];
-  const cropLabels = [];
-  for (const r of unsure) {
-    cropImages.push(cropItem(r, images, photonCache));
-    cropLabels.push(`page ${r.page} ${r.question}`);
-  }
-  return { cropImages, cropLabels };
 }
 
 // Crops a padded region around one result's bbox on its page. Shared by the
