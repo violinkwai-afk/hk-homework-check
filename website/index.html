@@ -731,11 +731,64 @@ submitBtn.onclick = async () => {
         }
       }
       s._continuesToNext = !!data.continuesToNext;
+
+      // Fired but NOT awaited here -- deliberately doesn't block the
+      // worker pool from moving on to the next page. A live report
+      // showed a page needing every item escalated all the way to Opus
+      // took 52 seconds end to end; the user should see this page's
+      // confident marks immediately and the next page start right away,
+      // not wait through that on top. verifyPromises is awaited once,
+      // separately, after the main pool finishes (see below) so the
+      // overall submit flow still knows when EVERYTHING (not just the
+      // fast part) is truly done.
+      if (data.needsVerify && data.needsVerify.length) {
+        verifyPromises.push(verifyPage(currentData, pIdx, s, data.needsVerify));
+      }
     } catch (e) {
       anyError = true;
       markPageFailed(pIdx, '呢頁網絡錯誤');
     }
   }
+
+  // Phase 2: re-sends this page's own image with just the items phase 1
+  // wasn't confident about, gets back patched verdicts, and updates only
+  // those marks in place. Best-effort throughout -- any failure here
+  // just leaves phase 1's marks standing rather than surfacing an error,
+  // since the user already has a usable (if slightly less certain) result.
+  async function verifyPage(data, pIdx, s, needsVerify){
+    try {
+      const items = needsVerify
+        .map(nv => data.results.find(r => (r.page || 0) === (nv.page || 0) && String(r.question) === String(nv.question)))
+        .filter(Boolean);
+      if (!items.length) return;
+      const res = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          images: [{ data: s.base64, mediaType: 'image/jpeg' }],
+          items: items.map(r => ({ question: r.question, page: r.page, bbox: r.bbox, anchor: r.anchor, riskyDiagram: r.riskyDiagram, studentAnswer: r.studentAnswer })),
+          pageIndex: pIdx,
+          requestId: s.requestId + ':verify',
+          deviceId, rememberHandwriting,
+        }),
+      });
+      if (!res.ok) return;
+      const vdata = await res.json();
+      let touched = false;
+      for (const p of (vdata.patches || [])) {
+        const r = data.results.find(x => (x.page || 0) === (p.page || 0) && String(x.question) === String(p.question));
+        if (!r) continue;
+        r.correct = p.correct === undefined ? null : p.correct;
+        r.correctAnswer = p.correctAnswer || '';
+        r.note = p.note || '';
+        r.verifiedBy = p.verifiedBy || 'sonnetZoom';
+        if (p.studentAnswer) r.studentAnswer = p.studentAnswer;
+        touched = true;
+      }
+      if (touched) await fillPageResult(data, pIdx);
+    } catch (e) { /* best-effort -- phase-1 marks stand as-is */ }
+  }
+  const verifyPromises = [];
 
   // Worker-pool driver: CONCURRENCY workers, each pulling the next
   // not-yet-started page index off a shared counter until none remain --
@@ -750,12 +803,21 @@ submitBtn.onclick = async () => {
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, shots.length) }, worker));
 
-  statusEl.hidden = true;
   submitBtn.disabled = false; // re-enable in case they want to start an unrelated new batch, even while reviewing this one
   if (!anySuccess && anyError) {
     statusEl.hidden = false;
     statusEl.className = 'status err';
     statusEl.textContent = '網絡錯誤，請再試一次。';
+  } else if (verifyPromises.length) {
+    // The fast part is done and every confident mark is already showing --
+    // this is a quiet "still working" note, not a blocking spinner state.
+    statusEl.hidden = false;
+    statusEl.className = 'status';
+    statusEl.innerHTML = '<span class="spinner"></span><span>AI覆查緊部分題目，隨時會更新…</span>';
+    await Promise.all(verifyPromises);
+    statusEl.hidden = true;
+  } else {
+    statusEl.hidden = true;
   }
 };
 

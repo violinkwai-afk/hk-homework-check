@@ -33,6 +33,9 @@ export default {
     if (url.pathname === "/api/check" && request.method === "POST") {
       return handleCheck(request, env);
     }
+    if (url.pathname === "/api/verify" && request.method === "POST") {
+      return handleVerify(request, env);
+    }
     if (url.pathname === "/api/forget-handwriting" && request.method === "POST") {
       return handleForgetHandwriting(request, env);
     }
@@ -118,15 +121,6 @@ async function handleTestNoAiCheck(request, env) {
   return json(finalResult, 200);
 }
 
-// Overall soft deadline for the whole /api/check pipeline (main pass + OCR +
-// both recheck tiers). Real cause of the "網絡錯誤" report: with many
-// riskyDiagram items in one submission, unbounded sequential tiers could run
-// long enough for the client's mobile connection to give up first, leaving
-// the user with nothing at all even though most of the grading had already
-// finished server-side. Past this budget, remaining tiers are skipped and
-// whatever's already resolved is returned -- a partial result the user can
-// see and manually confirm the rest of, instead of a blank error screen.
-const REQUEST_TIME_BUDGET_MS = 25000;
 
 async function handleCheck(request, env) {
   // Top-level safety net: ANY uncaught exception anywhere below (a
@@ -361,57 +355,39 @@ async function handleCheckInner(request, env) {
     }
   }
 
-  // Three-tier hybrid, targeted rather than blanket: zooming EVERY item
-  // would double cost for no benefit on plain arithmetic/MC that's never
-  // actually gone wrong; zooming only self-reported-uncertain items misses
-  // the "confidently wrong" cases entirely (the model doesn't know it's
-  // wrong, so it never flags null) -- exactly what today's real errors
-  // (a misread beaker, a misclassified pyramid, a wrong "smallest digit")
-  // all had in common. The middle ground: the first pass tags each item
-  // "riskyDiagram" if it's one of the categories that has actually
-  // produced errors (scales, angles, shapes, coins, directions, fractions,
-  // abacus, place-value comparisons -- see rules 1a/1e-1q above), and
-  // those get a cheap Sonnet-zoom second look regardless of confidence,
-  // same as genuinely-uncertain items. Only what's STILL null after that
-  // escalates to Opus -- a risky item the zoom pass confirmed doesn't need
-  // the expensive model just because it started risky.
-  //
-  // photonCache is shared across BOTH tiers so a page only gets decoded
-  // from JPEG once even if items on it need cropping again for tier 2 --
-  // freed once at the very end.
-  const photonCache = new Map();
-  (parsed.results || []).forEach((r) => { r.verifiedBy = "sonnet"; });
-  let unsure = (parsed.results || []).filter((r) => r.correct === null || r.riskyDiagram === true);
-  let timedOut = false;
-  try {
-    if (unsure.length && Date.now() - startedAt < REQUEST_TIME_BUDGET_MS) {
-      await recheckPass(parsed, unsure, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
-    } else if (unsure.length) {
-      timedOut = true;
-    }
-    let stillNull = (parsed.results || []).filter((r) => r.correct === null);
-    if (stillNull.length && Date.now() - startedAt < REQUEST_TIME_BUDGET_MS) {
-      await recheckPass(parsed, stillNull, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
-    } else if (stillNull.length) {
-      timedOut = true;
-    }
-    // Capture a few confirmed-correct answers as new handwriting exemplars
-    // for next time -- reuses whatever pages recheck already decoded via
-    // photonCache, so this rarely needs a fresh decode of its own. Only
-    // "correct: true" items qualify: a wrong or still-uncertain answer is
-    // exactly the messy handwriting we do NOT want to teach the model as a
-    // reference example.
-    if (rememberHandwriting && deviceKey && env.RATE_LIMIT_KV) {
-      const goodOnes = (parsed.results || []).filter((r) => r.correct === true && r.bbox && images[r.page]).slice(0, HANDWRITING_SAMPLES_PER_REQUEST);
+  // Phase 1 stops HERE and returns immediately -- the recheck/Opus tiers
+  // that used to run inline below moved to the separate /api/verify
+  // endpoint (see handleVerify), called by the client AFTER it has
+  // already displayed this page's confident marks. A live report showed
+  // a single page needing full escalation to Opus on every item took 52
+  // seconds end to end; nearly all of that was the recheck/Opus tiers,
+  // not this main pass. Blocking the user's first sight of ANY result on
+  // that made the tool feel broken regardless of whether the eventual
+  // answer was right. Items this pass isn't confident about (null, or
+  // riskyDiagram-tagged) are marked "verifiedBy: pending" and listed in
+  // `needsVerify` below instead of being resolved inline.
+  (parsed.results || []).forEach((r) => {
+    r.verifiedBy = (r.correct === null || r.riskyDiagram === true) ? "pending" : "sonnet";
+  });
+
+  // Capture a few confirmed-correct answers as new handwriting exemplars
+  // for next time. Only items THIS pass is already confident about
+  // qualify -- a still-pending item isn't confirmed correct yet, and a
+  // wrong or uncertain answer is exactly the messy handwriting we do NOT
+  // want to teach the model as a reference example.
+  if (rememberHandwriting && deviceKey && env.RATE_LIMIT_KV) {
+    const photonCache = new Map();
+    try {
+      const goodOnes = (parsed.results || []).filter((r) => r.correct === true && r.verifiedBy === "sonnet" && r.bbox && images[r.page]).slice(0, HANDWRITING_SAMPLES_PER_REQUEST);
       for (const r of goodOnes) {
         try {
           const sample = cropItem(r, images, photonCache);
           await saveHandwritingSample(env.RATE_LIMIT_KV, deviceKey, sample);
         } catch (e) { /* one bad crop shouldn't stop the others from being saved */ }
       }
+    } finally {
+      for (const img of photonCache.values()) img.free();
     }
-  } finally {
-    for (const img of photonCache.values()) img.free();
   }
   if (parsed.results && parsed.results.length) {
     // Everything above (OCR refinement, crop-recheck, handwriting capture)
@@ -441,16 +417,15 @@ async function handleCheckInner(request, env) {
     parsed.pageRotations[realP] = rotationApplied[i];
   });
 
-  // verifiedByCounts + opusItems make it possible to answer "where exactly
-  // did the expensive tier get used" from the logs alone, without needing
-  // to inspect the full response payload.
+  // verifiedByCounts makes it possible to answer "how many items are
+  // still pending verification" from the logs alone. Opus usage is no
+  // longer decided in this function -- see handleVerify's own logging.
   const verifiedByCounts = {};
-  const opusItems = [];
   for (const r of parsed.results || []) {
     verifiedByCounts[r.verifiedBy || "sonnet"] = (verifiedByCounts[r.verifiedBy || "sonnet"] || 0) + 1;
-    if (r.verifiedBy === "opus") opusItems.push(`p${r.page}:${r.question}`);
   }
-  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, opusItems, timedOut, elapsedMs: Date.now() - startedAt }));
+  parsed.needsVerify = (parsed.results || []).filter((r) => r.verifiedBy === "pending").map((r) => ({ page: r.page, question: r.question }));
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, elapsedMs: Date.now() - startedAt }));
 
   if (idemKey && env.RATE_LIMIT_KV) {
     try {
@@ -459,6 +434,129 @@ async function handleCheckInner(request, env) {
   }
 
   return json(parsed, 200);
+}
+
+// Phase 2: the recheck/Opus tiers that used to run inline inside
+// handleCheckInner, now their own short request the client fires AFTER
+// displaying phase 1's confident marks -- see the "needsVerify" field on
+// /api/check's response and the phase-1 comment above. Keeps each HTTP
+// request short (matters on a real, sometimes-unstable mobile connection)
+// and means a page needing heavy escalation (e.g. every item going all
+// the way to Opus) no longer blocks the user's first sight of ANY result
+// on that page.
+async function handleVerify(request, env) {
+  if (!env.ANTHROPIC_API_KEY) return json({ patches: [] }, 200);
+  const apiKey = typeof env.ANTHROPIC_API_KEY === "string"
+    ? env.ANTHROPIC_API_KEY
+    : await env.ANTHROPIC_API_KEY.get();
+
+  // Own rate-limit bucket, separate from CHECK_RATE_LIMIT's "checkrate:"
+  // counter used by /api/check -- a page's verify call is a natural
+  // follow-up to its check call, not a separate user action, and
+  // shouldn't eat into the same per-hour budget twice as fast.
+  if (env.RATE_LIMIT_KV) {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rateKey = "verifyrate:" + ip;
+    let count = 0;
+    try {
+      const raw = await env.RATE_LIMIT_KV.get(rateKey);
+      count = raw ? (parseInt(raw, 10) || 0) : 0;
+    } catch (e) { /* KV unreachable -- don't block over it */ }
+    if (count >= CHECK_RATE_LIMIT) {
+      // Silent, not an error: the phase-1 marks the user already sees
+      // stand as-is if verification can't run right now, same as any
+      // other best-effort verify failure below.
+      return json({ patches: [] }, 200);
+    }
+    try {
+      await env.RATE_LIMIT_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return json({ error: "bad_request", message: "請求格式錯誤。" }, 400);
+  }
+  const { images, items, pageIndex, stitchPages, requestId, deviceId, rememberHandwriting } = body;
+  if (!images || !images.length || !Array.isArray(items) || !items.length) {
+    return json({ patches: [] }, 200);
+  }
+
+  const isStitch = Array.isArray(stitchPages) && stitchPages.length === images.length;
+  const realPageIndex = Number.isInteger(pageIndex) ? pageIndex : 0;
+
+  // Separate cache namespace from /api/check's "idem:" -- a retry of THIS
+  // call must never accidentally read a phase-1 (still-pending) result
+  // back as if it were the verified one.
+  const idemKey = typeof requestId === "string" && requestId ? "videm:" + requestId.slice(0, 100) : null;
+  if (idemKey && env.RATE_LIMIT_KV) {
+    try {
+      const cached = await env.RATE_LIMIT_KV.get(idemKey);
+      if (cached) return new Response(cached, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+    } catch (e) { /* best-effort -- fall through and process normally */ }
+  }
+
+  // recheckPass/cropItem index into `images` by LOCAL position (0, or 0/1
+  // for a stitch pair) -- items arrive here carrying their REAL page
+  // number (as /api/check returned them), so map back to local before
+  // reusing that unchanged logic, then map forward again below.
+  const realToLocal = new Map();
+  images.forEach((img, i) => {
+    const realP = isStitch ? (stitchPages[i] ?? realPageIndex) : realPageIndex;
+    realToLocal.set(realP, i);
+  });
+  const working = items.map((it) => ({ ...it, page: realToLocal.has(it.page) ? realToLocal.get(it.page) : 0 }));
+
+  const usage = { sonnetZoom: null, opus: null };
+  const photonCache = new Map();
+  let stillNull = working;
+  try {
+    if (stillNull.length) {
+      await recheckPass({ results: working }, stillNull, images, apiKey, "claude-sonnet-5", 2048, usage, "sonnetZoom", photonCache);
+    }
+    stillNull = working.filter((r) => r.correct === null);
+    if (stillNull.length) {
+      await recheckPass({ results: working }, stillNull, images, apiKey, "claude-opus-5", 2048, usage, "opus", photonCache);
+    }
+
+    // Same handwriting-capture idea as phase 1, for items that only just
+    // got confirmed correct here.
+    const deviceKey = typeof deviceId === "string" && /^[a-zA-Z0-9-]{8,100}$/.test(deviceId) ? deviceId : null;
+    if (rememberHandwriting && deviceKey && env.RATE_LIMIT_KV) {
+      const goodOnes = working.filter((r) => r.correct === true && r.bbox && images[r.page]).slice(0, HANDWRITING_SAMPLES_PER_REQUEST);
+      for (const r of goodOnes) {
+        try {
+          const sample = cropItem(r, images, photonCache);
+          await saveHandwritingSample(env.RATE_LIMIT_KV, deviceKey, sample);
+        } catch (e) { /* one bad crop shouldn't stop the others from being saved */ }
+      }
+    }
+  } finally {
+    for (const img of photonCache.values()) img.free();
+  }
+
+  const patches = working.map((r) => ({
+    page: isStitch ? (stitchPages[r.page] ?? realPageIndex) : realPageIndex,
+    question: r.question,
+    correct: r.correct,
+    correctAnswer: r.correctAnswer || "",
+    note: r.note || "",
+    studentAnswer: r.studentAnswer,
+    verifiedBy: r.verifiedBy || "sonnetZoom",
+  }));
+
+  const opusItems = patches.filter((p) => p.verifiedBy === "opus").map((p) => `p${p.page}:${p.question}`);
+  console.log(JSON.stringify({ event: "verify_usage", items: items.length, usage, opusItems }));
+
+  const out = { patches };
+  if (idemKey && env.RATE_LIMIT_KV) {
+    try {
+      await env.RATE_LIMIT_KV.put(idemKey, JSON.stringify(out), { expirationTtl: 1800 });
+    } catch (e) { /* best-effort */ }
+  }
+  return json(out, 200);
 }
 
 // Shared by both /api/check and the /api/test-noai-check debug endpoint,
