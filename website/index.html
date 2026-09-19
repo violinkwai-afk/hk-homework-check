@@ -407,13 +407,16 @@ function markClass(correct){
 }
 function markIcon(correct){
   // Hand-drawn-looking pen strokes (curved, tapered via round linecaps) so
-  // marks read as "red pen check", not a typeset glyph. Sized down from
-  // 34x30/28x28 after a live report the marks looked oversized on a busy,
-  // small-print page -- viewBox unchanged (same stroke shape), just
-  // rendered smaller so it sits tighter against the actual answer instead
-  // of dominating the space around it.
+  // marks read as "red pen check", not a typeset glyph. The check's
+  // up-stroke used to sweep across almost the whole viewBox width at a
+  // very shallow angle -- compact on its own, but on a busy page with
+  // several answers close together that long diagonal visually crossed
+  // over neighbouring text, reading as "crooked" rather than as a check
+  // sitting on one answer (a live, repeated report: "啲tick全部都歪晒").
+  // Redrawn as a standard, contained checkmark shape (short down-stroke,
+  // a shorter and steeper up-stroke) that stays within its own box.
   if (correct === true) {
-    return '<svg width="24" height="21" viewBox="0 0 34 30"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M4,13 Q7,16 9,18 Q14,11 20,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   }
   if (correct === false) {
     return '<svg width="20" height="20" viewBox="0 0 28 28"><path d="M3,3 Q14,13 25,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M25,3 Q14,13 3,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
@@ -502,7 +505,18 @@ async function fillPageResult(data, pIdx){
     if (!r.bbox) return '';
     const cx = (r.bbox.x || 0) + (r.bbox.w || 0);
     const cy = (r.bbox.y || 0) + (r.bbox.h || 0);
-    const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+    // Only cross/unsure marks are actually drawn -- a live report that
+    // marks were showing up missing for some answers and duplicated near
+    // others was hard to even see clearly with every single correct
+    // answer ALSO getting its own checkmark cluttering the same busy
+    // page. Matches how a real teacher often marks simple worksheets too
+    // (circle what's wrong, leave the rest alone). A correct item still
+    // gets an invisible same-size, same-position tap target (opacity:0)
+    // so a parent who spots an AI mistake can still tap that exact answer
+    // to flag it wrong -- the override interaction isn't lost, just not
+    // visually noisy by default.
+    const hiddenStyle = r.correct === true ? 'opacity:0;' : '';
+    const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;${hiddenStyle}" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
     const ans = (r.correct === false && r.correctAnswer)
       ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
       : '';
