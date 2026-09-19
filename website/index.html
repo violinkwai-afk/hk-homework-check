@@ -4,42 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>影相對功課</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&family=Caveat:wght@600;700&display=swap">
 <style>
   :root{
-    --ink:#3a2b2e; --muted:#9c8288; --card:#ffffff;
-    --pink:#f28ba0; --pink-soft:#fbd9df; --pink-ink:#c23f5b;
-    --yellow:#f6c453; --yellow-soft:#fdedc7;
-    --good:#3fae5c; --bad:#e0483e; --unsure:#e0a13a;
-    --shadow: 0 2px 10px rgba(58,43,46,0.08);
+    /* A real teacher's red pen on cream exercise-book paper, not a pastel
+       app palette -- grounded in the actual physical object this product
+       replaces, not a generic "friendly for parents" pink. */
+    --ink:#2b2420; --muted:#8f8375; --card:#fffdf7;
+    --pink:#c33327; --pink-soft:#f5ddd4; --pink-ink:#9c2a1f;
+    --yellow:#c68a2e; --yellow-soft:#f6ecd6;
+    --good:#3f7d4f; --bad:#c33327; --unsure:#c68a2e;
+    --shadow: 0 2px 10px rgba(43,36,32,0.10);
   }
   *{box-sizing:border-box;}
   body{
     margin:0; color:var(--ink);
-    background:linear-gradient(180deg, #fcf2f3 0%, #fffbea 55%, #fffbea 100%);
+    background:linear-gradient(180deg, #f4ebdc 0%, #f9f3e6 45%, #f9f3e6 100%);
     background-attachment:fixed;
     font-family:"Noto Sans TC","PingFang TC",-apple-system,BlinkMacSystemFont,sans-serif;
     padding-inline:16px; padding-block:20px 40px;
   }
   .page{max-width:460px; margin:0 auto;}
-  .brand{font-weight:800; font-size:1.3rem; color:var(--pink-ink); text-align:center; margin-bottom:2px;}
+  .brand{
+    font-weight:800; font-size:1.3rem; color:var(--pink-ink); text-align:center;
+    margin-bottom:2px; display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .brand svg{width:20px; height:18px; flex-shrink:0;} /* same hand-drawn check used on marked photos, not a decorative emoji */
   h1{font-size:1.15rem; text-align:center; margin:0 0 4px; font-weight:800;}
   .sub{font-size:.85rem; color:var(--muted); text-align:center; margin:0 0 20px; line-height:1.55;}
 
-  .card{background:var(--card); border-radius:20px; padding:18px; box-shadow:var(--shadow); margin-bottom:16px;}
+  .card{background:var(--card); border-radius:14px; padding:18px; box-shadow:var(--shadow); margin-bottom:16px; border:1px solid rgba(43,36,32,.06);}
 
   .shots{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px;}
-  .shot{position:relative; width:72px; height:96px; border-radius:12px; overflow:hidden; box-shadow:var(--shadow);}
+  .shot{position:relative; width:72px; height:96px; border-radius:8px; overflow:hidden; box-shadow:var(--shadow);}
   .shot img{width:100%; height:100%; object-fit:cover; display:block;}
   .shot .rm{position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:12px; line-height:20px; padding:0;}
-  .addbtn{width:72px; height:96px; border-radius:12px; border:2px dashed var(--pink-soft); background:#fff8f9; color:var(--pink-ink); font-size:1.6rem; font-weight:800;}
+  .addbtn{width:72px; height:96px; border-radius:8px; border:2px dashed var(--pink-soft); background:#fdf7f1; color:var(--pink-ink); font-size:1.6rem; font-weight:800;}
 
   button.big{
-    width:100%; padding:15px; border-radius:16px; border:none; font-family:inherit;
+    width:100%; padding:15px; border-radius:10px; border:none; font-family:inherit;
     font-weight:800; font-size:1rem; cursor:pointer; box-shadow:var(--shadow);
   }
   .btn-primary{background:var(--pink); color:#fff;}
-  .btn-primary:disabled{background:#e9c4cd; color:#fff8; cursor:default;}
+  .btn-primary:disabled{background:#dcc3ba; color:#fff8; cursor:default;}
   .btn-secondary{background:#fff; color:var(--ink); border:1.5px solid var(--pink-soft) !important;}
 
   .status{text-align:center; font-size:.85rem; color:var(--muted); margin:10px 0; display:flex; align-items:center; justify-content:center; gap:8px;}
@@ -72,7 +79,10 @@
     padding:1px 5px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.3);
   }
 
-  .score-banner{text-align:center; font-weight:800; font-size:1.2rem; margin:14px 0 6px; color:var(--pink-ink);}
+  .score-banner{
+    text-align:center; font-weight:700; font-size:1.7rem; margin:14px 0 6px; color:var(--pink-ink);
+    font-family:"Caveat","Noto Sans TC","PingFang TC",sans-serif; /* Caveat has no CJK glyphs, so "分數：" falls back automatically -- only the score's own digits render handwritten, like a mark scrawled in the margin */
+  }
   .weak-areas{font-size:.82rem; color:var(--muted); text-align:center; margin-bottom:10px;}
 
   .confirm-list{margin-top:6px;}
@@ -108,7 +118,7 @@
 </head>
 <body>
 <div class="page">
-  <div class="brand">影相對功課 ♥</div>
+  <div class="brand">影相對功課 <svg viewBox="0 0 34 30" aria-hidden="true"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
   <h1>影完相，AI即刻幫你剔同交叉</h1>
   <p class="sub">影低小朋友做完嘅功課（唔限本網站出嘅卷，乜嘢功課都得），AI會自己諗答案，同你張相標返啱同錯。</p>
 
