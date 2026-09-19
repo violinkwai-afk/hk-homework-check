@@ -427,6 +427,13 @@ async function handleCheckInner(request, env) {
   }
   parsed.needsVerify = (parsed.results || []).filter((r) => r.verifiedBy === "pending").map((r) => ({ page: r.page, question: r.question }));
   console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, elapsedMs: Date.now() - startedAt }));
+  // TEMPORARY, verbose: a repeated live bug (confidently-wrong verdicts on
+  // trivially correct answers) survived two targeted fixes already
+  // (a prompt clarification, then a self-contradiction safety net) --
+  // logging every item's actual studentAnswer/correct/correctAnswer here
+  // is the only way to see what the model is REALLY returning instead of
+  // guessing at a third theory blind. Remove once this is root-caused.
+  console.log(JSON.stringify({ event: "check_items", items: (parsed.results || []).map((r) => ({ q: r.question, student: r.studentAnswer, correct: r.correct, correctAnswer: r.correctAnswer, riskyDiagram: r.riskyDiagram, verifiedBy: r.verifiedBy })) }));
 
   if (idemKey && env.RATE_LIMIT_KV) {
     try {
@@ -550,6 +557,8 @@ async function handleVerify(request, env) {
 
   const opusItems = patches.filter((p) => p.verifiedBy === "opus").map((p) => `p${p.page}:${p.question}`);
   console.log(JSON.stringify({ event: "verify_usage", items: items.length, usage, opusItems }));
+  // TEMPORARY, verbose -- see the matching log in handleCheckInner.
+  console.log(JSON.stringify({ event: "verify_items", items: patches.map((p) => ({ q: p.question, student: p.studentAnswer, correct: p.correct, correctAnswer: p.correctAnswer, verifiedBy: p.verifiedBy })) }));
 
   const out = { patches };
   if (idemKey && env.RATE_LIMIT_KV) {
