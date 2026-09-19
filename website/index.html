@@ -261,8 +261,18 @@ resultsEl.addEventListener('click', (e) => {
 const PENDING_SHOTS_KEY = 'hwcheck_pending_shots';
 function saveShots(){
   try {
+    // Deliberately NOT persisting requestId: a real live incident showed a
+    // parent re-submitting a persisted page (from before a server-side
+    // grading fix shipped) got served the OLD, now-wrong cached result
+    // straight out of the idempotency cache (see handleCheckInner) for up
+    // to its 30-minute TTL, which looked exactly like the fix hadn't
+    // worked at all. Restoring only the photo (not the id that pointed at
+    // a specific past grading attempt) means a resubmit after any restore
+    // always regrades fresh -- a small, rare re-charge for pages that
+    // happened to already succeed before a refresh, which is a much safer
+    // default than silently resurrecting a stale, possibly-wrong verdict.
     localStorage.setItem(PENDING_SHOTS_KEY, JSON.stringify(
-      shots.map(s => ({ dataUrl: s.dataUrl, base64: s.base64, requestId: s.requestId || null }))
+      shots.map(s => ({ dataUrl: s.dataUrl, base64: s.base64 }))
     ));
   } catch (e) { /* storage full/unavailable -- losing the convenience beats crashing */ }
 }
@@ -271,7 +281,9 @@ function loadSavedShots(){
     const raw = localStorage.getItem(PENDING_SHOTS_KEY);
     if (!raw) return;
     const saved = JSON.parse(raw);
-    if (Array.isArray(saved) && saved.length) shots = saved.slice(0, MAX_PAGES);
+    // .requestId stripped even if present (e.g. from localStorage written
+    // by an older version of this file) -- see saveShots() above.
+    if (Array.isArray(saved) && saved.length) shots = saved.slice(0, MAX_PAGES).map(s => ({ dataUrl: s.dataUrl, base64: s.base64 }));
   } catch (e) { /* corrupted/unavailable storage -- just start with an empty queue */ }
 }
 
