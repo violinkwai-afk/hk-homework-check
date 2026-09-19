@@ -562,29 +562,13 @@ function updateSummary(data){
     scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
   }
 
+  // The bottom confirm-list (a summary of "?" items with dedicated 啱/錯
+  // buttons) was removed on request -- a parent can still resolve any
+  // "?" mark directly by tapping it on the photo itself (see
+  // toggleMarkOnPhoto below), so the ability to confirm an unsure item
+  // isn't lost, just this separate duplicate list of buttons.
   const list = resultsEl.querySelector('.confirm-list');
-  if (!list) return;
-  const unsureItems = (data.results || []).filter(r => r.correct === null);
-  if (!unsureItems.length) { list.innerHTML = ''; return; }
-  list.innerHTML = `<div class="sub" style="margin-bottom:8px;">相上面「?」嘅幾題AI睇得唔清楚，得閒可以撳一撳確認，唔撳都冇問題：</div>` +
-    unsureItems.map((r) => `
-      <div class="confirm-item" data-page="${r.page}" data-q="${r.question}">
-        <span class="q">第${(r.page||0)+1}頁 · ${r.question}題</span>
-        <span class="btns">
-          <button class="ok">啱</button>
-          <button class="no">錯</button>
-        </span>
-      </div>`).join('');
-  list.querySelectorAll('.confirm-item').forEach(item => {
-    const page = +item.dataset.page, q = item.dataset.q;
-    const idx = findResultIdx(data, page, q);
-    item.querySelector('.ok').onclick = () => applyMarkCorrect(data, page, idx, true);
-    item.querySelector('.no').onclick = () => applyMarkCorrect(data, page, idx, false);
-  });
-}
-function findResultIdx(data, page, question){
-  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
-  return pageItems.findIndex(x => String(x.question) === String(question));
+  if (list) list.innerHTML = '';
 }
 
 // Tapping a mark on the photo flips it -- true/false swap directly; an
