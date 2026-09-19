@@ -331,15 +331,45 @@ async function handleCheckInner(request, env) {
     // reading faint pencil handwriting as a blank box (studentAnswer:""),
     // not a reasoning-depth problem -- since fixed directly (rule 2
     // addendum + a client-side contrast boost) with the self-contradiction
-    // safety net (fixSelfContradiction) as a second layer. Separately, the
-    // main pass ALONE was observed taking up to 70s on a content-heavy
-    // worksheet even after the phase-split -- effort is the lever actually
-    // available to cut that. max_tokens 8192 kept regardless (prevents
-    // truncation, unrelated to reasoning depth). Revert again immediately
-    // if a live report shows a real, non-perception accuracy regression.
-    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
-    parsed = r.parsed;
-    usage.sonnet = r.usage;
+    // safety net (fixSelfContradiction) as a second layer. max_tokens 8192
+    // kept regardless (prevents truncation, unrelated to reasoning depth).
+    // Revert again immediately if a live report shows a real,
+    // non-perception accuracy regression.
+    //
+    // Separately: live logging showed the main pass ALONE taking up to
+    // 70 seconds on a content-heavy page (17+ items) even at "medium" --
+    // effort controls depth per item, not the number of items needing
+    // that depth, so a busy page hits a floor no effort setting alone
+    // gets under. Split into two PARALLEL calls, each asked to answer
+    // only the items whose printed question label sits in the top or
+    // bottom half of the page (by y-position, not a real image crop --
+    // both calls still see the whole photo, so cross-question numeric
+    // checks like rule 1b still work across the split). Roughly halves
+    // wall-clock time on a busy page for double the Sonnet cost; a light
+    // page pays that cost for little benefit, but staying correct and
+    // fast on the WORST case is what real complaints have been about.
+    const halfPrompt = (half) => prompt + `\n\n本次只需要回答印刷題號本身實際印刷位置喺相片${half === 'top' ? '上半部（y座標大約0-50%）' : '下半部（y座標大約50-100%）'}嘅題目，另外半部嘅題目完全唔使理、"results"入面唔使包含佢哋——但如果拎唔準邊題屬於邊半部，寧願兩邊都答埋佢，唔好走漏。`;
+    const [topR, bottomR] = await Promise.all([
+      callClaude("claude-sonnet-5", 8192, images.concat(exemplars), halfPrompt('top'), apiKey, "medium"),
+      callClaude("claude-sonnet-5", 8192, images.concat(exemplars), halfPrompt('bottom'), apiKey, "medium"),
+    ]);
+    // Merge, deduping on "page:question" in case a borderline item got
+    // answered by both halves (explicitly allowed above, to avoid either
+    // half skipping it entirely) -- keep whichever occurrence isn't null,
+    // preferring the first (top) call on an actual tie.
+    const merged = new Map();
+    for (const r of [...(topR.parsed.results || []), ...(bottomR.parsed.results || [])]) {
+      const key = `${r.page || 0}:${r.question}`;
+      const existing = merged.get(key);
+      if (!existing || (existing.correct === null && r.correct !== null)) merged.set(key, r);
+    }
+    parsed = {
+      results: Array.from(merged.values()),
+      score: topR.parsed.score || bottomR.parsed.score || '',
+      continuesFromPrevious: topR.parsed.continuesFromPrevious || bottomR.parsed.continuesFromPrevious || false,
+      continuesToNext: topR.parsed.continuesToNext || bottomR.parsed.continuesToNext || false,
+    };
+    usage.sonnet = { top: topR.usage, bottom: bottomR.usage };
     (parsed.results || []).forEach(fixSelfContradiction);
   } catch (e) {
     return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);

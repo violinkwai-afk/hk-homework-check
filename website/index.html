@@ -78,6 +78,11 @@
     background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
     padding:1px 5px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.3);
   }
+  .all-correct-badge{
+    position:absolute; top:10px; right:10px; background:var(--good); color:#fff;
+    font-weight:800; font-size:.85rem; padding:5px 12px; border-radius:20px;
+    box-shadow:0 2px 6px rgba(0,0,0,.25);
+  }
 
   .score-banner{
     text-align:center; font-weight:700; font-size:1.7rem; margin:14px 0 6px; color:var(--pink-ink);
@@ -523,7 +528,14 @@ async function fillPageResult(data, pIdx){
     return mark + ans;
   }).join('');
   const img = wrap.querySelector('img');
-  wrap.querySelector('.imgwrap').innerHTML = `<img src="${s ? s.dataUrl : img.src}">${marksHtml}`;
+  // With correct answers no longer drawing a visible mark, a page that's
+  // entirely correct showed nothing at all -- indistinguishable from one
+  // that failed to grade. A live report flagged exactly this ("好似一個
+  // take都冇有好似好唔清楚咁樣"). One clear badge stands in for what would
+  // otherwise be a wall of identical checkmarks.
+  const allCorrect = pageItems.length > 0 && pageItems.every(r => r.correct === true);
+  const allCorrectBadge = allCorrect ? `<div class="all-correct-badge">全部啱晒！</div>` : '';
+  wrap.querySelector('.imgwrap').innerHTML = `<img src="${s ? s.dataUrl : img.src}">${marksHtml}${allCorrectBadge}`;
   wrap.querySelectorAll('.mark').forEach(el => {
     el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
   });
