@@ -335,6 +335,7 @@ async function handleCheckInner(request, env) {
     const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey);
     parsed = r.parsed;
     usage.sonnet = r.usage;
+    (parsed.results || []).forEach(fixSelfContradiction);
   } catch (e) {
     return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
   }
@@ -801,6 +802,31 @@ function normalizeAnchor(s) {
   return String(s || "").replace(/[\s.()（）、,，]/g, "").toLowerCase();
 }
 
+// Safety net against a real, repeatedly-observed self-contradiction: the
+// model marks an item "correct: false" but its OWN "correctAnswer" field
+// (only ever filled when correct is false, per rule 4 in the prompt) is
+// textually identical to what the student actually wrote -- i.e. the
+// model's final verdict disagrees with its own stated correct answer. A
+// live example: "10 + 4 = 14" (correct) came back {"correct":false,
+// "correctAnswer":"14"} against a "14" student answer, on a worksheet
+// where the numbers needed were spelled out in the question text. Rather
+// than trying to fully understand why the model's two fields diverged,
+// this catches the specific, checkable contradiction and trusts the
+// model's own correctAnswer over its own correct flag -- can only ever
+// fix a genuine self-contradiction, never misfire on a normal response
+// (where a false verdict's correctAnswer never matches the student's
+// answer in the first place).
+function fixSelfContradiction(r) {
+  if (r.correct === false && r.correctAnswer && r.studentAnswer) {
+    const norm = (s) => String(s).replace(/\s+/g, "").toLowerCase();
+    if (norm(r.correctAnswer) === norm(r.studentAnswer)) {
+      r.correct = true;
+      r.correctAnswer = "";
+    }
+  }
+  return r;
+}
+
 async function googleOcr(base64Data, apiKey) {
   const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`, {
     method: "POST",
@@ -995,6 +1021,7 @@ ${listText}
       r.note = updated.note || '';
       if (updated.studentAnswer) r.studentAnswer = updated.studentAnswer;
       r.verifiedBy = usageKey;
+      fixSelfContradiction(r);
     });
   } catch (e) {
     // A recheck tier failing shouldn't sink the whole response -- whatever
