@@ -325,14 +325,19 @@ async function handleCheckInner(request, env) {
   let parsed;
   const usage = { sonnet: null, sonnetZoom: null, opus: null };
   try {
-    // Reverted from "medium" effort after a live report of confidently-wrong
-    // grading on trivial, unambiguous arithmetic (10+4=14 marked wrong) --
-    // exactly the accuracy risk flagged when "medium" was first tried, now
-    // confirmed for real. Accuracy is the one non-negotiable requirement
-    // here ("一定要準確"); the latency this bought back is not worth trading
-    // against it. max_tokens 8192 (up from the original 4096) is kept --
-    // that only prevents truncation, it doesn't reduce reasoning depth.
-    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey);
+    // Trying "medium" effort again after root-causing the real reason
+    // "medium" looked unsafe the first time: verbose per-item logging
+    // proved the earlier "10+4=14 marked wrong" failures were the model
+    // reading faint pencil handwriting as a blank box (studentAnswer:""),
+    // not a reasoning-depth problem -- since fixed directly (rule 2
+    // addendum + a client-side contrast boost) with the self-contradiction
+    // safety net (fixSelfContradiction) as a second layer. Separately, the
+    // main pass ALONE was observed taking up to 70s on a content-heavy
+    // worksheet even after the phase-split -- effort is the lever actually
+    // available to cut that. max_tokens 8192 kept regardless (prevents
+    // truncation, unrelated to reasoning depth). Revert again immediately
+    // if a live report shows a real, non-perception accuracy regression.
+    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
     parsed = r.parsed;
     usage.sonnet = r.usage;
     (parsed.results || []).forEach(fixSelfContradiction);
