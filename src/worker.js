@@ -114,7 +114,13 @@ async function handleTestNoAiCheck(request, env) {
   // a real parent's submission.
   if (demoRequestId && env.RATE_LIMIT_KV) {
     try {
-      await env.RATE_LIMIT_KV.put("idem:" + String(demoRequestId).slice(0, 100), JSON.stringify(finalResult), { expirationTtl: 3600 });
+      // A real live incident: a demo link was told to the user as
+      // permanently reusable/free, but this cache entry expired after its
+      // original 1-hour TTL -- silently falling through to a REAL, paid
+      // Anthropic call on the next reuse, with no warning to anyone. A
+      // demo entry is meant to be a durable fixture, not a short-lived
+      // cache -- ~10 years is effectively permanent for this purpose.
+      await env.RATE_LIMIT_KV.put("idem:" + String(demoRequestId).slice(0, 100), JSON.stringify(finalResult), { expirationTtl: 315360000 });
     } catch (e) { /* best-effort */ }
   }
 
