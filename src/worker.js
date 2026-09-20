@@ -171,6 +171,9 @@ async function handleCheckInner(request, env) {
   const apiKey = typeof env.ANTHROPIC_API_KEY === "string"
     ? env.ANTHROPIC_API_KEY
     : await env.ANTHROPIC_API_KEY.get();
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
 
   if (env.RATE_LIMIT_KV) {
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -342,31 +345,50 @@ async function handleCheckInner(request, env) {
       : '');
 
   let parsed;
-  const usage = { sonnet: null, sonnetZoom: null, opus: null };
-  try {
-    // Trying "medium" effort again after root-causing the real reason
-    // "medium" looked unsafe the first time: verbose per-item logging
-    // proved the earlier "10+4=14 marked wrong" failures were the model
-    // reading faint pencil handwriting as a blank box (studentAnswer:""),
-    // not a reasoning-depth problem -- since fixed directly (rule 2
-    // addendum + a client-side contrast boost) with the self-contradiction
-    // safety net (fixSelfContradiction) as a second layer. max_tokens 8192
-    // kept regardless (prevents truncation, unrelated to reasoning depth).
-    // Revert again immediately if a live report shows a real,
-    // non-perception accuracy regression.
-    //
-    // The top/bottom-half parallel split (tried briefly to cut latency on
-    // content-heavy pages) is reverted -- it doubled Sonnet cost on EVERY
-    // page, and a live cost review showed the account's whole prepaid
-    // balance being exhausted by well under 10 real submissions. Cost is
-    // the current priority over the last mile of speed.
-    const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
-    parsed = r.parsed;
-    usage.sonnet = r.usage;
-    (parsed.results || []).forEach(fixSelfContradiction);
-  } catch (e) {
-    return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
+  const usage = { primaryModel: null, deepseekFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
+  // DeepSeek (via OpenRouter) is tried first when configured -- roughly
+  // 5-10x cheaper than Sonnet on the pages it completes, per real testing
+  // 2026-09-20 (see callDeepSeek's own comment for specifics and known
+  // failure modes). ANY failure falls through to the exact same Sonnet
+  // call this project has run and tuned all session, so a DeepSeek problem
+  // degrades to "as expensive as before", never to "no result at all".
+  if (openrouterKey) {
+    try {
+      const r = await callDeepSeek(images.concat(exemplars), prompt, openrouterKey);
+      parsed = r.parsed;
+      usage.primaryModel = "deepseek";
+      usage.deepseek = r.usage;
+    } catch (e) {
+      usage.deepseekFailReason = e.kind || "unknown";
+    }
   }
+  if (!parsed) {
+    try {
+      // Trying "medium" effort again after root-causing the real reason
+      // "medium" looked unsafe the first time: verbose per-item logging
+      // proved the earlier "10+4=14 marked wrong" failures were the model
+      // reading faint pencil handwriting as a blank box (studentAnswer:""),
+      // not a reasoning-depth problem -- since fixed directly (rule 2
+      // addendum + a client-side contrast boost) with the self-contradiction
+      // safety net (fixSelfContradiction) as a second layer. max_tokens 8192
+      // kept regardless (prevents truncation, unrelated to reasoning depth).
+      // Revert again immediately if a live report shows a real,
+      // non-perception accuracy regression.
+      //
+      // The top/bottom-half parallel split (tried briefly to cut latency on
+      // content-heavy pages) is reverted -- it doubled Sonnet cost on EVERY
+      // page, and a live cost review showed the account's whole prepaid
+      // balance being exhausted by well under 10 real submissions. Cost is
+      // the current priority over the last mile of speed.
+      const r = await callClaude("claude-sonnet-5", 8192, images.concat(exemplars), prompt, apiKey, "medium");
+      parsed = r.parsed;
+      usage.primaryModel = "sonnet";
+      usage.sonnet = r.usage;
+    } catch (e) {
+      return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
+    }
+  }
+  (parsed.results || []).forEach(fixSelfContradiction);
 
   // Position refinement runs BEFORE the recheck (not after) so that if we
   // need to crop a zoomed-in close-up for the recheck pass below, the crop
@@ -1031,6 +1053,92 @@ async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
     const match = text.match(/\{[\s\S]*\}/);
     return { parsed: JSON.parse(match ? match[0] : text), usage: data.usage || null };
   } catch (e) {
+    throw { kind: "parse_error", uiMessage: "批改結果解析失敗，請再試一次。", detail: text.slice(0, 500), status: 502 };
+  }
+}
+
+// Cheap first-tier grading via DeepSeek V4.1-Flash (through OpenRouter),
+// tried before the Sonnet call above. Same {parsed, usage} / throw contract
+// as callClaude so the call site can fall back to Sonnet on ANY failure
+// (HTTP error, provider-side content-filter block, or the model spending
+// its whole reasoning budget and returning nothing) without special-casing
+// each failure kind. Empirically (2026-09-20, ~15 real worksheets): most
+// pages succeed in a few seconds for a few cents; occasionally a reasoning-
+// heavy page (dense grammar/visual-logic questions) exhausts the token
+// budget with zero output -- excluding the "Alibaba" route (an observed
+// source of false-positive content-moderation blocks on ordinary children's
+// homework) and using a generous 20000 max_tokens noticeably reduces but
+// does not eliminate this, hence the Sonnet fallback rather than trusting
+// DeepSeek alone.
+async function callDeepSeek(images, prompt, openrouterKey) {
+  const body = {
+    model: "deepseek/deepseek-v4.1-flash",
+    max_tokens: 20000,
+    provider: { ignore: ["Alibaba"] },
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          ...images.map((img) => ({
+            type: "image_url",
+            image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` },
+          })),
+        ],
+      },
+    ],
+  };
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${openrouterKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.log(JSON.stringify({ event: "deepseek_error", status: res.status, detail: errText.slice(0, 500) }));
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
+  }
+
+  const data = await res.json();
+  const choice = data.choices && data.choices[0];
+  // finish_reason "stop" only -- "length" means it ran out of budget
+  // (possibly with zero content, per the note above) and "error" covers
+  // provider-side failures like the content-moderation false positive;
+  // both must fall back to Sonnet rather than return a truncated/partial
+  // result as if it were complete.
+  if (!choice || choice.finish_reason !== "stop") {
+    console.log(JSON.stringify({
+      event: "deepseek_incomplete",
+      finishReason: choice && choice.finish_reason,
+      error: choice && choice.error,
+      usage: data.usage || null,
+    }));
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_incomplete", status: 502 };
+  }
+
+  const text = (choice.message && choice.message.content) || "";
+  try {
+    // DeepSeek/OpenRouter sometimes wraps the JSON in a ```json fence even
+    // when told to reply with only the object -- strip that before parsing.
+    const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+    const match = stripped.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : stripped);
+    // finish_reason "stop" plus valid JSON isn't proof of a USEFUL answer --
+    // a model that decides to end its turn early can still emit a clean but
+    // empty {"results":[],"score":"0/0"}. Treat that the same as any other
+    // incomplete response so it falls back to Sonnet instead of silently
+    // telling the user their homework had zero questions on it.
+    if (!Array.isArray(parsed.results) || parsed.results.length === 0) {
+      console.log(JSON.stringify({ event: "deepseek_empty_results", usage: data.usage || null }));
+      throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_empty_results", status: 502 };
+    }
+    return { parsed, usage: data.usage || null };
+  } catch (e) {
+    if (e && e.kind) throw e;
     throw { kind: "parse_error", uiMessage: "批改結果解析失敗，請再試一次。", detail: text.slice(0, 500), status: 502 };
   }
 }

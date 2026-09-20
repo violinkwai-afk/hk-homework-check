@@ -16,6 +16,18 @@ binding = "GOOGLE_VISION_API_KEY"
 store_id = "50b964b41eeb46d3bd4be77e059d3324"
 secret_name = "GOOGLE_VISION_API_KEY"
 
+# DeepSeek-first grading (callDeepSeek in worker.js) is fully optional --
+# handleCheckInner checks openrouterKey and falls back straight to Sonnet
+# when it's absent, so leaving this secret unset is safe and just means
+# "Sonnet only", not a broken deploy. Only activates once a real
+# OPENROUTER_API_KEY value is created for this secret name in the same
+# Secrets Store via the Cloudflare dashboard (this repo's read-only deploy
+# token can declare the binding here but can't create the secret value).
+[[secrets_store_secrets]]
+binding = "OPENROUTER_API_KEY"
+store_id = "50b964b41eeb46d3bd4be77e059d3324"
+secret_name = "OPENROUTER_API_KEY"
+
 # IMPORTANT -- learned the hard way: this Worker auto-deploys from git, and
 # Cloudflare's dashboard-added bindings are NOT version-controlled -- every
 # new deployment resets bindings to exactly what's declared in this file,
