@@ -404,22 +404,67 @@ async function handleCheckInner(request, env) {
       ? `\n\n附加：呢頁屬於同一份功課嘅其中一部份，以下係其他頁面已經批改咗嘅結果（僅供參考，唔使批改，亦睇唔到嗰啲頁面嘅相）：${JSON.stringify(priorPagesContext).slice(0, 3000)}。如果依家呢頁嘅題目同上面嘅結果有數值關係（例如加減關係），可以用嚟核對，但如果冇睇到相關題目就照舊自己判斷，唔使勉強搵關係。`
       : '');
 
+  // DeepSeek-only, deliberately condensed version of the same prompt --
+  // Sonnet keeps the full one above untouched. Real testing 2026-09-20
+  // showed prompt length/complexity directly drives DeepSeek's internal
+  // "reasoning" token usage (same image+task: the short prompt below used
+  // ~7000 reasoning tokens and finished; the full prompt maxed out 20000
+  // and failed outright) -- speed/cost took priority over exhaustive edge-
+  // case coverage per explicit instruction. Keeps only the highest-value,
+  // confirmed-real-bug protections (faint pencil misread as blank; using
+  // stated numbers over counting illustration objects); drops the longer
+  // tail of narrower edge-case rules (coins, angles, tally marks, position
+  // value, compass tricks, fraction shading, etc.) that Sonnet still covers
+  // when DeepSeek fails or when this item lands in the null->verify tier.
+  const deepseekPrompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁）。冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
+
+要求（精簡）：
+1. 相有機會打橫/倒轉，先確認閱讀方向啱先答題，尤其留意6/9呢類易錯數字。
+2. 題目已經用文字/數字寫明要計算嘅數值（例如「10 upstairs 4 downstairs」或「10+4=」），一定要用返題目寫低嘅數字去計，唔好走去數插圖入面畫緊幾多個人/物件代替。
+3. 學生成日用鉛筆寫字，筆跡好淺好幼，容易同紙張反光/陰影混淆——判斷「未作答」之前，一定要放大瞇實眼仔細睇清楚個格仔入面實際有冇淺色筆劃，唔好因為顏色淺就衝口而出話未作答；隱約見到但唔夠肯定寫緊咩，"correct"設null。
+4. 睇圖表/刻度/圖形先答到嘅題目（水位、尺、角度、立體圖形、硬幣面額等），睇唔清就"correct"設null，唔好靠估。
+5. 只有答題位置確實有筆跡但太潦草/有歧義先"correct"設null，"note"簡短註明原因。
+6. 只有"correct"為false先填"correctAnswer"，其他情況留空字串。
+7. "bbox"用百分比(0-100)表示，相對於嗰頁相片闊度/高度。"anchor"填低嗰題印刷體題號本身（例如"1."），搵唔到留空。
+8. "riskyDiagram"設true如果屬於刻度/量度/角度/立體圖形/硬幣/方向/分數塗色/位值比較等易錯類型。
+
+只回覆一個JSON物件，不要加任何其他文字：
+{
+  "results": [
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":"","riskyDiagram":false}
+  ],
+  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
+  "continuesFromPrevious": false,
+  "continuesToNext": false
+}`
+    + (exemplars.length
+      ? `\n\n附加：最後${exemplars.length}張圖係同一個小朋友之前已確認啱嘅字跡樣本，純粹俾你熟悉佢寫字嘅風格，唔屬於今次功課，唔使批改。`
+      : '');
+
   let parsed;
   const usage = { primaryModel: null, deepseekFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
-  // DeepSeek (via OpenRouter) is tried first when configured -- roughly
-  // 5-10x cheaper than Sonnet on the pages it completes, per real testing
-  // 2026-09-20 (see callDeepSeek's own comment for specifics and known
-  // failure modes). ANY failure falls through to the exact same Sonnet
-  // call this project has run and tuned all session, so a DeepSeek problem
-  // degrades to "as expensive as before", never to "no result at all".
+  // DeepSeek (via OpenRouter) is tried first when configured, with one
+  // retry (a fresh attempt, not a continuation) before giving up -- per
+  // explicit instruction 2026-09-20: Sonnet's real cost (~£5 gone in ~20
+  // real submissions before this session's fixes) makes it unacceptable
+  // as a silent fallback going forward. Once OPENROUTER_API_KEY is
+  // configured, a DeepSeek failure returns a clean "try again" error
+  // instead of quietly spending on Sonnet -- the user would rather see an
+  // explicit failure than an invisible expensive one. Sonnet is used ONLY
+  // when DeepSeek isn't configured at all (env.OPENROUTER_API_KEY unset).
   if (openrouterKey) {
-    try {
-      const r = await callDeepSeek(images.concat(exemplars), prompt, openrouterKey);
-      parsed = r.parsed;
-      usage.primaryModel = "deepseek";
-      usage.deepseek = r.usage;
-    } catch (e) {
-      usage.deepseekFailReason = e.kind || "unknown";
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      try {
+        const r = await callDeepSeek(images.concat(exemplars), deepseekPrompt, openrouterKey);
+        parsed = r.parsed;
+        usage.primaryModel = "deepseek";
+        usage.deepseek = r.usage;
+      } catch (e) {
+        usage.deepseekFailReason = e.kind || "unknown";
+      }
+    }
+    if (!parsed) {
+      return json({ error: "upstream_error", message: "改功課服務暫時繁忙，請一分鐘後再試一次。" }, 502);
     }
   }
   if (!parsed) {
@@ -1153,12 +1198,11 @@ async function callDeepSeek(images, prompt, openrouterKey) {
       },
     ],
   };
-  // No observed-in-testing case took anywhere near this long (worst case
-  // ~20s for a reasoning-heavy page that still completed), but nothing
-  // upstream of this call promises an upper bound -- a hung OpenRouter
-  // request with no timeout would leave the whole /api/check response
-  // hanging indefinitely instead of failing fast into the Sonnet fallback,
-  // which is strictly worse than either tier's own normal failure modes.
+  // 15s per attempt (the caller retries once, so ~30s worst case total) --
+  // shortened from an initial 30s per explicit instruction prioritizing
+  // speed: a fresh 15s retry is more likely to land a shorter reasoning
+  // chain (usage is stochastic run-to-run, per real testing 2026-09-20)
+  // than waiting out one long attempt to its full length.
   //
   // Race a plain timer against fetch() rather than relying solely on
   // AbortController -- a live production test (2026-09-20) showed a real
@@ -1167,7 +1211,7 @@ async function callDeepSeek(images, prompt, openrouterKey) {
   // whatever this Worker's fetch() was actually stuck on (network layer,
   // the specific OpenRouter/DeepSeek route, or the runtime's own signal
   // handling for this request shape) did not reliably respond to abort().
-  // Promise.race guarantees this function itself moves on at 30s
+  // Promise.race guarantees this function itself moves on at the deadline
   // regardless of whether the underlying request ever unwinds -- the
   // stalled fetch may keep running in the background, but it can no
   // longer block the response back to the user.
@@ -1176,7 +1220,7 @@ async function callDeepSeek(images, prompt, openrouterKey) {
     setTimeout(() => {
       controller.abort();
       reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout_raced", status: 502 });
-    }, 30000);
+    }, 15000);
   });
   let res;
   try {
