@@ -1094,24 +1094,42 @@ async function callDeepSeek(images, prompt, openrouterKey) {
   // request with no timeout would leave the whole /api/check response
   // hanging indefinitely instead of failing fast into the Sonnet fallback,
   // which is strictly worse than either tier's own normal failure modes.
+  //
+  // Race a plain timer against fetch() rather than relying solely on
+  // AbortController -- a live production test (2026-09-20) showed a real
+  // request still hadn't returned after 90+ seconds despite an
+  // AbortSignal-based 30s timeout on the same fetch call, meaning
+  // whatever this Worker's fetch() was actually stuck on (network layer,
+  // the specific OpenRouter/DeepSeek route, or the runtime's own signal
+  // handling for this request shape) did not reliably respond to abort().
+  // Promise.race guarantees this function itself moves on at 30s
+  // regardless of whether the underlying request ever unwinds -- the
+  // stalled fetch may keep running in the background, but it can no
+  // longer block the response back to the user.
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      controller.abort();
+      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout_raced", status: 502 });
+    }, 30000);
+  });
   let res;
   try {
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${openrouterKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    res = await Promise.race([
+      fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${openrouterKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
   } catch (e) {
-    console.log(JSON.stringify({ event: "deepseek_error", status: null, detail: "fetch_failed_or_timed_out: " + String(e && e.message) }));
-    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout", status: 502 };
-  } finally {
-    clearTimeout(timeoutId);
+    console.log(JSON.stringify({ event: "deepseek_error", status: null, detail: "fetch_failed_or_timed_out: " + String((e && e.message) || (e && e.detail)) }));
+    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout", status: 502 };
   }
 
   if (!res.ok) {
