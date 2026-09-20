@@ -976,6 +976,10 @@ async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
 
   if (!res.ok) {
     const errText = await res.text();
+    // Logged server-side (not just returned to the client) so a real
+    // outage/quota/billing error is visible in the live tail instead of
+    // only ever seen as the generic client-facing message.
+    console.log(JSON.stringify({ event: "anthropic_error", status: res.status, model, detail: errText.slice(0, 500) }));
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
   }
 
