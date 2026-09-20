@@ -60,9 +60,61 @@ export default {
     if (url.pathname === "/api/test-noai-check" && request.method === "POST") {
       return handleTestNoAiCheck(request, env);
     }
+    // TEMPORARY diagnostic route -- isolating why a real /api/check request's
+    // DeepSeek call reliably times out (~30s) from this Worker when the same
+    // image/prompt consistently returns in a few seconds from a plain Node
+    // script. Makes a minimal, imageless OpenRouter call and reports how
+    // long THAT alone takes, to tell apart "OpenRouter itself is slow from
+    // this Worker/colo" from "something about the image payload specifically
+    // is the problem". Remove once the real cause is found.
+    if (url.pathname === "/api/test-deepseek-latency" && request.method === "GET") {
+      return handleTestDeepSeekLatency(env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
+
+async function handleTestDeepSeekLatency(env) {
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+
+  const attempts = [];
+  // Attempt 1: tiny text-only request, no image at all.
+  {
+    const t0 = Date.now();
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
+        body: JSON.stringify({ model: "deepseek/deepseek-v4.1-flash", max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: "Say OK and nothing else." }] }),
+      });
+      const data = await res.json();
+      attempts.push({ label: "text_only", ms: Date.now() - t0, status: res.status, ok: res.ok, content: data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content });
+    } catch (e) {
+      attempts.push({ label: "text_only", ms: Date.now() - t0, error: String(e && e.message) });
+    }
+  }
+  // Attempt 2: a tiny real (but small) image, to see if ANY image at all
+  // is the trigger, independent of the ~400KB size of a real photo.
+  {
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const t0 = Date.now();
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
+        body: JSON.stringify({ model: "deepseek/deepseek-v4.1-flash", max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: [{ type: "text", text: "What color is this image? One word." }, { type: "image_url", image_url: { url: `data:image/png;base64,${tinyPng}` } }] }] }),
+      });
+      const data = await res.json();
+      attempts.push({ label: "tiny_image", ms: Date.now() - t0, status: res.status, ok: res.ok, content: data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content });
+    } catch (e) {
+      attempts.push({ label: "tiny_image", ms: Date.now() - t0, error: String(e && e.message) });
+    }
+  }
+  return json({ attempts });
+}
 
 async function handleTestNoAiCheck(request, env) {
   if (env.RATE_LIMIT_KV) {
