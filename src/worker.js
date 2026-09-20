@@ -39,6 +39,19 @@ export default {
     if (url.pathname === "/api/forget-handwriting" && request.method === "POST") {
       return handleForgetHandwriting(request, env);
     }
+    // Backs website/test.html -- a completely separate, clearly-labelled
+    // page for trying the real interface (upload, marks, lightbox, "all
+    // correct" badge, phase-1/phase-2 pending->resolved flow) with a
+    // canned example result. Deliberately never touches
+    // env.ANTHROPIC_API_KEY or makes any outbound call at all, so it is
+    // structurally impossible for this route to ever cost real money,
+    // not just unlikely to.
+    if (url.pathname === "/api/mock-check" && request.method === "POST") {
+      return handleMockCheck(request);
+    }
+    if (url.pathname === "/api/mock-verify" && request.method === "POST") {
+      return handleMockVerify(request);
+    }
     // TEMPORARY debug route -- exercises the real rate-limit KV and real
     // Google Vision OCR refinement against a caller-supplied "parsed" result
     // (skipping the Anthropic call entirely), so infra behavior/cost can be
@@ -813,6 +826,45 @@ async function saveHandwritingSample(kv, deviceKey, sample) {
     try { await kv.delete(handwritingSampleKey(deviceKey, evicted)); } catch (e) { /* best-effort */ }
   }
   await kv.put(handwritingMetaKey(deviceKey), JSON.stringify(sampleIds), { expirationTtl: HANDWRITING_SAMPLE_TTL });
+}
+
+// Canned sample used by both mock endpoints below -- a plausible-looking
+// small worksheet result so website/test.html shows a realistic page:
+// one confident-correct, one confident-wrong (with a correctAnswer
+// label), and one "pending" item that /api/mock-verify later resolves,
+// so a visitor also sees the real phase-1/phase-2 UI behaviour (the "?"
+// mark quietly updating a few seconds later) without it costing anything.
+function mockResults() {
+  return [
+    { question: "1", studentAnswer: "12", correct: true, correctAnswer: "", note: "", page: 0, bbox: { x: 15, y: 12, w: 8, h: 5 }, anchor: "1.", riskyDiagram: false, verifiedBy: "sonnet" },
+    { question: "2", studentAnswer: "9", correct: false, correctAnswer: "8", note: "", page: 0, bbox: { x: 55, y: 12, w: 8, h: 5 }, anchor: "2.", riskyDiagram: false, verifiedBy: "sonnet" },
+    { question: "3", studentAnswer: "", correct: null, correctAnswer: "", note: "字跡不清", page: 0, bbox: { x: 30, y: 40, w: 8, h: 5 }, anchor: "3.", riskyDiagram: false, verifiedBy: "pending" },
+  ];
+}
+
+async function handleMockCheck(request) {
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: "bad_request" }, 400); }
+  const pageIndex = Number.isInteger(body.pageIndex) ? body.pageIndex : 0;
+  const results = mockResults().map((r) => ({ ...r, page: pageIndex }));
+  const graded = results.filter((r) => r.correct !== null);
+  const score = `${graded.filter((r) => r.correct === true).length} / ${graded.length}`;
+  const needsVerify = results.filter((r) => r.verifiedBy === "pending").map((r) => ({ page: r.page, question: r.question }));
+  // A short artificial delay so the UI's pending/spinner states are
+  // actually visible, same as a real call would show.
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  return json({ results, score, needsVerify, pageRotations: {} }, 200);
+}
+
+async function handleMockVerify(request) {
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: "bad_request" }, 400); }
+  const pageIndex = Number.isInteger(body.pageIndex) ? body.pageIndex : 0;
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const patches = (body.items || []).map((it) => ({
+    page: pageIndex, question: it.question, correct: true, correctAnswer: "", note: "", verifiedBy: "sonnetZoom",
+  }));
+  return json({ patches }, 200);
 }
 
 async function handleForgetHandwriting(request, env) {

@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>影相對功課（測試版）</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&family=Caveat:wght@600;700&display=swap">
+<style>
+  :root{
+    /* A real teacher's red pen on cream exercise-book paper, not a pastel
+       app palette -- grounded in the actual physical object this product
+       replaces, not a generic "friendly for parents" pink. */
+    --ink:#2b2420; --muted:#8f8375; --card:#fffdf7;
+    --pink:#c33327; --pink-soft:#f5ddd4; --pink-ink:#9c2a1f;
+    --yellow:#c68a2e; --yellow-soft:#f6ecd6;
+    --good:#3f7d4f; --bad:#c33327; --unsure:#c68a2e;
+    --shadow: 0 2px 10px rgba(43,36,32,0.10);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; color:var(--ink);
+    background:linear-gradient(180deg, #f4ebdc 0%, #f9f3e6 45%, #f9f3e6 100%);
+    background-attachment:fixed;
+    font-family:"Noto Sans TC","PingFang TC",-apple-system,BlinkMacSystemFont,sans-serif;
+    padding-inline:16px; padding-block:20px 40px;
+  }
+  .page{max-width:460px; margin:0 auto;}
+  .brand{
+    font-weight:800; font-size:1.3rem; color:var(--pink-ink); text-align:center;
+    margin-bottom:2px; display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .brand svg{width:20px; height:18px; flex-shrink:0;} /* same hand-drawn check used on marked photos, not a decorative emoji */
+  h1{font-size:1.15rem; text-align:center; margin:0 0 4px; font-weight:800;}
+  .sub{font-size:.85rem; color:var(--muted); text-align:center; margin:0 0 20px; line-height:1.55;}
+
+  .card{background:var(--card); border-radius:14px; padding:18px; box-shadow:var(--shadow); margin-bottom:16px; border:1px solid rgba(43,36,32,.06);}
+
+  .shots{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px;}
+  .shot{position:relative; width:72px; height:96px; border-radius:8px; overflow:hidden; box-shadow:var(--shadow);}
+  .shot img{width:100%; height:100%; object-fit:cover; display:block;}
+  .shot .rm{position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:12px; line-height:20px; padding:0;}
+  .addbtn{width:72px; height:96px; border-radius:8px; border:2px dashed var(--pink-soft); background:#fdf7f1; color:var(--pink-ink); font-size:1.6rem; font-weight:800;}
+
+  button.big{
+    width:100%; padding:15px; border-radius:10px; border:none; font-family:inherit;
+    font-weight:800; font-size:1rem; cursor:pointer; box-shadow:var(--shadow);
+  }
+  .btn-primary{background:var(--pink); color:#fff;}
+  .btn-primary:disabled{background:#dcc3ba; color:#fff8; cursor:default;}
+  .btn-secondary{background:#fff; color:var(--ink); border:1.5px solid var(--pink-soft) !important;}
+
+  .status{text-align:center; font-size:.85rem; color:var(--muted); margin:10px 0; display:flex; align-items:center; justify-content:center; gap:8px;}
+  .status .spinner{width:16px; height:16px; border-radius:50%; border:2.5px solid var(--pink-soft); border-top-color:var(--pink-ink); animation:spin .8s linear infinite; flex-shrink:0;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion: reduce){ .status .spinner{animation:none;} }
+  .status.err{color:var(--bad); font-weight:700;}
+
+  .result-page{margin-bottom:18px;}
+  .result-page .imgwrap{position:relative; border-radius:14px; overflow:hidden; box-shadow:var(--shadow); line-height:0;}
+  .result-page img{width:100%; display:block;}
+  .result-page.pending .imgwrap{opacity:.55;}
+  .result-page .page-spinner{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;}
+  .result-page .page-spinner .spinner{width:28px; height:28px; border-radius:50%; border:3px solid var(--pink-soft); border-top-color:var(--pink-ink); animation:spin .8s linear infinite;}
+  @media (prefers-reduced-motion: reduce){ .result-page .page-spinner .spinner{animation:none;} }
+  .mark{
+    position:absolute; display:flex; align-items:center; justify-content:center;
+    font-size:28px; font-weight:400; transform:translate(0,0);
+    filter:drop-shadow(0 1px 1.5px rgba(255,255,255,.9)); cursor:pointer; line-height:1;
+    padding:10px; margin:-10px; /* bigger invisible tap target than the visible stroke */
+  }
+  .mark:active{transform:translate(0,0) scale(0.85);}
+  .mark svg{display:block;}
+  .mark.good{color:var(--bad);} /* real teacher red-pen marks: check and cross are both red, only the shape differs */
+  .mark.bad{color:var(--bad);}
+  .mark.unsure{color:var(--unsure); font-weight:700; font-size:26px; text-shadow:0 1px 2px rgba(255,255,255,.9);}
+  .mark-answer{
+    position:absolute; transform:translate(20px,-60%); white-space:nowrap;
+    background:#fff; color:var(--bad); font-weight:800; font-size:.78rem;
+    padding:1px 5px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.3);
+  }
+  .all-correct-badge{
+    position:absolute; top:10px; right:10px; background:var(--good); color:#fff;
+    font-weight:800; font-size:.85rem; padding:5px 12px; border-radius:20px;
+    box-shadow:0 2px 6px rgba(0,0,0,.25);
+  }
+
+  .score-banner{
+    text-align:center; font-weight:700; font-size:1.7rem; margin:14px 0 6px; color:var(--pink-ink);
+    font-family:"Caveat","Noto Sans TC","PingFang TC",sans-serif; /* Caveat has no CJK glyphs, so "分數：" falls back automatically -- only the score's own digits render handwritten, like a mark scrawled in the margin */
+  }
+  .weak-areas{font-size:.82rem; color:var(--muted); text-align:center; margin-bottom:10px;}
+
+  .confirm-list{margin-top:6px;}
+  .confirm-item{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:var(--yellow-soft); border-radius:12px; padding:9px 12px; margin-bottom:8px; font-size:.85rem;
+  }
+  .confirm-item .q{font-weight:700;}
+  .confirm-item .btns{display:flex; gap:6px; flex-shrink:0;}
+  .confirm-item button{
+    padding:6px 12px; border-radius:9px; border:none; font-weight:800; font-size:.8rem; font-family:inherit; cursor:pointer;
+  }
+  .confirm-item .ok{background:var(--good); color:#fff;}
+  .confirm-item .no{background:var(--bad); color:#fff;}
+
+  .back{display:inline-flex; align-items:center; gap:6px; color:var(--muted); text-decoration:none; font-size:.85rem; font-weight:700; margin-bottom:16px;}
+  .limit-banner{background:var(--yellow-soft); border-radius:12px; padding:10px 12px; font-size:.8rem; text-align:center; margin-bottom:14px; color:#7a5a1f;}
+  .hw-profile{display:flex; align-items:flex-start; gap:8px; font-size:.76rem; color:var(--muted); margin-top:12px; line-height:1.5;}
+  .hw-profile input{margin-top:2px; flex-shrink:0;}
+  .hw-profile .forget{color:var(--pink-ink); text-decoration:underline; background:none; border:none; padding:0; font:inherit; cursor:pointer;}
+
+  .result-page .imgwrap{cursor:zoom-in;}
+  .lightbox{position:fixed; inset:0; background:#140a0c; z-index:1000; overflow:auto; -webkit-overflow-scrolling:touch;}
+  .lightbox.hidden{display:none;}
+  .lightbox-inner{min-height:100%; display:flex; align-items:center; justify-content:center; padding:20px; cursor:zoom-in;}
+  .lightbox-inner.zoomed{display:block; padding:0; cursor:zoom-out;}
+  .lightbox-inner .imgwrap{position:relative; line-height:0; max-width:100%;}
+  .lightbox-inner.zoomed .imgwrap{max-width:none; width:230%;}
+  .lightbox-inner img{width:100%; display:block;}
+  .lightbox-close{position:fixed; top:14px; right:14px; width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.95); border:none; font-size:20px; font-weight:800; z-index:1001; line-height:38px; padding:0;}
+  .lightbox-hint{position:fixed; bottom:18px; left:0; right:0; text-align:center; color:rgba(255,255,255,.75); font-size:.8rem; z-index:1001; pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="page">
+  <div style="background:#333;color:#fff;text-align:center;font-weight:800;font-size:.8rem;padding:8px 12px;border-radius:10px;margin-bottom:14px;">
+    🧪 測試版 — 呢度嘅結果係假嘅樣本，唔會叫用AI，點用都唔會扣錢
+  </div>
+  <div class="brand">影相對功課 <svg viewBox="0 0 34 30" aria-hidden="true"><path d="M2,15 Q8,22 13,25 Q20,10 32,3" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <h1>影完相，AI即刻幫你剔同交叉</h1>
+  <p class="sub">影低小朋友做完嘅功課（唔限本網站出嘅卷，乜嘢功課都得），AI會自己諗答案，同你張相標返啱同錯。</p>
+
+  <div id="limitBanner" class="limit-banner" hidden></div>
+
+  <div class="card" id="uploadCard">
+    <div class="shots" id="shots"></div>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    <button class="big btn-primary" id="submitBtn" disabled>影相對功課</button>
+    <label class="hw-profile">
+      <input type="checkbox" id="rememberHwToggle">
+      <span id="hwProfileLabel">記住呢個小朋友嘅字跡，幫AI下次睇得更準（唔開都一樣用得，隨時可以<button type="button" class="forget" id="forgetHwBtn">忘記已記住嘅字跡</button>）</span>
+    </label>
+  </div>
+
+  <div id="statusMsg" class="status" hidden></div>
+
+  <div id="results"></div>
+
+  <div id="againWrap" hidden>
+    <button class="big btn-secondary" id="againBtn">再影過</button>
+  </div>
+
+  <div style="text-align:center; margin-top:18px;">
+    <a href="terms.html" style="color:var(--muted); font-size:.78rem; text-decoration:underline;">使用條款及免責聲明</a>
+  </div>
+</div>
+
+<div class="lightbox hidden" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose" aria-label="關閉">×</button>
+  <div class="lightbox-inner" id="lightboxInner"></div>
+  <div class="lightbox-hint" id="lightboxHint">㩒相可以放大／縮小</div>
+</div>
+
+<script>
+const MAX_PAGES = 5;
+// Soft UX guardrail only (not real abuse prevention -- that's the server-side
+// per-IP hourly limit in worker.js). Sized for realistic daily homework
+// volume: ~12 pages/day at up to 5 pages/submission needs 3+ submissions/day,
+// i.e. 90+/month just for normal use -- 30 was carried over from a
+// lower-volume context and was too tight.
+const MAX_SUBMISSIONS_PER_MONTH = 120;
+let shots = []; // { dataUrl, base64 }
+// One id per distinct photo set, sent to the server so a retry (network
+// blip, or the fetch failing after the server already finished work) can be
+// recognised as "the same submission" instead of re-running the AI pipeline
+// (and paying for it) a second time. Reset whenever the photo set actually
+// changes (see renderShots) or after a submission succeeds.
+// A ?demoId=... URL param overrides the very first requestId -- used only
+// to drive a real demo of this exact page/UI against a pre-solved result
+// cached server-side under that id (see /api/test-noai-check), so the
+// real interface can be tried end-to-end without spending on that
+// specific request.
+let requestId = new URLSearchParams(location.search).get('demoId') || null;
+
+// Handwriting profile: fully opt-in (checkbox defaults unchecked, and its
+// state is remembered so a parent who turns it on doesn't have to re-tick
+// it every time). deviceId is a random id kept only in this browser's
+// localStorage -- never sent anywhere until the checkbox is actually on.
+function getOrCreateDeviceId(){
+  try {
+    let id = localStorage.getItem('hwcheck_device_id');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+      localStorage.setItem('hwcheck_device_id', id);
+    }
+    return id;
+  } catch(e) { return null; }
+}
+const rememberHwToggle = document.getElementById('rememberHwToggle');
+const forgetHwBtn = document.getElementById('forgetHwBtn');
+try { rememberHwToggle.checked = localStorage.getItem('hwcheck_remember_hw') === '1'; } catch(e){}
+rememberHwToggle.onchange = () => {
+  try { localStorage.setItem('hwcheck_remember_hw', rememberHwToggle.checked ? '1' : '0'); } catch(e){}
+};
+forgetHwBtn.onclick = async (e) => {
+  e.preventDefault();
+  const id = getOrCreateDeviceId();
+  forgetHwBtn.textContent = '刪除緊...';
+  try {
+    await fetch('/api/forget-handwriting', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId: id }),
+    });
+  } catch(e){}
+  try { localStorage.removeItem('hwcheck_remember_hw'); } catch(e){}
+  rememberHwToggle.checked = false;
+  forgetHwBtn.textContent = '已忘記';
+  setTimeout(() => { forgetHwBtn.textContent = '忘記已記住嘅字跡'; }, 2000);
+};
+
+const shotsEl = document.getElementById('shots');
+const fileInput = document.getElementById('fileInput');
+const submitBtn = document.getElementById('submitBtn');
+const statusEl = document.getElementById('statusMsg');
+const resultsEl = document.getElementById('results');
+const againWrap = document.getElementById('againWrap');
+const uploadCard = document.getElementById('uploadCard');
+
+// Tap-to-zoom a marked-up photo: view-only (marks inside the lightbox
+// don't toggle correct/incorrect -- that stays on the small inline photo
+// so we don't have to re-bind every mark's click handler onto a cloned
+// copy), a second tap toggles between "fit the screen" and "zoomed in,
+// pan by scrolling" so a parent can actually read a small tick mark
+// clearly on a real phone screen.
+const lightboxEl = document.getElementById('lightbox');
+const lightboxInner = document.getElementById('lightboxInner');
+const lightboxHint = document.getElementById('lightboxHint');
+function openLightbox(imgwrapHtml){
+  lightboxInner.innerHTML = imgwrapHtml;
+  lightboxInner.classList.remove('zoomed');
+  lightboxEl.classList.remove('hidden');
+  lightboxEl.scrollTop = 0; lightboxEl.scrollLeft = 0;
+  lightboxHint.hidden = false;
+}
+function closeLightbox(){
+  lightboxEl.classList.add('hidden');
+  lightboxInner.classList.remove('zoomed');
+  lightboxInner.innerHTML = '';
+}
+document.getElementById('lightboxClose').onclick = closeLightbox;
+lightboxInner.onclick = () => {
+  lightboxInner.classList.toggle('zoomed');
+  lightboxHint.hidden = true;
+};
+resultsEl.addEventListener('click', (e) => {
+  if (e.target.closest('.mark')) return; // let the mark's own tap-to-toggle handle this
+  const imgwrap = e.target.closest('.result-page .imgwrap');
+  if (!imgwrap) return;
+  openLightbox(imgwrap.innerHTML);
+});
+
+// A parent who photographs 5 pages then accidentally refreshes (or the
+// browser reloads the tab in the background) used to lose the whole queue
+// with no accounts/login needed to fix it -- just keep it in this
+// browser's own localStorage. Includes each shot's requestId, which is a
+// nice side effect: if some pages had already been successfully graded
+// before the refresh, resubmitting after restore hits the server's
+// existing idempotency cache for those instead of paying for them again.
+const PENDING_SHOTS_KEY = 'hwcheck_pending_shots';
+function saveShots(){
+  try {
+    // Deliberately NOT persisting requestId: a real live incident showed a
+    // parent re-submitting a persisted page (from before a server-side
+    // grading fix shipped) got served the OLD, now-wrong cached result
+    // straight out of the idempotency cache (see handleCheckInner) for up
+    // to its 30-minute TTL, which looked exactly like the fix hadn't
+    // worked at all. Restoring only the photo (not the id that pointed at
+    // a specific past grading attempt) means a resubmit after any restore
+    // always regrades fresh -- a small, rare re-charge for pages that
+    // happened to already succeed before a refresh, which is a much safer
+    // default than silently resurrecting a stale, possibly-wrong verdict.
+    localStorage.setItem(PENDING_SHOTS_KEY, JSON.stringify(
+      shots.map(s => ({ dataUrl: s.dataUrl, base64: s.base64 }))
+    ));
+  } catch (e) { /* storage full/unavailable -- losing the convenience beats crashing */ }
+}
+function loadSavedShots(){
+  try {
+    const raw = localStorage.getItem(PENDING_SHOTS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    // .requestId stripped even if present (e.g. from localStorage written
+    // by an older version of this file) -- see saveShots() above.
+    if (Array.isArray(saved) && saved.length) shots = saved.slice(0, MAX_PAGES).map(s => ({ dataUrl: s.dataUrl, base64: s.base64 }));
+  } catch (e) { /* corrupted/unavailable storage -- just start with an empty queue */ }
+}
+
+// Does NOT reset requestId itself -- called once at page load too (where a
+// ?demoId= override must survive), so callers that actually change the
+// photo set reset requestId themselves right before calling this.
+function renderShots(){
+  shotsEl.innerHTML = '';
+  shots.forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = 'shot';
+    div.innerHTML = `<img src="${s.dataUrl}"><button class="rm" data-i="${i}">×</button>`;
+    shotsEl.appendChild(div);
+  });
+  if (shots.length < MAX_PAGES){
+    const add = document.createElement('button');
+    add.className = 'addbtn';
+    add.textContent = '+';
+    add.onclick = () => fileInput.click();
+    shotsEl.appendChild(add);
+  }
+  submitBtn.disabled = shots.length === 0;
+  shotsEl.querySelectorAll('.rm').forEach(btn => {
+    btn.onclick = () => { shots.splice(+btn.dataset.i, 1); requestId = null; renderShots(); };
+  });
+  saveShots();
+}
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      // 1568 matches Claude's own long-edge downscale cap, so nothing above
+      // that resolution is actually seen by the model anyway -- sending it
+      // was pure wasted upload bandwidth (real 4G is often the bottleneck,
+      // not the request itself). Quality reverted to 0.9 (was briefly 0.85)
+      // after a live report of confidently-wrong grading on trivial,
+      // unambiguous arithmetic -- reading fine pencil handwriting on a busy
+      // photographed page is exactly what extra JPEG compression hurts
+      // first, and accuracy is the one non-negotiable requirement here.
+      const maxDim = 1568;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      // A real live bug traced to a root cause: the model was reading a
+      // box with faint pencil handwriting as blank ("student answer: ''"),
+      // confirmed via server-side logging showing it confidently computing
+      // the right answer while marking the (actually correctly-answered)
+      // question as unanswered. A light, fixed contrast boost -- push
+      // values away from mid-grey, same amount everywhere, not a full
+      // auto-levels stretch that could blow out already-high-contrast
+      // printed text -- makes faint grey pencil strokes read as more
+      // clearly "not paper" without meaningfully changing anything that
+      // already had good contrast (dark ink, printed text, photos).
+      try {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        const factor = 1.25; // modest: enough to help faint pencil, not so much it looks processed
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = Math.min(255, Math.max(0, (d[i] - 128) * factor + 128));
+          d[i + 1] = Math.min(255, Math.max(0, (d[i + 1] - 128) * factor + 128));
+          d[i + 2] = Math.min(255, Math.max(0, (d[i + 2] - 128) * factor + 128));
+        }
+        ctx.putImageData(imgData, 0, 0);
+      } catch (e) { /* best-effort -- an unenhanced photo beats a broken one */ }
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+fileInput.onchange = async () => {
+  const files = Array.from(fileInput.files || []).slice(0, MAX_PAGES - shots.length);
+  for (const f of files) {
+    try { shots.push(await fileToBase64(f)); } catch(e){}
+  }
+  fileInput.value = '';
+  requestId = null;
+  renderShots();
+};
+
+function checkMonthlyLimit(){
+  try {
+    const key = 'hwcheck_submissions';
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(key) || '[]')).filter(t => now - t < 30*24*3600*1000);
+    const banner = document.getElementById('limitBanner');
+    if (list.length >= MAX_SUBMISSIONS_PER_MONTH) {
+      banner.textContent = `本月已用完 ${MAX_SUBMISSIONS_PER_MONTH} 次免費檢查次數，下個月再嚟啦。`;
+      banner.hidden = false;
+      return false;
+    }
+    if (list.length >= MAX_SUBMISSIONS_PER_MONTH - 5) {
+      banner.textContent = `本月仲有 ${MAX_SUBMISSIONS_PER_MONTH - list.length} 次檢查次數。`;
+      banner.hidden = false;
+    }
+    return true;
+  } catch(e){ return true; }
+}
+function recordSubmission(){
+  try {
+    const key = 'hwcheck_submissions';
+    const now = Date.now();
+    const list = (JSON.parse(localStorage.getItem(key) || '[]')).filter(t => now - t < 30*24*3600*1000);
+    list.push(now);
+    localStorage.setItem(key, JSON.stringify(list));
+  } catch(e){}
+}
+checkMonthlyLimit();
+
+function markClass(correct){
+  if (correct === true) return 'good';
+  if (correct === false) return 'bad';
+  return 'unsure';
+}
+function markIcon(correct){
+  // Hand-drawn-looking pen strokes (curved, tapered via round linecaps) so
+  // marks read as "red pen check", not a typeset glyph. The check's
+  // up-stroke used to sweep across almost the whole viewBox width at a
+  // very shallow angle -- compact on its own, but on a busy page with
+  // several answers close together that long diagonal visually crossed
+  // over neighbouring text, reading as "crooked" rather than as a check
+  // sitting on one answer (a live, repeated report: "啲tick全部都歪晒").
+  // Redrawn as a standard, contained checkmark shape (short down-stroke,
+  // a shorter and steeper up-stroke) that stays within its own box.
+  if (correct === true) {
+    return '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M4,13 Q7,16 9,18 Q14,11 20,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  if (correct === false) {
+    return '<svg width="20" height="20" viewBox="0 0 28 28"><path d="M3,3 Q14,13 25,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M25,3 Q14,13 3,25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  }
+  return '?';
+}
+
+// Pages are now graded by independent, parallel requests (see
+// submitBtn.onclick below) so each page's marked-up result can appear the
+// moment IT finishes, instead of the parent waiting for every page in one
+// big request. This builds an empty "pending" slot per page up front, in
+// the right order, then fillPageResult() below drops each page's real
+// marks in as its own request resolves -- slots fill out of order exactly
+// as fast as each page actually finishes, but always stay visually in
+// their original page order.
+function renderResultShells(){
+  resultsEl.innerHTML = '';
+  shots.forEach((s, pIdx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'result-page pending';
+    wrap.dataset.page = pIdx;
+    wrap.innerHTML = `<div class="imgwrap"><img src="${s.dataUrl}"><div class="page-spinner"><span class="spinner"></span></div></div>`;
+    resultsEl.appendChild(wrap);
+  });
+  const scoreBanner = document.createElement('div');
+  scoreBanner.className = 'score-banner';
+  resultsEl.appendChild(scoreBanner);
+  const list = document.createElement('div');
+  list.className = 'confirm-list';
+  resultsEl.appendChild(list);
+  uploadCard.hidden = true;
+  againWrap.hidden = false;
+}
+
+// Fills in one page's slot once that page's own request has resolved.
+// `data` is the single shared results object accumulated across all pages
+// (so mark-tap/confirm handlers below keep working against the whole set,
+// same as before this page split).
+// Rotates a data URL by `deg` (90/180/270, CLOCKWISE -- same convention the
+// server's Photon rotate() uses) via canvas, so the client's own displayed
+// copy matches whatever upright frame the server computed bbox percentages
+// against. Canvas ctx.rotate() is clockwise for positive angles (its Y axis
+// also points down, same as image pixel coordinates), so this deliberately
+// mirrors the server's convention rather than re-deriving it independently.
+function rotateDataUrl(dataUrl, deg){
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      const w = im.naturalWidth, h = im.naturalHeight;
+      const canvas = document.createElement('canvas');
+      const swapped = (deg === 90 || deg === 270);
+      canvas.width = swapped ? h : w;
+      canvas.height = swapped ? w : h;
+      const ctx = canvas.getContext('2d');
+      if (deg === 90) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
+      else if (deg === 180) { ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); }
+      else if (deg === 270) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
+      ctx.drawImage(im, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
+    };
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+}
+
+async function fillPageResult(data, pIdx){
+  const wrap = resultsEl.querySelector(`.result-page[data-page="${pIdx}"]`);
+  if (!wrap) return;
+  wrap.classList.remove('pending');
+  const s = shots[pIdx];
+  // A sideways/upside-down photo: the server already rotated its own copy
+  // before grading (so bbox percentages are relative to that upright
+  // frame) and reports how much here. Apply the SAME rotation to the
+  // photo actually shown to the parent, or the marks below would land as
+  // if the visible photo were upright when it isn't. Only ever done once
+  // per page (rotationApplied guards a fillPageResult that runs again
+  // later, e.g. after a manual confirm tap, from re-rotating an
+  // already-corrected image).
+  const rot = data.pageRotations && data.pageRotations[pIdx];
+  if (rot && s && s._rotationApplied !== rot) {
+    try { s.dataUrl = await rotateDataUrl(s.dataUrl, rot); s._rotationApplied = rot; }
+    catch (e) { /* best-effort -- an unrotated photo beats a broken one */ }
+  }
+  const pageItems = (data.results || []).filter(r => (r.page || 0) === pIdx);
+  const marksHtml = pageItems.map((r, ri) => {
+    if (!r.bbox) return '';
+    const cx = (r.bbox.x || 0) + (r.bbox.w || 0);
+    const cy = (r.bbox.y || 0) + (r.bbox.h || 0);
+    // Only cross/unsure marks are actually drawn -- a live report that
+    // marks were showing up missing for some answers and duplicated near
+    // others was hard to even see clearly with every single correct
+    // answer ALSO getting its own checkmark cluttering the same busy
+    // page. Matches how a real teacher often marks simple worksheets too
+    // (circle what's wrong, leave the rest alone). A correct item still
+    // gets an invisible same-size, same-position tap target (opacity:0)
+    // so a parent who spots an AI mistake can still tap that exact answer
+    // to flag it wrong -- the override interaction isn't lost, just not
+    // visually noisy by default.
+    const hiddenStyle = r.correct === true ? 'opacity:0;' : '';
+    const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;${hiddenStyle}" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
+    const ans = (r.correct === false && r.correctAnswer)
+      ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
+      : '';
+    return mark + ans;
+  }).join('');
+  const img = wrap.querySelector('img');
+  // With correct answers no longer drawing a visible mark, a page that's
+  // entirely correct showed nothing at all -- indistinguishable from one
+  // that failed to grade. A live report flagged exactly this ("好似一個
+  // take都冇有好似好唔清楚咁樣"). One clear badge stands in for what would
+  // otherwise be a wall of identical checkmarks.
+  const allCorrect = pageItems.length > 0 && pageItems.every(r => r.correct === true);
+  const allCorrectBadge = allCorrect ? `<div class="all-correct-badge">全部啱晒！</div>` : '';
+  wrap.querySelector('.imgwrap').innerHTML = `<img src="${s ? s.dataUrl : img.src}">${marksHtml}${allCorrectBadge}`;
+  wrap.querySelectorAll('.mark').forEach(el => {
+    el.onclick = () => toggleMarkOnPhoto(data, +el.dataset.page, +el.dataset.idx);
+  });
+  updateSummary(data);
+}
+
+function markPageFailed(pIdx, message){
+  const wrap = resultsEl.querySelector(`.result-page[data-page="${pIdx}"]`);
+  if (!wrap) return;
+  wrap.classList.remove('pending');
+  wrap.querySelector('.imgwrap').insertAdjacentHTML('beforeend', `<div class="page-spinner"><span class="sub" style="background:#fff; padding:6px 10px; border-radius:8px;">${message}</span></div>`);
+}
+
+// Re-draws the running score banner and the "?" confirm-list from whatever
+// is in `data.results` so far -- called after every page fills in, so both
+// stay live as pages keep arriving instead of only appearing once at the
+// very end.
+function updateSummary(data){
+  const scoreBanner = resultsEl.querySelector('.score-banner');
+  if (scoreBanner) {
+    const graded = (data.results || []).filter(x => x.correct !== null);
+    const correctCount = graded.filter(x => x.correct === true).length;
+    data.score = graded.length ? `${correctCount} / ${graded.length}` : '';
+    scoreBanner.textContent = data.score ? `分數：${data.score}` : '';
+  }
+
+  // The bottom confirm-list (a summary of "?" items with dedicated 啱/錯
+  // buttons) was removed on request -- a parent can still resolve any
+  // "?" mark directly by tapping it on the photo itself (see
+  // toggleMarkOnPhoto below), so the ability to confirm an unsure item
+  // isn't lost, just this separate duplicate list of buttons.
+  const list = resultsEl.querySelector('.confirm-list');
+  if (list) list.innerHTML = '';
+}
+
+// Tapping a mark on the photo flips it -- true/false swap directly; an
+// unresolved "?" resolves to true on first tap (a second tap then flips it
+// to false like any other mark), since a bare tap can't distinguish "mark
+// as correct" from "mark as wrong" the way the confirm-list's two buttons
+// can for genuinely ambiguous items.
+function toggleMarkOnPhoto(data, page, idx){
+  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
+  const r = pageItems[idx];
+  if (!r) return;
+  applyMarkCorrect(data, page, idx, r.correct === true ? false : true);
+}
+
+function applyMarkCorrect(data, page, idx, correct){
+  const pageItems = (data.results || []).filter(x => (x.page||0) === page);
+  const r = pageItems[idx];
+  if (!r) return;
+  r.correct = correct;
+
+  const markEl = document.querySelector(`.mark[data-page="${page}"][data-idx="${idx}"]`);
+  if (markEl) {
+    markEl.className = 'mark ' + markClass(correct);
+    markEl.innerHTML = markIcon(correct);
+  }
+  const ansEl = document.querySelector(`.mark-answer[data-page="${page}"][data-idx="${idx}"]`);
+  if (correct === false && r.correctAnswer && !ansEl && markEl) {
+    const div = document.createElement('div');
+    div.className = 'mark-answer';
+    div.style.left = markEl.style.left;
+    div.style.top = markEl.style.top;
+    div.textContent = r.correctAnswer;
+    markEl.parentNode.appendChild(div);
+  } else if (correct !== false && ansEl) {
+    ansEl.remove();
+  }
+
+  // recompute score
+  const graded = data.results.filter(x => x.correct !== null);
+  const correctCount = graded.filter(x => x.correct === true).length;
+  data.score = `${correctCount} / ${graded.length}`;
+  const banner = document.querySelector('.score-banner');
+  if (banner) banner.textContent = `分數：${data.score}`;
+
+  // this item is resolved now -- drop its row from the confirm-list if it had one
+  document.querySelectorAll('.confirm-item').forEach(item => {
+    if (+item.dataset.page === page && String(item.dataset.q) === String(r.question)) item.remove();
+  });
+}
+
+// Cycling messages so the wait reads as active progress, not a frozen
+// screen -- there's no real per-stage signal from the server (one request/
+// response), so this is an honest "still working" heartbeat rather than a
+// literal progress bar. Timed roughly to how long each real stage tends to
+// take; the last message repeats if it somehow runs long instead of
+// implying something's wrong.
+function genId(){ return crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)); }
+
+// Each page is its own request, sent one at a time (not all at once --
+// see the note inside submitBtn.onclick for why parallel uploads turned
+// out to be unreliable on real mobile connections), carrying forward
+// prior pages' already-graded answers as text context. Each page's own
+// marked-up result still appears the moment ITS request finishes, so a
+// parent sees page 1 well before page 5 is ready, without needing to wait
+// for the whole batch.
+async function restitchSplitPages(currentData, pageA, pageB, deviceId, rememberHandwriting){
+  try {
+    const res = await fetch('/api/mock-check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        images: [
+          { data: shots[pageA].base64, mediaType: 'image/jpeg' },
+          { data: shots[pageB].base64, mediaType: 'image/jpeg' },
+        ],
+        stitchPages: [pageA, pageB],
+        requestId: genId(),
+        deviceId, rememberHandwriting,
+      }),
+    });
+    if (!res.ok) return; // best-effort -- the two pages' independent answers just stand as-is
+    const data = await res.json();
+    if (!data.results) return;
+    // Replace both pages' results with the jointly-solved version, which
+    // saw the full spanning question and so should be strictly better
+    // informed than either page's standalone guess.
+    currentData.results = currentData.results.filter(r => (r.page || 0) !== pageA && (r.page || 0) !== pageB);
+    currentData.results = currentData.results.concat(data.results);
+    if (data.pageRotations) Object.assign(currentData.pageRotations || (currentData.pageRotations = {}), data.pageRotations);
+    await fillPageResult(currentData, pageA);
+    await fillPageResult(currentData, pageB);
+  } catch (e) { /* best-effort -- leave the two pages' independent answers as-is */ }
+}
+
+submitBtn.onclick = async () => {
+  if (!shots.length) return;
+  if (!checkMonthlyLimit()) return;
+  submitBtn.disabled = true;
+  recordSubmission(); // once per batch, not per page
+  renderResultShells();
+  statusEl.hidden = false;
+  statusEl.className = 'status';
+  statusEl.innerHTML = '<span class="spinner"></span><span>AI檢查緊，逐頁載入緊...</span>';
+
+  const rememberHandwriting = !!rememberHwToggle.checked;
+  const deviceId = rememberHandwriting ? getOrCreateDeviceId() : null;
+  const currentData = { results: [], score: '' };
+  let anySuccess = false, anyError = false;
+  const priorPagesContext = [];
+
+  // Limited concurrency, not fully sequential and not fully parallel:
+  // firing ALL pages' uploads at once competes for the same limited
+  // mobile-upload bandwidth (confirmed live -- every page failed at once
+  // on a real 4G connection). CONCURRENCY=2 was tried as a middle ground
+  // for speed, but a further live report ("5張得1張剔到" -- only 1 of 5
+  // pages came back) on a real, unstable connection tonight showed even 2
+  // concurrent requests is still too much contention for THIS kind of
+  // connection to survive reliably. Reverted to strictly 1-at-a-time:
+  // slower, but reliability/accuracy matters more than speed, and a
+  // sequential request is also the simplest case to reason about while
+  // real-world reliability is still the open problem.
+  const CONCURRENCY = 1;
+  let nextIdx = 0;
+  async function runOne(pIdx){
+    const s = shots[pIdx];
+    if (!s.requestId) {
+      s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
+      if (pIdx === 0) requestId = null; // demoId (if any) only ever applies to the first submission
+    }
+    const attemptOnce = () => fetch('/api/mock-check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        images: [{ data: s.base64, mediaType: 'image/jpeg' }],
+        pageIndex: pIdx,
+        priorPagesContext: priorPagesContext.slice(),
+        requestId: s.requestId,
+        deviceId, rememberHandwriting,
+      }),
+    });
+    try {
+      // One quiet retry on a transient network hiccup before giving up on
+      // this page -- the stable per-page requestId makes a retry that hits
+      // the idempotency cache free. But that cache is only written at the
+      // very END of the server's whole pipeline, so a failure that took a
+      // long time to surface likely means the server already did (and
+      // paid for) most or all of the grading work -- retrying immediately
+      // would just re-run the entire thing a second time instead of
+      // hitting cache. Only retry a FAST failure (a connection that never
+      // really got going); a slow one is left to fail once, cleanly.
+      let res;
+      const attemptStartedAt = Date.now();
+      try { res = await attemptOnce(); } catch (e) {
+        if (Date.now() - attemptStartedAt > 5000) throw e;
+        res = await attemptOnce();
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        anyError = true;
+        markPageFailed(pIdx, data.message || '呢頁檢查失敗');
+        return;
+      }
+      anySuccess = true;
+      currentData.results = currentData.results.concat(data.results || []);
+      // Merged (not replaced) into the shared accumulator, same idea as
+      // `results` above -- fillPageResult reads pageRotations off
+      // whatever's passed as its first arg, and every caller passes
+      // currentData, not this request's own raw response.
+      if (data.pageRotations) Object.assign(currentData.pageRotations || (currentData.pageRotations = {}), data.pageRotations);
+      await fillPageResult(currentData, pIdx);
+      priorPagesContext.push({
+        page: pIdx,
+        results: (data.results || []).map(r => ({ question: r.question, studentAnswer: r.studentAnswer, correct: r.correct, correctAnswer: r.correctAnswer })),
+      });
+
+      // A question can be split across a page boundary (not just "related"
+      // -- literally continuing, e.g. a diagram or word problem that runs
+      // onto the next page). priorPagesContext (text-only) can't fix that,
+      // since the earlier page never saw the rest of the question as an
+      // image. Deliberately searches ALL earlier-completed pages for an
+      // unconsumed continuesToNext flag, not just the immediately-prior
+      // upload -- a parent photographing out of order (e.g. page1, page3,
+      // page2) means the TRUE neighbour isn't necessarily the previous
+      // shot in the array; this still finds page1 as page2's match even
+      // with page3 uploaded in between. Only fires on real evidence of a
+      // split from both sides, not for every submission.
+      if (data.continuesFromPrevious) {
+        const matchIdx = shots.findIndex((sh, i) => i < pIdx && sh._continuesToNext && !sh._stitched);
+        if (matchIdx !== -1) {
+          shots[matchIdx]._stitched = true;
+          await restitchSplitPages(currentData, matchIdx, pIdx, deviceId, rememberHandwriting);
+        }
+      }
+      s._continuesToNext = !!data.continuesToNext;
+
+      // Fired but NOT awaited here -- deliberately doesn't block the
+      // worker pool from moving on to the next page. A live report
+      // showed a page needing every item escalated all the way to Opus
+      // took 52 seconds end to end; the user should see this page's
+      // confident marks immediately and the next page start right away,
+      // not wait through that on top. verifyPromises is awaited once,
+      // separately, after the main pool finishes (see below) so the
+      // overall submit flow still knows when EVERYTHING (not just the
+      // fast part) is truly done.
+      if (data.needsVerify && data.needsVerify.length) {
+        verifyPromises.push(verifyPage(currentData, pIdx, s, data.needsVerify));
+      }
+    } catch (e) {
+      anyError = true;
+      markPageFailed(pIdx, '呢頁網絡錯誤');
+    }
+  }
+
+  // Phase 2: re-sends this page's own image with just the items phase 1
+  // wasn't confident about, gets back patched verdicts, and updates only
+  // those marks in place. Best-effort throughout -- any failure here
+  // just leaves phase 1's marks standing rather than surfacing an error,
+  // since the user already has a usable (if slightly less certain) result.
+  async function verifyPage(data, pIdx, s, needsVerify){
+    try {
+      const items = needsVerify
+        .map(nv => data.results.find(r => (r.page || 0) === (nv.page || 0) && String(r.question) === String(nv.question)))
+        .filter(Boolean);
+      if (!items.length) return;
+      const res = await fetch('/api/mock-verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          images: [{ data: s.base64, mediaType: 'image/jpeg' }],
+          items: items.map(r => ({ question: r.question, page: r.page, bbox: r.bbox, anchor: r.anchor, riskyDiagram: r.riskyDiagram, studentAnswer: r.studentAnswer })),
+          pageIndex: pIdx,
+          requestId: s.requestId + ':verify',
+          deviceId, rememberHandwriting,
+        }),
+      });
+      if (!res.ok) return;
+      const vdata = await res.json();
+      let touched = false;
+      for (const p of (vdata.patches || [])) {
+        const r = data.results.find(x => (x.page || 0) === (p.page || 0) && String(x.question) === String(p.question));
+        if (!r) continue;
+        r.correct = p.correct === undefined ? null : p.correct;
+        r.correctAnswer = p.correctAnswer || '';
+        r.note = p.note || '';
+        r.verifiedBy = p.verifiedBy || 'sonnetZoom';
+        if (p.studentAnswer) r.studentAnswer = p.studentAnswer;
+        touched = true;
+      }
+      if (touched) await fillPageResult(data, pIdx);
+    } catch (e) { /* best-effort -- phase-1 marks stand as-is */ }
+  }
+  const verifyPromises = [];
+
+  // Worker-pool driver: CONCURRENCY workers, each pulling the next
+  // not-yet-started page index off a shared counter until none remain --
+  // keeps exactly CONCURRENCY requests in flight at once (not more), and
+  // starts a new one the instant a slot frees up rather than waiting for
+  // a whole fixed batch to finish.
+  async function worker(){
+    while (nextIdx < shots.length) {
+      const myIdx = nextIdx++;
+      await runOne(myIdx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, shots.length) }, worker));
+
+  submitBtn.disabled = false; // re-enable in case they want to start an unrelated new batch, even while reviewing this one
+  if (!anySuccess && anyError) {
+    statusEl.hidden = false;
+    statusEl.className = 'status err';
+    statusEl.textContent = '網絡錯誤，請再試一次。';
+  } else if (verifyPromises.length) {
+    // The fast part is done and every confident mark is already showing --
+    // this is a quiet "still working" note, not a blocking spinner state.
+    statusEl.hidden = false;
+    statusEl.className = 'status';
+    statusEl.innerHTML = '<span class="spinner"></span><span>AI覆查緊部分題目，隨時會更新…</span>';
+    await Promise.all(verifyPromises);
+    statusEl.hidden = true;
+  } else {
+    statusEl.hidden = true;
+  }
+};
+
+// Only restore a saved queue on a plain page load, not a ?demoId= link --
+// that flow is meant to start from a clean, predictable slate.
+if (!requestId) loadSavedShots();
+
+document.getElementById('againBtn').onclick = () => {
+  shots = [];
+  requestId = null;
+  renderShots();
+  resultsEl.innerHTML = '';
+  uploadCard.hidden = false;
+  againWrap.hidden = true;
+  statusEl.hidden = true;
+};
+
+renderShots();
+</script>
+</body>
+</html>
