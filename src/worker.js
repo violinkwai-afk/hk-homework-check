@@ -442,18 +442,36 @@ async function handleCheckInner(request, env) {
       : '');
 
   let parsed;
-  const usage = { primaryModel: null, deepseekFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
-  // DeepSeek (via OpenRouter) is tried first when configured, with one
-  // retry (a fresh attempt, not a continuation) before giving up -- per
-  // explicit instruction 2026-09-20: Sonnet's real cost (~£5 gone in ~20
-  // real submissions before this session's fixes) makes it unacceptable
-  // as a silent fallback going forward. Once OPENROUTER_API_KEY is
-  // configured, a DeepSeek failure returns a clean "try again" error
-  // instead of quietly spending on Sonnet -- the user would rather see an
-  // explicit failure than an invisible expensive one. Sonnet is used ONLY
-  // when DeepSeek isn't configured at all (env.OPENROUTER_API_KEY unset).
+  const usage = { primaryModel: null, qwenFailReason: null, deepseekFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
+  // Two-tier cheap pipeline, tried when OPENROUTER_API_KEY is configured --
+  // per explicit instruction 2026-09-20: Sonnet's real cost (~£5 gone in
+  // ~20 real submissions before this session's fixes) makes it
+  // unacceptable as a silent fallback. Neither tier ever falls through to
+  // Sonnet; a page either gets a real answer from Qwen/DeepSeek or a
+  // clear "couldn't grade, please check by hand" response.
+  //
+  // 1. Qwen first (non-reasoning, fast, ~0.5-4s) -- cheapest and quickest
+  //    when it works, but real testing showed it silently gives up
+  //    (empty results, caught by callOpenRouterVisionModel's guard) on
+  //    visually complex layouts (circling/ticking/matching).
+  // 2. DeepSeek second, only if Qwen didn't produce usable results --
+  //    slower and less predictable (internal "reasoning" token usage
+  //    varies a lot run-to-run) but has handled everything Qwen gave up
+  //    on in testing so far.
+  // 3. If both fail, tell the user plainly rather than erroring out --
+  //    at least some pages/pass may have partial results already cached
+  //    from prior attempts on retry, and "please check by hand" is more
+  //    actionable than a generic service error.
   if (openrouterKey) {
-    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    try {
+      const r = await callQwen(images.concat(exemplars), deepseekPrompt, openrouterKey);
+      parsed = r.parsed;
+      usage.primaryModel = "qwen";
+      usage.qwen = r.usage;
+    } catch (e) {
+      usage.qwenFailReason = e.kind || "unknown";
+    }
+    if (!parsed) {
       try {
         const r = await callDeepSeek(images.concat(exemplars), deepseekPrompt, openrouterKey);
         parsed = r.parsed;
@@ -464,7 +482,7 @@ async function handleCheckInner(request, env) {
       }
     }
     if (!parsed) {
-      return json({ error: "upstream_error", message: "改功課服務暫時繁忙，請一分鐘後再試一次。" }, 502);
+      return json({ error: "upstream_error", message: "部分題目暫時無法批改，建議家長人手核對，或一分鐘後再試一次。" }, 502);
     }
   }
   if (!parsed) {
@@ -1167,24 +1185,21 @@ async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
   }
 }
 
-// Cheap first-tier grading via DeepSeek V4.1-Flash (through OpenRouter),
-// tried before the Sonnet call above. Same {parsed, usage} / throw contract
-// as callClaude so the call site can fall back to Sonnet on ANY failure
-// (HTTP error, provider-side content-filter block, or the model spending
-// its whole reasoning budget and returning nothing) without special-casing
-// each failure kind. Empirically (2026-09-20, ~15 real worksheets): most
-// pages succeed in a few seconds for a few cents; occasionally a reasoning-
-// heavy page (dense grammar/visual-logic questions) exhausts the token
-// budget with zero output -- excluding the "Alibaba" route (an observed
-// source of false-positive content-moderation blocks on ordinary children's
-// homework) and using a generous 20000 max_tokens noticeably reduces but
-// does not eliminate this, hence the Sonnet fallback rather than trusting
-// DeepSeek alone.
-async function callDeepSeek(images, prompt, openrouterKey) {
+// Shared OpenRouter vision-model caller for both cheap tiers (DeepSeek,
+// Qwen). Same {parsed, usage} / throw contract as callClaude. Guards
+// against every failure shape seen empirically on real worksheets
+// 2026-09-20: an HTTP error, a provider-side content-filter false
+// positive, a reasoning-heavy call that exhausts its token budget with
+// zero output, AND (Qwen specifically) a fast, "successful" but silently
+// empty {"results":[]} on visually complex layouts (circling/ticking/
+// matching, as opposed to plain fill-in-the-blank) -- all of these throw
+// the same upstream_error so the caller can retry or escalate tiers
+// without special-casing each one.
+async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model, maxTokens, timeoutMs, providerFilter, logPrefix }) {
   const body = {
-    model: "deepseek/deepseek-v4.1-flash",
-    max_tokens: 20000,
-    provider: { ignore: ["Alibaba"] },
+    model,
+    max_tokens: maxTokens,
+    ...(providerFilter ? { provider: providerFilter } : {}),
     messages: [
       {
         role: "user",
@@ -1198,29 +1213,21 @@ async function callDeepSeek(images, prompt, openrouterKey) {
       },
     ],
   };
-  // 15s per attempt (the caller retries once, so ~30s worst case total) --
-  // shortened from an initial 30s per explicit instruction prioritizing
-  // speed: a fresh 15s retry is more likely to land a shorter reasoning
-  // chain (usage is stochastic run-to-run, per real testing 2026-09-20)
-  // than waiting out one long attempt to its full length.
-  //
   // Race a plain timer against fetch() rather than relying solely on
   // AbortController -- a live production test (2026-09-20) showed a real
-  // request still hadn't returned after 90+ seconds despite an
-  // AbortSignal-based 30s timeout on the same fetch call, meaning
-  // whatever this Worker's fetch() was actually stuck on (network layer,
-  // the specific OpenRouter/DeepSeek route, or the runtime's own signal
-  // handling for this request shape) did not reliably respond to abort().
-  // Promise.race guarantees this function itself moves on at the deadline
-  // regardless of whether the underlying request ever unwinds -- the
-  // stalled fetch may keep running in the background, but it can no
-  // longer block the response back to the user.
+  // DeepSeek request still hadn't returned after 90+ seconds despite an
+  // AbortSignal-based timeout on the same fetch call, meaning whatever
+  // this Worker's fetch() was actually stuck on did not reliably respond
+  // to abort(). Promise.race guarantees this function itself moves on at
+  // the deadline regardless of whether the underlying request ever
+  // unwinds -- the stalled fetch may keep running in the background, but
+  // it can no longer block the response back to the user.
   const controller = new AbortController();
   const timeoutPromise = new Promise((_, reject) => {
     setTimeout(() => {
       controller.abort();
-      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout_raced", status: 502 });
-    }, 15000);
+      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: `${logPrefix}_timeout_raced`, status: 502 });
+    }, timeoutMs);
   });
   let res;
   try {
@@ -1239,54 +1246,81 @@ async function callDeepSeek(images, prompt, openrouterKey) {
       timeoutPromise,
     ]);
   } catch (e) {
-    console.log(JSON.stringify({ event: "deepseek_error", status: null, detail: "fetch_failed_or_timed_out: " + String((e && e.message) || (e && e.detail)) }));
-    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout", status: 502 };
+    console.log(JSON.stringify({ event: `${logPrefix}_error`, status: null, detail: "fetch_failed_or_timed_out: " + String((e && e.message) || (e && e.detail)) }));
+    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: `${logPrefix}_timeout`, status: 502 };
   }
 
   if (!res.ok) {
     const errText = await res.text();
-    console.log(JSON.stringify({ event: "deepseek_error", status: res.status, detail: errText.slice(0, 500) }));
+    console.log(JSON.stringify({ event: `${logPrefix}_error`, status: res.status, detail: errText.slice(0, 500) }));
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
   }
 
   const data = await res.json();
   const choice = data.choices && data.choices[0];
-  // finish_reason "stop" only -- "length" means it ran out of budget
-  // (possibly with zero content, per the note above) and "error" covers
-  // provider-side failures like the content-moderation false positive;
-  // both must fall back to Sonnet rather than return a truncated/partial
-  // result as if it were complete.
   if (!choice || choice.finish_reason !== "stop") {
     console.log(JSON.stringify({
-      event: "deepseek_incomplete",
+      event: `${logPrefix}_incomplete`,
       finishReason: choice && choice.finish_reason,
       error: choice && choice.error,
       usage: data.usage || null,
     }));
-    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_incomplete", status: 502 };
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: `${logPrefix}_incomplete`, status: 502 };
   }
 
   const text = (choice.message && choice.message.content) || "";
   try {
-    // DeepSeek/OpenRouter sometimes wraps the JSON in a ```json fence even
-    // when told to reply with only the object -- strip that before parsing.
+    // Some OpenRouter models wrap the JSON in a ```json fence even when
+    // told to reply with only the object -- strip that before parsing.
     const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
     const match = stripped.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : stripped);
     // finish_reason "stop" plus valid JSON isn't proof of a USEFUL answer --
-    // a model that decides to end its turn early can still emit a clean but
-    // empty {"results":[],"score":"0/0"}. Treat that the same as any other
-    // incomplete response so it falls back to Sonnet instead of silently
-    // telling the user their homework had zero questions on it.
+    // a model can end its turn early (or, per real Qwen testing, give up
+    // silently on a visually complex layout) with a clean but empty
+    // {"results":[],"score":"0/0"}. Treat that the same as any other
+    // incomplete response.
     if (!Array.isArray(parsed.results) || parsed.results.length === 0) {
-      console.log(JSON.stringify({ event: "deepseek_empty_results", usage: data.usage || null }));
-      throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_empty_results", status: 502 };
+      console.log(JSON.stringify({ event: `${logPrefix}_empty_results`, usage: data.usage || null }));
+      throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: `${logPrefix}_empty_results`, status: 502 };
     }
     return { parsed, usage: data.usage || null };
   } catch (e) {
     if (e && e.kind) throw e;
     throw { kind: "parse_error", uiMessage: "批改結果解析失敗，請再試一次。", detail: text.slice(0, 500), status: 502 };
   }
+}
+
+// Fast, non-reasoning first look -- tried before DeepSeek. Real testing
+// 2026-09-20: very fast (0.5-4s) and cheap when it works, including on
+// worksheets DeepSeek itself struggled with, but silently returns empty
+// results on visually complex layouts (circling/ticking/matching rather
+// than plain fill-in-the-blank) -- caught by the empty-results guard
+// above, which routes it to the DeepSeek retry instead.
+async function callQwen(images, prompt, openrouterKey) {
+  return callOpenRouterVisionModel(images, prompt, openrouterKey, {
+    model: "qwen/qwen3-vl-235b-a22b-instruct",
+    maxTokens: 4096,
+    timeoutMs: 8000,
+    logPrefix: "qwen",
+  });
+}
+
+// Reasoning-based second look, tried when Qwen fails/gives up. Real
+// testing 2026-09-20: most pages succeed in a few seconds for a few
+// cents; occasionally a reasoning-heavy page (dense grammar/visual-logic
+// questions) exhausts the token budget with zero output -- excluding the
+// "Alibaba" route (an observed source of false-positive content-
+// moderation blocks on ordinary children's homework) and a generous
+// max_tokens noticeably reduces but does not eliminate this.
+async function callDeepSeek(images, prompt, openrouterKey) {
+  return callOpenRouterVisionModel(images, prompt, openrouterKey, {
+    model: "deepseek/deepseek-v4.1-flash",
+    maxTokens: 20000,
+    timeoutMs: 12000,
+    providerFilter: { ignore: ["Alibaba"] },
+    logPrefix: "deepseek",
+  });
 }
 
 // Re-sends only the still-unsure items to `model`, using a zoomed-in crop
