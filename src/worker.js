@@ -1088,14 +1088,31 @@ async function callDeepSeek(images, prompt, openrouterKey) {
       },
     ],
   };
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${openrouterKey}`,
-    },
-    body: JSON.stringify(body),
-  });
+  // No observed-in-testing case took anywhere near this long (worst case
+  // ~20s for a reasoning-heavy page that still completed), but nothing
+  // upstream of this call promises an upper bound -- a hung OpenRouter
+  // request with no timeout would leave the whole /api/check response
+  // hanging indefinitely instead of failing fast into the Sonnet fallback,
+  // which is strictly worse than either tier's own normal failure modes.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  let res;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${openrouterKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    console.log(JSON.stringify({ event: "deepseek_error", status: null, detail: "fetch_failed_or_timed_out: " + String(e && e.message) }));
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "deepseek_timeout", status: 502 };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!res.ok) {
     const errText = await res.text();
