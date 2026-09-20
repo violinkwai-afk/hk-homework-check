@@ -14,7 +14,7 @@
 // /api/check is public/unauthenticated -- same per-IP rate limit pattern as
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
-import { PhotonImage, crop, rotate } from "@cf-wasm/photon/workerd";
+import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/photon/workerd";
 
 // Client now sends one /api/check call PER PAGE (see website/index.html), so
 // this counts pages, not submissions -- a single 5-page homework already
@@ -507,8 +507,14 @@ async function handleCheckInner(request, env) {
   //    from prior attempts on retry, and "please check by hand" is more
   //    actionable than a generic service error.
   if (openrouterKey) {
+    // Downscaled once, shared by both tiers -- see downscaleForCheapTier's
+    // own comment for why this exists. bbox stays valid: the model reports
+    // position as a 0-100% fraction of the page, not pixels, so a smaller
+    // image sent to the API doesn't change what the client draws against
+    // the original photo.
+    const cheapTierImages = images.concat(exemplars).map((img) => downscaleForCheapTier(img, 640));
     try {
-      const r = await callQwen(images.concat(exemplars), deepseekPrompt, openrouterKey);
+      const r = await callQwen(cheapTierImages, deepseekPrompt, openrouterKey);
       parsed = r.parsed;
       usage.primaryModel = "qwen";
       usage.qwen = r.usage;
@@ -517,7 +523,7 @@ async function handleCheckInner(request, env) {
     }
     if (!parsed) {
       try {
-        const r = await callDeepSeek(images.concat(exemplars), deepseekPrompt, openrouterKey);
+        const r = await callDeepSeek(cheapTierImages, deepseekPrompt, openrouterKey);
         parsed = r.parsed;
         usage.primaryModel = "deepseek";
         usage.deepseek = r.usage;
@@ -1341,6 +1347,40 @@ async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model,
 // results on visually complex layouts (circling/ticking/matching rather
 // than plain fill-in-the-blank) -- caught by the empty-results guard
 // above, which routes it to the DeepSeek retry instead.
+// Root cause found 2026-09-20 for the live-only Qwen/DeepSeek hangs: NOT
+// prompt length, NOT rotation-detection (isolated and timed separately,
+// under 1s) -- it's specifically this Worker's fetch() struggling with a
+// real ~300-400KB image payload to openrouter.ai. The same image at 640px
+// max dimension (~80KB) completed in ~3s instead of hanging past an 8s
+// timeout; a plain Node script sending the SAME full-size image has no
+// such problem, so this is a Workers-runtime/outbound-fetch-body-size
+// interaction, not a model or prompt issue. Re-encoding smaller
+// specifically for the cheap-tier calls (client's own upload stays at
+// 1568px for whatever still needs it) works around it directly.
+function downscaleForCheapTier(img, maxDim) {
+  let photonImg;
+  try {
+    const bytes = base64ToBytes(img.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width();
+    const h = photonImg.get_height();
+    if (Math.max(w, h) <= maxDim) return img;
+    const scale = maxDim / Math.max(w, h);
+    const resized = resize(photonImg, Math.round(w * scale), Math.round(h * scale), SamplingFilter.Lanczos3);
+    try {
+      return { data: bytesToBase64(resized.get_bytes_jpeg(80)), mediaType: "image/jpeg" };
+    } finally {
+      resized.free();
+    }
+  } catch (e) {
+    // Downscaling is a workaround, not a requirement -- if Photon itself
+    // fails for any reason, send the original image rather than block.
+    return img;
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 async function callQwen(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
     model: "qwen/qwen3-vl-235b-a22b-instruct",
