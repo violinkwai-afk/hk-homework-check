@@ -1121,6 +1121,8 @@ async function callDeepSeek(images, prompt, openrouterKey) {
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${openrouterKey}`,
+          "http-referer": "https://hk-homework-check.violin-kwai.workers.dev",
+          "x-title": "hk-homework-check",
         },
         body: JSON.stringify(body),
         signal: controller.signal,
