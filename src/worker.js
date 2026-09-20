@@ -111,11 +111,23 @@ async function handleTestRotationLatency(request, env) {
     results.rotationError = String(e && e.message);
   }
 
+  const t2 = Date.now();
+  let downscaled = images;
+  try {
+    downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+    results.downscaleMs = Date.now() - t2;
+    results.downscaledSizeBytes = downscaled.map((img) => img.data.length);
+    results.originalSizeBytes = images.map((img) => img.data.length);
+  } catch (e) {
+    results.downscaleMs = Date.now() - t2;
+    results.downscaleError = String(e && e.message);
+  }
+
   const testPrompt = "You are a teacher grading this homework photo. Reply with only this JSON: {\"results\":[{\"question\":\"1\",\"studentAnswer\":\"\",\"correct\":true,\"correctAnswer\":\"\",\"note\":\"\",\"page\":0,\"bbox\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0},\"anchor\":\"\",\"riskyDiagram\":false}],\"score\":\"X / Y\"}";
   if (openrouterKey) {
     const t1 = Date.now();
     try {
-      const r = await callQwen(images, testPrompt, openrouterKey);
+      const r = await callQwen(downscaled, testPrompt, openrouterKey);
       results.qwenOnRealImageMs = Date.now() - t1;
       results.qwenResultCount = r.parsed.results.length;
     } catch (e) {
