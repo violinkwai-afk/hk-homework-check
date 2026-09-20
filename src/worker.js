@@ -22,6 +22,14 @@ import { PhotonImage, crop, rotate } from "@cf-wasm/photon/workerd";
 // before every subsequent page started failing with "短時間內請求太多",
 // which is easy to mistake for a generic error during real testing.
 const CHECK_RATE_LIMIT = 40; // max /api/check calls per IP per hour
+// Speed-over-precision tradeoff (2026-09-20): the bbox-refinement OCR pass
+// (refineWithOcr) is a second Google Vision round trip per page purely to
+// sharpen WHERE a mark is drawn / where a recheck crop is centered -- it
+// never changes correct/wrong. Skipping it trades a bit of visual/crop
+// precision (falls back to the model's own bbox guess) for one fewer
+// network round trip per page. Flip back to true if mark placement or
+// recheck-crop accuracy visibly regresses.
+const REFINE_BBOX_WITH_OCR = false;
 const MAX_HANDWRITING_SAMPLES = 12; // per device, oldest evicted first
 const HANDWRITING_SAMPLE_TTL = 60 * 60 * 24 * 90; // 90 days
 const HANDWRITING_SAMPLES_PER_REQUEST = 3; // new exemplars captured per submission
@@ -449,7 +457,12 @@ async function handleCheckInner(request, env) {
   // are the ones about to get rechecked. `images` here is already the
   // rotation-corrected version from above, so this OCR call (and the bbox
   // it produces) is relative to the same upright frame.
-  if (visionKey && parsed.results && parsed.results.length) {
+  //
+  // Gated behind REFINE_BBOX_WITH_OCR: skipping it saves one Vision round
+  // trip per page. The recheck crop below already falls back to the whole
+  // page when a bbox is missing/unusable, so a less-precise model-estimated
+  // bbox here degrades to a slightly wider recheck crop, not a broken one.
+  if (REFINE_BBOX_WITH_OCR && visionKey && parsed.results && parsed.results.length) {
     try {
       await refineWithOcr(parsed.results, images, visionKey, ocrCache);
     } catch (e) {
@@ -538,7 +551,7 @@ async function handleCheckInner(request, env) {
     verifiedByCounts[r.verifiedBy || "sonnet"] = (verifiedByCounts[r.verifiedBy || "sonnet"] || 0) + 1;
   }
   parsed.needsVerify = (parsed.results || []).filter((r) => r.verifiedBy === "pending").map((r) => ({ page: r.page, question: r.question }));
-  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: !!visionKey, verifiedByCounts, elapsedMs: Date.now() - startedAt }));
+  console.log(JSON.stringify({ event: "check_usage", pages: images.length, usage, ocrUsed: REFINE_BBOX_WITH_OCR && !!visionKey, verifiedByCounts, elapsedMs: Date.now() - startedAt }));
   // TEMPORARY, verbose: a repeated live bug (confidently-wrong verdicts on
   // trivially correct answers) survived two targeted fixes already
   // (a prompt clarification, then a self-contradiction safety net) --
