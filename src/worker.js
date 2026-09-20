@@ -78,9 +78,53 @@ export default {
     if (url.pathname === "/api/test-deepseek-latency" && request.method === "GET") {
       return handleTestDeepSeekLatency(env);
     }
+    // TEMPORARY diagnostic route -- isolating whether detectAndCorrectRotation
+    // (Google Vision OCR + Photon, only exercised for real in this live
+    // environment, never in local Node testing) is what's slow/failing for
+    // a real ~400KB photo, separately from timing the Qwen call on the same
+    // real image with rotation-detection skipped entirely. Remove once the
+    // real cause is found.
+    if (url.pathname === "/api/test-rotation-latency" && request.method === "POST") {
+      return handleTestRotationLatency(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
+
+async function handleTestRotationLatency(request, env) {
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  const visionKey = !env.GOOGLE_VISION_API_KEY ? null
+    : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
+    : await env.GOOGLE_VISION_API_KEY.get();
+  const { images } = await request.json();
+  const results = {};
+
+  const t0 = Date.now();
+  try {
+    const { rotationApplied } = await detectAndCorrectRotation(images, visionKey);
+    results.rotationDetectionMs = Date.now() - t0;
+    results.rotationApplied = rotationApplied;
+  } catch (e) {
+    results.rotationDetectionMs = Date.now() - t0;
+    results.rotationError = String(e && e.message);
+  }
+
+  const testPrompt = "You are a teacher grading this homework photo. Reply with only this JSON: {\"results\":[{\"question\":\"1\",\"studentAnswer\":\"\",\"correct\":true,\"correctAnswer\":\"\",\"note\":\"\",\"page\":0,\"bbox\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0},\"anchor\":\"\",\"riskyDiagram\":false}],\"score\":\"X / Y\"}";
+  if (openrouterKey) {
+    const t1 = Date.now();
+    try {
+      const r = await callQwen(images, testPrompt, openrouterKey);
+      results.qwenOnRealImageMs = Date.now() - t1;
+      results.qwenResultCount = r.parsed.results.length;
+    } catch (e) {
+      results.qwenOnRealImageMs = Date.now() - t1;
+      results.qwenError = e.detail || e.kind;
+    }
+  }
+  return json(results);
+}
 
 async function handleTestDeepSeekLatency(env) {
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
