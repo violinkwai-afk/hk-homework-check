@@ -1505,6 +1505,15 @@ async function callQwenOcrText(images, openrouterKey) {
     // latency-audit findings in memory/commit history) rather than by
     // continuing to swap models.
     model: "qwen/qwen3-vl-235b-a22b-instruct",
+    // 2026-09-22 latency audit: this model is served by 5 OpenRouter
+    // providers (DeepInfra, Venice, Parasail, Alibaba Cloud Int.,
+    // NovitaAI) with no routing preference previously specified --
+    // plausibly why the same single-page request's latency swung
+    // 3-16s. Prefer whichever provider currently has the fastest
+    // time-to-first-token, without changing anything else (model,
+    // prompt, downscale, JPEG quality, parser, verifier, bbox,
+    // concurrency, timeout all untouched).
+    provider: { sort: "latency" },
     max_tokens: 2000,
     messages: [
       {
