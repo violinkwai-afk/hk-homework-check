@@ -1554,15 +1554,17 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
   }
   const text = (choice.message && choice.message.content) || "";
-  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
-  // remove once resolved. Logs the exact raw model output before any
-  // parsing touches it.
-  console.log(JSON.stringify({ event: "debug_raw_ocr_text", text }));
   const items = parseOcrLine(text);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null };
+  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
+  // remove once resolved. `wrangler tail` never captured anything for
+  // this preview branch across 4 real attempts (it appears to only
+  // tail the production deployment, not Workers Builds preview
+  // versions), so returning the raw text in-band is the only reliable
+  // way to inspect it.
+  return { items, usage: data.usage || null, rawText: text };
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
@@ -1896,7 +1898,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, rawText: r.rawText, qwenMs: Date.now() - tQwen }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const visionPromise = !visionKey
@@ -1913,21 +1915,26 @@ async function handleMark(request, env) {
       console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
       return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, rawText: qwenOutcome.rawText, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
   });
   const pagesMs = Date.now() - tPages;
+
+  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
+  // remove once resolved. `wrangler tail` never captured anything for
+  // this preview branch across 4 real attempts (it appears to only
+  // tail the production deployment, not Workers Builds preview
+  // versions), so this is collected in-band and returned in the
+  // response under `_debug` instead of console.log.
+  const debugItems = [];
 
   // Module 2: subject-aware verification (deterministic, no I/O) -- one
   // failed page contributes an empty verdict list, nothing more.
   const tVerify = Date.now();
-  const verdictsByPage = pageResults.map((pr) =>
+  const verdictsByPage = pageResults.map((pr, pageIdx) =>
     pr.failed ? [] : pr.items.map((item) => {
       const verdict = verifyAnswer(item);
-      // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
-      // remove once resolved. Logs exactly what verifyAnswer/verifyMath
-      // received per item and what it decided.
-      console.log(JSON.stringify({
-        event: "debug_verify_item",
+      debugItems.push({
+        page: pageIdx,
         label: item.label,
         printedQuestion: item.printedQuestion,
         studentAnswer: item.studentAnswer,
@@ -1935,7 +1942,7 @@ async function handleMark(request, env) {
         subject: verdict.subject,
         correct: verdict.correct,
         correctAnswer: verdict.correctAnswer,
-      }));
+      });
       return verdict;
     })
   );
@@ -2021,6 +2028,12 @@ async function handleMark(request, env) {
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
     ...(pageErrors.length ? { pageErrors } : {}),
+    // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
+    // remove once resolved.
+    _debug: {
+      rawTextByPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, rawText: pr.rawText || null })),
+      items: debugItems,
+    },
   });
 }
 
