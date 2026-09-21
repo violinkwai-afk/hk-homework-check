@@ -302,32 +302,53 @@ test("riskyDiagram is null (not implemented), never a fake false", async () => {
   assert.equal(json.results[0].riskyDiagram, null);
 });
 
-test("parseOcrLine: items are split correctly even without a plain ASCII comma between them (real observed shape: model uses newlines instead of commas)", async () => {
-  // Real failure: on a 5-item worksheet, several items' content bled into
-  // item 1's studentAnswer as one unparsed blob because the model didn't
-  // reliably place a comma at every item boundary. This reproduces a
-  // plausible concrete shape (the model separates items with a newline
-  // instead of ",") and checks the new "|"-anchored, comma-independent
-  // parser recovers every item.
-  const raw = "3=18÷4=|4\n4=5x8=|40\n5=9x7=|63\n6=4x6=|24";
+test("parseOcrLine: a FULL-WIDTH comma between items is recognised as a boundary (the original real fix, kept)", async () => {
+  const raw = "3=18÷4=|4，4=5x8=|40，5=9x7=|63，6=4x6=|24";
   const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
   const { json } = await callMark(images, { PAGE0: raw });
   const labels = json.results.map((r) => r.question).sort();
   assert.deepEqual(labels, ["3", "4", "5", "6"], "all four items should be recovered as separate items, not merged into one");
 });
 
-test("parseOcrLine: a genuinely separator-less boundary (no comma, no space, trailing digit fragment) is a KNOWN unresolved limitation -- documented, not hidden", async () => {
-  // Honest limitation, not a regression: if the model concatenates one
-  // item's answer directly against the next item's label with NOTHING
-  // between them ("...2" immediately followed by "4=5x8=|40"), no regex
-  // can tell where the boundary should be without more information --
-  // "24" is exactly as valid a label as "2" + "4" split two ways, and if
-  // the resulting misparsed fragment HAPPENS to be its own coherent
-  // equation (5x8=40 is arithmetically true), verifyMath has no way to
-  // know it was misattributed. This test exists to keep that fact
-  // visible (fails loudly if some future change accidentally makes it
-  // WORSE, e.g. by crashing) rather than asserting a guarantee this
-  // parser cannot actually make.
+// 2026-09-22 REGRESSION, caught on the very next real-photo re-test after
+// the first fix shipped: removing the comma-anchor (to handle a
+// hypothesized missing/full-width-comma case) broke the COMMON, previously
+// correct case -- a worksheet that scored 10/15 correctly under the
+// original comma-anchored parser scored 0/15 once the anchor was removed,
+// because a genuine answer like "6+4=10" contains its own "=", and an
+// anchor-free scanner matched "6+4" as a spurious label for the NEXT item,
+// shifting every subsequent item's real answer into the wrong slot. This
+// is the single most important regression test in this file: it must
+// keep passing even if parseOcrLine is touched again for some other
+// reason.
+test("parseOcrLine: comma-separated items whose ANSWERS are themselves full equations (containing their own '=') do not shift into the wrong item", async () => {
+  const items = [
+    { label: "1", printed: "4+6=", answer: "6+4=10" },
+    { label: "2", printed: "2+5=", answer: "5+2=7" },
+    { label: "3", printed: "3+4=", answer: "4+3=7" },
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+  assert.equal(byLabel["1"].studentAnswer, "6+4=10");
+  assert.equal(byLabel["2"].studentAnswer, "5+2=7");
+  assert.equal(byLabel["3"].studentAnswer, "4+3=7");
+  assert.equal(byLabel["1"].correct, true);
+  assert.equal(byLabel["2"].correct, true);
+  assert.equal(byLabel["3"].correct, true);
+});
+
+test("parseOcrLine: a genuinely separator-less boundary (no comma at all, trailing digit fragment) is a KNOWN unresolved limitation -- documented, not hidden", async () => {
+  // Honest limitation, not something this parser can fix: if the model
+  // concatenates one item's answer directly against the next item's
+  // label with NOTHING between them at all (not even a comma), there is
+  // no boundary signal left to anchor on. Comma-anchoring (restored
+  // above, after the 2026-09-22 regression) means this case simply isn't
+  // recovered -- the fragment is silently absorbed into the preceding
+  // item's answer instead of being misattributed to a wrong label, which
+  // is the safer of the two failure modes (an overlong/garbled answer at
+  // least trips MAX_ANSWER_LEN or fails evalArithmetic, rather than
+  // confidently mis-crediting the wrong item).
   const raw = "3=18÷4=|24=5x8=|40";
   const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
   const { json } = await callMark(images, { PAGE0: raw });

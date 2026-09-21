@@ -1562,44 +1562,41 @@ const MAX_ANSWER_LEN = 80;
 // Splits "1=4+6|6+4=10,2=2+5|5+2=7" into [{label, printedQuestion,
 // studentAnswer}].
 //
-// 2026-09-21 real-photo failure: the previous version only recognised a new
-// item starting right after a plain ASCII "," (to avoid splitting on a
+// 2026-09-21 real-photo failure #1: the original version only recognised a
+// new item starting right after a plain ASCII "," (to avoid splitting on a
 // comma that's legitimately part of one item's own multi-sub-answer text,
 // e.g. "6+9=15,5+8=13"). On a 5-item worksheet, 4 of those items' content
-// silently bled into item 1's studentAnswer as one unparsed blob -- the
-// model didn't reliably place a plain "," (or any) separator between every
-// item, so comma-adjacency was too fragile a signal to anchor on.
+// silently bled into item 1's studentAnswer as one unparsed blob.
 //
-// Fixed by anchoring purely on the "label=printed|" shape ANYWHERE in the
-// text, not requiring anything in particular before it. The prompt's format
-// contract only ever puts a "|" once per item (between the printed question
-// and the answer) -- unlike a comma, which the model is free to also use
-// inside one item's own answer text -- so scanning for "|"-terminated
-// "label=printed" runs is the one boundary signal the format actually
-// guarantees, and doesn't depend on the model getting comma placement
-// right. Also normalises full-width punctuation (，＝｜) the model
-// sometimes emits despite being asked for plain ASCII, since that was a
-// plausible contributor to the original miss.
+// First fix attempt (same day) removed the comma-anchor entirely, scanning
+// for the "label=printed|" shape ANYWHERE in the text. That introduced a
+// WORSE real regression (caught on the very next real-photo re-test,
+// 2026-09-22): a genuine multi-token answer like "6+4=10" itself contains
+// an "=" -- so "6+4" got matched as a spurious label for what should have
+// been the NEXT item, shifting every subsequent item's real answer into
+// the wrong slot and leaving the true owner's answer empty. A worksheet
+// that scored 10/15 correctly under the ORIGINAL (comma-anchored) parser
+// scored 0/15 under the "anchor-free" one.
 //
-// Label capture is deliberately tight (max 10 chars, no whitespace/";")
-// -- real labels seen in production are single/double digits or circled
-// numbers, never long or spaced. A wide, permissive label class (the
-// original 30-char, any-non-comma) is exactly what let a PRECEDING item's
-// trailing answer text (e.g. "...2 left") get absorbed into what should
-// have been the NEXT item's label when the model left no separator
-// between them at all -- tightening this doesn't fix every conceivable
-// zero-separator concatenation (a fundamentally ambiguous case no regex
-// can fully resolve without more information), but it does stop the
-// common case of a short trailing answer fragment merging into a real
-// numeric label, and the MAX_ANSWER_LEN guard below is the backstop for
-// whatever still gets through.
+// Reverted to comma-anchoring (an item can only start at the very
+// beginning of the text or right after a ","), which is what correctly
+// handles equation-shaped answers -- but keeps the fixes that don't carry
+// that risk: normalising full-width punctuation (，＝｜；) the model
+// sometimes emits despite being asked for plain ASCII (covers the
+// full-width-comma variant of failure #1 without reopening the
+// mid-answer false-start problem), a tighter label class (max 10 chars,
+// no whitespace/";"), and the MAX_ANSWER_LEN fail-safe below. A model
+// response with NO separator at all between two items (not even a
+// full-width comma) remains a known, accepted, documented limitation --
+// see test/mark.test.js -- rather than something worth reopening this
+// exact regression for.
 function parseOcrLine(text) {
   const norm = String(text).replace(/，/g, ",").replace(/＝/g, "=").replace(/｜/g, "|").replace(/；/g, ";");
   const items = [];
-  const re = /([^,=|\s;]{1,10}?)=([^|]*?)\|/g;
+  const re = /(?:^|,)\s*([^,=|\s;]{1,10}?)=([^|]*?)\|/g;
   const starts = [];
   let m;
-  while ((m = re.exec(norm))) starts.push({ index: m.index, label: m[1].trim() });
+  while ((m = re.exec(norm))) starts.push({ index: m.index + (m[0][0] === "," ? 1 : 0), label: m[1].trim() });
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i].index;
     const end = i + 1 < starts.length ? starts[i + 1].index : norm.length;
