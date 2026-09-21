@@ -508,3 +508,82 @@ test("rate limit: at the threshold is rejected BEFORE any AI call, with its own 
   // just separately-named but accidentally sharing logic.
   assert.equal(await kv.get("checkrate:" + ip), null, "this test never touched /api/check's bucket");
 });
+
+// 2026-09-22 Tier 1: blank-in-the-middle single-blank substitution.
+// Real 235B output confirmed (in-band debug against real photos B/C)
+// printedQuestion correctly preserves a blank token ("?" or "□") while
+// studentAnswer correctly holds just the handwritten fill-in -- no
+// CANARY-style swap. These tests exercise trySubstituteBlank() through
+// the real pipeline, not in isolation, so parseOcrLine's own splitting
+// is exercised too.
+
+test("Tier 1: 54÷?=6 with answer 9 verifies CORRECT (real captured shape, '?' token)", async () => {
+  const items = [{ label: "5", printed: "54÷?=6", answer: "9" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const r = json.results[0];
+  assert.equal(r.correct, true, "54÷9=6 is arithmetically true");
+  assert.equal(r.status, "ok");
+});
+
+test("Tier 1: 4×□=24 with answer 6 verifies CORRECT (real captured shape, '□' token, blank as 2nd operand)", async () => {
+  const items = [{ label: "4", printed: "4×□=24", answer: "6" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const r = json.results[0];
+  assert.equal(r.correct, true, "4×6=24 is arithmetically true");
+});
+
+test("Tier 1: □×4=24 with answer 6 verifies CORRECT (blank as 1st/left operand)", async () => {
+  const items = [{ label: "4", printed: "□×4=24", answer: "6" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const r = json.results[0];
+  assert.equal(r.correct, true, "6×4=24 is arithmetically true");
+});
+
+test("Tier 1: 54÷?=6 with a WRONG answer (8) verifies INCORRECT, not silently accepted", async () => {
+  const items = [{ label: "5", printed: "54÷?=6", answer: "8" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const r = json.results[0];
+  assert.equal(r.correct, false, "54÷8=6.75, not 6 -- must not be waved through as correct");
+});
+
+test("Tier 1: zero blank tokens does NOT trigger substitution -- ordinary items behave exactly as before", async () => {
+  // "10+4=" has no "?" or "□" at all; this must go through the
+  // pre-existing case 2 (bare answer vs clean printed expression) path
+  // completely unchanged.
+  const items = [
+    { label: "8", printed: "10+4=", answer: "14" },
+    { label: "9", printed: "10+4=", answer: "15" },
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+  assert.equal(byLabel["8"].correct, true);
+  assert.equal(byLabel["9"].correct, false);
+  assert.equal(byLabel["9"].correctAnswer, "14");
+});
+
+test("Tier 1: TWO blank tokens in one printedQuestion is ambiguous -- must stay needs_review/null, never guess which one", async () => {
+  const items = [{ label: "6", printed: "□+□=10", answer: "5" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const r = json.results[0];
+  assert.equal(r.correct, null, "ambiguous which blank '5' fills -- must not guess a position");
+  assert.equal(r.status, "needs_review");
+});
+
+test("Tier 1 does not touch the original CANARY false-positive shape (no blank token present, so trySubstituteBlank never applies)", async () => {
+  // "54÷9" (the SWAPPED shape from the original 8B/30B false positive)
+  // contains NEITHER "?" nor "□" -- trySubstituteBlank must return null
+  // immediately (count === 0) and this must fall through to the exact
+  // same pre-Tier-1 behaviour as the standalone CANARY test elsewhere
+  // in this file. This is not something Tier 1 claims to fix.
+  const raw = "5=54÷9|6";
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: raw });
+  const r = json.results[0];
+  assert.equal(r.correct, true, "known limitation, unchanged by Tier 1 -- see the CANARY test for the full explanation");
+});

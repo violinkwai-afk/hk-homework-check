@@ -1661,6 +1661,49 @@ function evalArithmetic(str) {
   return Number.isNaN(result) ? null : result;
 }
 
+// Recognized "blank" placeholder tokens a worksheet's OWN print uses to
+// mark a missing operand (e.g. printedQuestion "54÷?=6" or "4×□=24").
+// Confirmed via REAL Qwen3-VL-235B output on real photos (2026-09-22
+// investigation, in-band debug against worksheets B and C -- not
+// guessed from what the prompt asks for). Kept to exactly the tokens
+// actually observed; do not add more without similar real evidence.
+const BLANK_TOKENS = ["?", "□"];
+
+// Tier 1 of the blank-in-the-middle fix (2026-09-22): handles ONLY the
+// single-blank case -- exactly one recognized token anywhere in
+// printedQuestion, one (already OCR'd) answer value. Substitutes that
+// value into the blank and verifies the resulting full equation with
+// the SAME arithmetic check as case 1 below. This is verification, not
+// generation: the value being checked is what OCR already read as the
+// student's handwriting; this function never invents one.
+//
+// Deliberately narrow and fail-safe:
+// - 0 recognized tokens -> not this case; returns null so the caller
+//   falls through to the existing case 1/2 logic UNCHANGED.
+// - 2+ tokens (multiple blanks in one item, e.g. real worksheet B's
+//   "4×□=24,24÷□=4,...") -> ambiguous which blank the single answer
+//   fills, so this returns null rather than guessing a position.
+//   Multi-blank items are an explicitly deferred, separate problem
+//   (Tier 2), not attempted here.
+// - No "=" left after substitution, or either side doesn't parse as a
+//   clean number/expression -> null (needs_review), never a guess.
+function trySubstituteBlank(printedQuestion, sub) {
+  const printed = String(printedQuestion || "");
+  let token = null, count = 0;
+  for (const t of BLANK_TOKENS) {
+    const n = printed.split(t).length - 1;
+    if (n > 0) { count += n; if (!token) token = t; }
+  }
+  if (count !== 1) return null;
+  const reconstructed = printed.replace(token, sub);
+  const eqIdx = reconstructed.indexOf("=");
+  if (eqIdx === -1) return null;
+  const lhsVal = evalArithmetic(reconstructed.slice(0, eqIdx));
+  const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
+  if (lhsVal === null || Number.isNaN(rhsVal)) return null;
+  return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
+}
+
 // Deterministic verification -- code decides correct/wrong, never the AI.
 // Handles the case real testing showed AI judgment gets wrong (an equation
 // the student rewrote in a different, still-valid order/form) by only
@@ -1688,6 +1731,14 @@ function verifyMath(printedQuestion, studentAnswer) {
   if (!subAnswers.length) return { correct: false, correctAnswer: "" };
 
   const results = subAnswers.map((sub) => {
+    // Tier 1 blank-in-the-middle check, tried FIRST since it's more
+    // specific than the generic cases below. Returns null (not a
+    // verdict) whenever it doesn't apply -- 0 or 2+ blank tokens, or
+    // anything that doesn't cleanly reconstruct -- so every other
+    // shape's behaviour (including all existing tests) is unchanged.
+    const substituted = trySubstituteBlank(printedQuestion, sub);
+    if (substituted) return substituted;
+
     // Case 1: the student's own answer is a full equation ("5+2=7") --
     // verify it's internally true. This is the common case for "complete
     // the sum" style questions and needs no understanding of the printed
@@ -1739,7 +1790,22 @@ function detectSubject(printedQuestion, studentAnswer) {
   // PRINTED question itself is a computable expression (e.g. "4+6=").
   const hasOperatorShape = /\d\s*[+\-*x×÷/]\s*-?\d/.test(text);
   const printedIsExpression = evalArithmetic(String(printedQuestion || "").replace(/=\s*$/, "")) !== null;
-  if (hasOperatorShape || printedIsExpression) return "math";
+  // A printed line containing a recognized blank token (e.g. "54÷?=6")
+  // is unmistakably a math question, even though neither check above
+  // can parse it as-is (that's exactly what trySubstituteBlank, Tier 1
+  // 2026-09-22, exists to handle downstream) -- without this, such
+  // items fell through to "uncertain" and verifyMath was never even
+  // called. Guarded against "?" being a genuine sentence-ending
+  // question mark ("What is your name?"): only counts if digits AND an
+  // operator remain once the token itself is removed, so an ordinary
+  // English/Chinese question is never misrouted into the math lane.
+  const printedHasBlankToken = BLANK_TOKENS.some((t) => {
+    const printed = String(printedQuestion || "");
+    if (!printed.includes(t)) return false;
+    const withoutToken = printed.split(t).join("");
+    return /\d/.test(withoutToken) && /[+\-*x×÷/]/.test(withoutToken);
+  });
+  if (hasOperatorShape || printedIsExpression || printedHasBlankToken) return "math";
   if (/[一-鿿]/.test(text)) return "chinese";
   if (/[a-zA-Z]/.test(String(studentAnswer || ""))) return "english";
   return "uncertain";
