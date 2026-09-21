@@ -1515,7 +1515,14 @@ async function callQwenOcrText(images, openrouterKey) {
     // other means (downscale, already applied; see the ongoing
     // latency-audit findings in memory/commit history) rather than by
     // continuing to swap models.
-    model: "qwen/qwen3-vl-235b-a22b-instruct",
+    //
+    // TEMPORARY (branch test/qwen32b-benchmark, 2026-09-22): swapped to
+    // qwen3-vl-32b-instruct for a real-photo latency/quality benchmark
+    // against the 235B baseline above -- 32B is DENSE (unlike the
+    // already-rejected 30B-A3B, which is MoE with only ~3B active
+    // params per token, a likely factor in its segmentation failures).
+    // Preview-branch-only; do not merge this line to main.
+    model: "qwen/qwen3-vl-32b-instruct",
     // 2026-09-22 latency audit #1 result: provider:{sort:"latency"} was
     // tried and rejected -- real benchmark showed it made every case
     // SLOWER (not faster) and one case notably LESS accurate (matching
