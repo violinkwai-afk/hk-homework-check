@@ -1551,29 +1551,75 @@ async function callQwenOcrText(images, openrouterKey) {
   return { items, usage: data.usage || null };
 }
 
+// A real handwritten sub-answer is short; anything wildly longer than that
+// is a signal that an item boundary was missed and several items' content
+// bled into one -- see MAX_ANSWER_LEN below. Printed questions are NOT
+// capped the same way: a genuine English/Chinese word-problem question can
+// legitimately run to a full sentence, so only the (always-short,
+// handwritten) answer side is treated as suspicious when it's long.
+const MAX_ANSWER_LEN = 80;
+
 // Splits "1=4+6|6+4=10,2=2+5|5+2=7" into [{label, printedQuestion,
-// studentAnswer}]. Splitting on "," is unsafe if an answer itself contains
-// a comma (item 9 in real testing was "6+9=15,5+8=13") -- so this only
-// treats a comma as a NEW item's separator when what follows immediately
-// matches `<label>=`, not on every comma in the string.
+// studentAnswer}].
+//
+// 2026-09-21 real-photo failure: the previous version only recognised a new
+// item starting right after a plain ASCII "," (to avoid splitting on a
+// comma that's legitimately part of one item's own multi-sub-answer text,
+// e.g. "6+9=15,5+8=13"). On a 5-item worksheet, 4 of those items' content
+// silently bled into item 1's studentAnswer as one unparsed blob -- the
+// model didn't reliably place a plain "," (or any) separator between every
+// item, so comma-adjacency was too fragile a signal to anchor on.
+//
+// Fixed by anchoring purely on the "label=printed|" shape ANYWHERE in the
+// text, not requiring anything in particular before it. The prompt's format
+// contract only ever puts a "|" once per item (between the printed question
+// and the answer) -- unlike a comma, which the model is free to also use
+// inside one item's own answer text -- so scanning for "|"-terminated
+// "label=printed" runs is the one boundary signal the format actually
+// guarantees, and doesn't depend on the model getting comma placement
+// right. Also normalises full-width punctuation (，＝｜) the model
+// sometimes emits despite being asked for plain ASCII, since that was a
+// plausible contributor to the original miss.
+//
+// Label capture is deliberately tight (max 10 chars, no whitespace/";")
+// -- real labels seen in production are single/double digits or circled
+// numbers, never long or spaced. A wide, permissive label class (the
+// original 30-char, any-non-comma) is exactly what let a PRECEDING item's
+// trailing answer text (e.g. "...2 left") get absorbed into what should
+// have been the NEXT item's label when the model left no separator
+// between them at all -- tightening this doesn't fix every conceivable
+// zero-separator concatenation (a fundamentally ambiguous case no regex
+// can fully resolve without more information), but it does stop the
+// common case of a short trailing answer fragment merging into a real
+// numeric label, and the MAX_ANSWER_LEN guard below is the backstop for
+// whatever still gets through.
 function parseOcrLine(text) {
+  const norm = String(text).replace(/，/g, ",").replace(/＝/g, "=").replace(/｜/g, "|").replace(/；/g, ";");
   const items = [];
-  const re = /(?:^|,)\s*([^,=]{1,30}?)=([^|]*)\|/g;
+  const re = /([^,=|\s;]{1,10}?)=([^|]*?)\|/g;
   const starts = [];
   let m;
-  while ((m = re.exec(text))) starts.push({ index: m.index + (m[0].startsWith(",") ? 1 : 0), label: m[1].trim() });
+  while ((m = re.exec(norm))) starts.push({ index: m.index, label: m[1].trim() });
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i].index;
-    const end = i + 1 < starts.length ? starts[i + 1].index : text.length;
-    const chunk = text.slice(start, end).replace(/,\s*$/, "");
+    const end = i + 1 < starts.length ? starts[i + 1].index : norm.length;
+    const chunk = norm.slice(start, end).replace(/,\s*$/, "");
     const eqIdx = chunk.indexOf("=");
     const barIdx = chunk.indexOf("|");
     if (eqIdx === -1 || barIdx === -1 || barIdx < eqIdx) continue;
-    items.push({
-      label: chunk.slice(0, eqIdx).trim(),
-      printedQuestion: chunk.slice(eqIdx + 1, barIdx).trim(),
-      studentAnswer: chunk.slice(barIdx + 1).trim(),
-    });
+    const label = chunk.slice(0, eqIdx).trim();
+    const printedQuestion = chunk.slice(eqIdx + 1, barIdx).trim();
+    const studentAnswer = chunk.slice(barIdx + 1).trim();
+    // Fail safe rather than silently present several items' content
+    // stitched together as if it were one clean answer -- flow it through
+    // as needs_review (verifyAnswer checks parseFailed first) instead of
+    // dropping it, so a human still sees SOMETHING was there for this
+    // label, just flagged as not reliably parsed.
+    if (studentAnswer.length > MAX_ANSWER_LEN) {
+      items.push({ label, printedQuestion, studentAnswer, parseFailed: true });
+      continue;
+    }
+    items.push({ label, printedQuestion, studentAnswer });
   }
   return items;
 }
@@ -1612,7 +1658,19 @@ function evalArithmetic(str) {
 // text) -- reported honestly rather than guessed, per explicit instruction
 // not to claim 100% code-verified when a case genuinely isn't.
 function verifyMath(printedQuestion, studentAnswer) {
-  const subAnswers = String(studentAnswer).split(";").map((s) => s.trim()).filter(Boolean);
+  // 2026-09-21 real-photo failure: on a worksheet where the printed "="
+  // sits immediately before the answer box, OCR echoed it INTO the
+  // answer ("=5" instead of "5") for every item -- which made every one
+  // of them wrongly take the case-1 "full equation" branch below on an
+  // empty, unparseable left-hand side, so a genuinely verifiable answer
+  // (25÷5=5) reported null instead of true. A bare leading "=" can never
+  // be a meaningful part of an answer's OWN value (an answer to the LEFT
+  // of nothing), so stripping it is a safe, general normalisation, not a
+  // worksheet-specific hack.
+  const subAnswers = String(studentAnswer)
+    .split(";")
+    .map((s) => s.trim().replace(/^=+\s*/, ""))
+    .filter(Boolean);
   if (!subAnswers.length) return { correct: false, correctAnswer: "" };
 
   const results = subAnswers.map((sub) => {
@@ -1682,6 +1740,12 @@ function detectSubject(printedQuestion, studentAnswer) {
 // to fake 100% coverage. Swap in a real Chinese/English checker later by
 // adding a case here; math and the OCR/mapping layers don't change.
 function verifyAnswer(item) {
+  // parseOcrLine flagged this item's answer as too long to trust (a likely
+  // sign several items' content got merged) -- never let it reach a
+  // verification lane, which could otherwise (by coincidence) parse part
+  // of the merged text as a clean-looking equation and report a confident
+  // but meaningless verdict.
+  if (item.parseFailed) return { correct: null, correctAnswer: "", subject: "uncertain" };
   const subject = detectSubject(item.printedQuestion, item.studentAnswer);
   if (subject === "math") return { ...verifyMath(item.printedQuestion, item.studentAnswer), subject };
   return { correct: null, correctAnswer: "", subject };
@@ -1716,7 +1780,7 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   const MAX_SPAN = 5;
   let best = null;
   for (let i = 0; i < visionWords.length; i++) {
-    let acc = "", startWord = null, endWord = null;
+    let acc = "", startWord = null, endWord = null, endIdx = -1;
     for (let j = i; j < Math.min(i + MAX_SPAN, visionWords.length); j++) {
       const hay = String(visionWords[j].text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       if (!hay) continue;
@@ -1725,8 +1789,24 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
       if (!startWord) startWord = visionWords[j];
       acc = nextAcc;
       endWord = visionWords[j];
-      if (acc.length >= 2 && (!best || acc.length > best.matchLen)) {
-        best = { matchLen: acc.length, startWord, endWord };
+      endIdx = j;
+      if (acc.length >= 2) {
+        // A real transcribed expression is almost always immediately
+        // followed by "=" on the source page; a coincidental short match
+        // on unrelated text (e.g. a stray page-number digit) usually
+        // isn't. When two candidates tie on raw matched length, prefer
+        // whichever is followed by a literal "=" -- this breaks exactly
+        // the tie a short (2-char) needle is otherwise defenceless
+        // against (2026-09-21 review: a stray "46" token pair beat a real
+        // "4+6=" match on length alone), without raising the accepted
+        // minimum length itself, which would cost real bbox coverage on
+        // ordinary short single-digit sums.
+        const nextWord = visionWords[endIdx + 1];
+        const followedByEquals = !!(nextWord && String(nextWord.text || "").trim() === "=");
+        const better = !best
+          || acc.length > best.matchLen
+          || (acc.length === best.matchLen && followedByEquals && !best.followedByEquals);
+        if (better) best = { matchLen: acc.length, startWord, endWord, followedByEquals };
       }
     }
   }
@@ -1746,6 +1826,29 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   };
 }
 
+// Bounded-concurrency map -- runs at most `concurrency` calls to `fn` at
+// once, in index order, collecting all results (success or thrown) into an
+// array matching `items`' order regardless of completion order.
+async function mapBounded(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+// At most this many pages' Qwen calls run at once. Bounded (not
+// unlimited) so a large submission doesn't fire N simultaneous OpenRouter
+// requests; low enough to stay well inside real per-request timeouts,
+// high enough that pages still don't run fully sequentially.
+const MARK_PAGE_CONCURRENCY = 2;
+
 async function handleMark(request, env) {
   const startedAt = Date.now();
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
@@ -1761,87 +1864,96 @@ async function handleMark(request, env) {
     return json({ error: "bad_request", message: "images is required" }, 400);
   }
 
-  // Module 1 (OCR) and Module 2 (per-page position lookup) don't depend on
-  // each other's output, so they run concurrently rather than sequentially
-  // (2026-09-21 audit found these were two back-to-back `await`s, adding
-  // Vision's full latency on top of Qwen's for no reason).
-  //
-  // Module 2 now runs ONCE PER PAGE (previously only images[0]), because
-  // page attribution below is decided from each page's own Vision data,
-  // not from the OCR model claiming a page number -- the model was never
-  // asked for one and shouldn't be trusted for it even if it started
-  // guessing; matching against real per-page word positions is a
-  // server-side-verifiable signal, consistent with how math is verified
-  // by code rather than AI elsewhere in this pipeline.
-  let qwenMs = null, visionMs = null;
-  const tOcr = Date.now();
-  const qwenPromise = callQwenOcrText(images, openrouterKey).then((r) => { qwenMs = Date.now() - tOcr; return r; });
-  const tVision = Date.now();
-  const visionPromise = !visionKey
-    ? Promise.resolve(images.map(() => null))
-    : Promise.all(images.map((img, idx) =>
-        googleOcr(img.data, visionKey).catch((e) => {
-          console.log(JSON.stringify({ event: "mark_vision_page_error", page: idx, error: String(e) }));
-          return null; // one page's Vision failure shouldn't sink the whole request
-        })
-      )).then((r) => { visionMs = Date.now() - tVision; return r; });
+  // Per-page pipeline (2026-09-21 rewrite, replacing one combined
+  // multi-image Qwen call): a real 4-page submission reliably hit
+  // callQwenOcrText's 15s per-call timeout when all 4 images went in one
+  // request, failing the ENTIRE submission with nothing recovered from
+  // any page. Calling Qwen once PER PAGE fixes that (a slow/failing page
+  // only costs that page) and also makes page identity structural --
+  // which call produced an item -- rather than guessed afterwards by
+  // matching against every page's Vision words. Pages run with bounded
+  // concurrency, each page's Qwen+Vision calls still running in parallel
+  // with each other (not sequential) as before.
+  const tPages = Date.now();
+  const pageResults = await mapBounded(images, MARK_PAGE_CONCURRENCY, async (img, pageIdx) => {
+    const tQwen = Date.now();
+    const qwenPromise = callQwenOcrText([img], openrouterKey)
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
+      .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
+    const tVision = Date.now();
+    const visionPromise = !visionKey
+      ? Promise.resolve(null)
+      : googleOcr(img.data, visionKey)
+          .then((r) => (r ? { ...r, visionMs: Date.now() - tVision } : null))
+          .catch((e) => {
+            console.log(JSON.stringify({ event: "mark_vision_page_error", page: pageIdx, error: String(e) }));
+            return null; // this page's Vision failure costs only its own bbox data, not the page's OCR
+          });
+    const [qwenOutcome, vision] = await Promise.all([qwenPromise, visionPromise]);
+    if (!qwenOutcome.ok) {
+      const e = qwenOutcome.error;
+      console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
+      return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    }
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+  });
+  const pagesMs = Date.now() - tPages;
 
-  let ocrResult, visionPages;
-  try {
-    [ocrResult, visionPages] = await Promise.all([qwenPromise, visionPromise]);
-  } catch (e) {
-    return json({ error: e.kind || "upstream_error", message: e.uiMessage || "改功課服務暫時無法使用，請稍後再試。" }, e.status || 502);
-  }
-
-  // Module 3: subject-aware verification (deterministic, no I/O).
+  // Module 2: subject-aware verification (deterministic, no I/O) -- one
+  // failed page contributes an empty verdict list, nothing more.
   const tVerify = Date.now();
-  const verdicts = ocrResult.items.map((item) => verifyAnswer(item));
+  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => verifyAnswer(item))));
   const verifyMs = Date.now() - tVerify;
 
-  // Module 4: bbox + page assignment -- try every page's word list, keep
-  // whichever page produced the LONGEST match (not the first found), so a
-  // short accidental match on the wrong page can't beat the real one.
+  // Module 3: bbox, scoped to each item's OWN page's Vision words only --
+  // no more cross-page guessing needed now that page identity is already
+  // structural (see above).
   const tMap = Date.now();
-  const matches = ocrResult.items.map((item) => {
-    let best = null;
-    visionPages.forEach((vp, pageIdx) => {
-      if (!vp) return;
-      const m = findBboxForItem(item, vp.words, vp.width, vp.height);
-      if (m && (!best || m.matchLen > best.matchLen)) best = { ...m, page: pageIdx };
-    });
-    return best;
-  });
+  const matchesByPage = pageResults.map((pr) =>
+    pr.failed ? [] : pr.items.map((item) => (pr.vision ? findBboxForItem(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
+  );
   const mapMs = Date.now() - tMap;
 
-  const results = ocrResult.items.map((item, i) => {
-    const verdict = verdicts[i];
-    const match = matches[i];
-    return {
-      question: item.label,
-      studentAnswer: item.studentAnswer,
-      correct: verdict.correct,
-      correctAnswer: verdict.correctAnswer,
-      subject: verdict.subject,
-      // Explicit status alongside `correct` per 2026-09-21 review: null
-      // must read unambiguously as "not resolved", never silently coerced
-      // to a falsy/"wrong" UI state.
-      status: verdict.correct === null ? "needs_review" : "ok",
-      note: verdict.correct === null ? "需要人手複核" : "",
-      // null (not 0) when no page produced a match -- a real, confirmed
-      // page-0 match and "we don't know" must stay distinguishable, since
-      // items were previously silently miscollapsed onto page 0.
-      page: match ? match.page : null,
-      // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
-      // top-left bbox can never be confused with "no match found".
-      bbox: match ? { x: match.x, y: match.y, w: match.w, h: match.h } : null,
-      anchor: item.label,
-      // Not implemented in this pipeline yet. null ("unknown"), not false
-      // ("checked, not risky") -- a future consumer must not read this as
-      // a real, computed answer. /api/check's diagram-risk flag has no
-      // equivalent here yet.
-      riskyDiagram: null,
-      verifiedBy: verdict.correct === null ? "pending" : "code",
-    };
+  // Deterministic merge: a failed page is recorded in `pageErrors` and
+  // simply contributes no items -- every OTHER page's results are
+  // unaffected, unlike the old single-combined-call design where one
+  // failure took down the whole submission.
+  const results = [];
+  const pageErrors = [];
+  pageResults.forEach((pr, pageIdx) => {
+    if (pr.failed) {
+      const e = pr.error;
+      pageErrors.push({ page: pageIdx, error: (e && (e.uiMessage || e.detail)) || String(e) });
+      return;
+    }
+    pr.items.forEach((item, i) => {
+      const verdict = verdictsByPage[pageIdx][i];
+      const match = matchesByPage[pageIdx][i];
+      results.push({
+        question: item.label,
+        studentAnswer: item.studentAnswer,
+        correct: verdict.correct,
+        correctAnswer: verdict.correctAnswer,
+        subject: verdict.subject,
+        // Explicit status alongside `correct` per 2026-09-21 review: null
+        // must read unambiguously as "not resolved", never silently coerced
+        // to a falsy/"wrong" UI state.
+        status: verdict.correct === null ? "needs_review" : "ok",
+        note: verdict.correct === null ? "需要人手複核" : "",
+        // Real page index (which call produced this item), not a guess.
+        page: pageIdx,
+        // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
+        // top-left bbox can never be confused with "no match found".
+        bbox: match ? { x: match.x, y: match.y, w: match.w, h: match.h } : null,
+        anchor: item.label,
+        // Not implemented in this pipeline yet. null ("unknown"), not false
+        // ("checked, not risky") -- a future consumer must not read this as
+        // a real, computed answer. /api/check's diagram-risk flag has no
+        // equivalent here yet.
+        riskyDiagram: null,
+        verifiedBy: verdict.correct === null ? "pending" : "code",
+      });
+    });
   });
 
   const correctCount = results.filter((r) => r.correct === true).length;
@@ -1851,10 +1963,18 @@ async function handleMark(request, env) {
     event: "mark_usage",
     items: results.length,
     pages: images.length,
+    pagesFailed: pageErrors.length,
     needsReview: needsReviewCount,
-    ocrUsage: ocrResult.usage,
-    totalMs, qwenMs, visionMs, verifyMs, mapMs,
+    totalMs, pagesMs, verifyMs, mapMs,
+    perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
   }));
+
+  // Every page failed -- genuinely nothing to return, unlike a partial
+  // multi-page failure (handled below via pageErrors on an otherwise
+  // normal 200 response).
+  if (!results.length && pageErrors.length) {
+    return json({ error: "upstream_error", message: "改功課服務暫時無法使用，請稍後再試。", pageErrors }, 502);
+  }
 
   // needsVerify has NO resolve endpoint yet (unlike /api/check's
   // /api/verify pairing) -- this is backend-only bookkeeping, not a
@@ -1864,6 +1984,7 @@ async function handleMark(request, env) {
     results,
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
+    ...(pageErrors.length ? { pageErrors } : {}),
   });
 }
 
