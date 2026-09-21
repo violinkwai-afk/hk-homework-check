@@ -1661,10 +1661,13 @@ function verifyMath(printedQuestion, studentAnswer) {
 // contain CJK themselves, but a worksheet's header text can).
 function detectSubject(printedQuestion, studentAnswer) {
   const text = `${printedQuestion || ""} ${studentAnswer || ""}`;
-  const hasArithmeticShape =
-    /\d\s*[+\-*x×÷/]\s*-?\d/.test(text) ||
-    /^\s*-?\d+(\.\d+)?\s*$/.test(String(studentAnswer || "").trim());
-  if (hasArithmeticShape) return "math";
+  // A bare numeric answer on its own is NOT enough to call something math --
+  // a reading-comprehension question answered "5" is still English/Chinese.
+  // Only classify as math when an actual operator shows up somewhere, or the
+  // PRINTED question itself is a computable expression (e.g. "4+6=").
+  const hasOperatorShape = /\d\s*[+\-*x×÷/]\s*-?\d/.test(text);
+  const printedIsExpression = evalArithmetic(String(printedQuestion || "").replace(/=\s*$/, "")) !== null;
+  if (hasOperatorShape || printedIsExpression) return "math";
   if (/[一-鿿]/.test(text)) return "chinese";
   if (/[a-zA-Z]/.test(String(studentAnswer || ""))) return "english";
   return "uncertain";
