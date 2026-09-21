@@ -373,6 +373,48 @@ test("full-width punctuation (，＝｜) from the model is normalised, not silen
   assert.deepEqual(labels, ["1", "2"]);
 });
 
+// 2026-09-22 CANARY, not a passing design goal: confirmed via debug data
+// (raw OCR text `5=54÷9|6`, captured in-band since wrangler tail never
+// worked for this preview branch) that BOTH Qwen3-VL-8B and
+// Qwen3-VL-30B-A3B, on a real "blank-in-the-middle" division worksheet
+// (printed "54÷▢=6", student fills in the divisor "9"), stopped doing
+// pure OCR and instead embedded the student's own handwritten digit
+// INTO printedQuestion ("54÷9") while reporting the worksheet's own
+// PRE-PRINTED quotient (6) as studentAnswer. verifyMath then correctly
+// computes 54÷9=6 and matches -- the verdict isn't arithmetically
+// wrong, but studentAnswer no longer represents what the student
+// actually wrote, and any bbox built from it points at the wrong
+// location. This is a real violation of the OCR-only/no-judging
+// design, not just a display quirk -- and the CURRENT deterministic
+// layer (parseOcrLine/verifyMath) has NO way to detect it: a
+// legitimately printed "54÷9=" with bare answer "6" looks structurally
+// identical. There is no fix here yet, only detection: this test locks
+// in the exact known-bad shape so a future model swap that reintroduces
+// it doesn't go unnoticed. If this assertion ever needs to change
+// (e.g. because a real structural fix makes this null/needs_review
+// instead), that's a deliberate, verified improvement -- update the
+// assertion and this comment together, don't just delete the test.
+test("CANARY -- printed/answer swap on blank-in-the-middle division is NOT detected (known limitation, not fixed)", async () => {
+  const raw = "1=25÷5|5,2=12÷3|4,3=18÷2|9,4=48÷6|8,5=54÷9|6,6=56÷8|7,7=42÷6|7,8=36÷4|9";
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: raw });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+
+  // Items 1-4 are a genuine, unambiguous "printed=clean expression,
+  // answer=bare number" shape -- not the swap pattern -- and should
+  // keep verifying correctly regardless of what happens with 5-8.
+  for (const label of ["1", "2", "3", "4"]) {
+    assert.equal(byLabel[label].correct, true, `item ${label} (not the swap shape) should still verify correctly`);
+  }
+
+  // Items 5-8: the swap shape. Documenting CURRENT (undesirable)
+  // behavior -- these report correct:true even though studentAnswer
+  // doesn't represent the student's real handwriting.
+  for (const label of ["5", "6", "7", "8"]) {
+    assert.equal(byLabel[label].correct, true, `item ${label}: known false-positive from the printed/answer swap -- see comment above`);
+  }
+});
+
 test("bounded concurrency: 3 pages all resolve correctly with MARK_PAGE_CONCURRENCY=2", async () => {
   const images = [
     { data: b64("PAGE0"), mediaType: "image/jpeg" },

@@ -1492,24 +1492,19 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
-    // 2026-09-22 latency experiment, round 4: qwen3-vl-8b-instruct
-    // (round 3) was fast (2-6s, often ≤3s) but rejected for real
-    // reliability problems, confirmed with debug data returned in-band
-    // in the response (wrangler tail never captured anything for this
-    // preview branch across several attempts): it silently dropped half
-    // a worksheet's items, collapsed multi-part items back into merged
-    // garbage on complex layouts, and -- most importantly -- for
-    // "blank-in-the-middle" division questions it stopped doing pure
-    // OCR and started restructuring which value counts as "printed" vs
-    // "answer" (embedding the student's own handwritten digit into
-    // printedQuestion and reporting the pre-printed quotient as
-    // studentAnswer), which violates the OCR-only/no-judging design
-    // even though the resulting verdict happened not to be wrong.
-    // Trying qwen/qwen3-vl-30b-a3b-instruct next (MoE, ~3B active
-    // params). Prompt, parsing, verification, bbox, downscale,
-    // concurrency, and timeout all unchanged. Function name kept as-is
-    // for this test.
-    model: "qwen/qwen3-vl-30b-a3b-instruct",
+    // 2026-09-22: back to the validated baseline. DeepSeek V4.1 Flash,
+    // Qwen3-VL-8B, and Qwen3-VL-30B-A3B were all tried as latency
+    // candidates and rejected -- the two smaller Qwen3-VL variants
+    // shared the same real failure (dropped/merged items on complex
+    // layouts, and a confirmed false positive on "blank-in-the-middle"
+    // division questions where the model restructures which value
+    // counts as "printed" vs "answer" -- see test/mark.test.js's
+    // "printed/answer swap" regression test). 235B remains the most
+    // reliable model for this task; latency is being addressed by
+    // other means (downscale, already applied; see the ongoing
+    // latency-audit findings in memory/commit history) rather than by
+    // continuing to swap models.
+    model: "qwen/qwen3-vl-235b-a22b-instruct",
     max_tokens: 2000,
     messages: [
       {
