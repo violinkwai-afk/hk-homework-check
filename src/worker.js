@@ -1480,7 +1480,7 @@ async function callDeepSeek(images, prompt, openrouterKey) {
 
 const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責抄低學生喺呢張功課相入面手寫嘅嘢（OCR），一字不漏咁抄，唔好自己計數或者judge。相有機會打橫/倒轉，先確認閱讀方向。學生成日用鉛筆寫字，筆跡好淺——要仔細睇清楚有冇淺色筆劃，睇唔清就填"?"。
 
-呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。例如：
+呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。「|」呢個符號每一題一定要有、一定唔可以漏——尤其係長除法（例如5)40呢種直式）或者一題有幾個sub-answer嘅情況，都要跟返「題號=印刷題目|答案」呢個format，唔好淨係將啲數字答案接住上一題冧埋一齊列。例如：
 1=4+6|6+4=10,2=2+5|5+2=7,9=make two sums|6+9=15;5+8=13
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1492,7 +1492,24 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
+    // 2026-09-22: back to the validated baseline. DeepSeek V4.1 Flash,
+    // Qwen3-VL-8B, and Qwen3-VL-30B-A3B were all tried as latency
+    // candidates and rejected -- the two smaller Qwen3-VL variants
+    // shared the same real failure (dropped/merged items on complex
+    // layouts, and a confirmed false positive on "blank-in-the-middle"
+    // division questions where the model restructures which value
+    // counts as "printed" vs "answer" -- see test/mark.test.js's
+    // "printed/answer swap" regression test). 235B remains the most
+    // reliable model for this task; latency is being addressed by
+    // other means (downscale, already applied; see the ongoing
+    // latency-audit findings in memory/commit history) rather than by
+    // continuing to swap models.
     model: "qwen/qwen3-vl-235b-a22b-instruct",
+    // 2026-09-22 latency audit #1 result: provider:{sort:"latency"} was
+    // tried and rejected -- real benchmark showed it made every case
+    // SLOWER (not faster) and one case notably LESS accurate (matching
+    // the already-rejected DeepSeek failure pattern almost exactly).
+    // Reverted to default OpenRouter routing (no provider override).
     max_tokens: 2000,
     messages: [
       {
@@ -1551,29 +1568,72 @@ async function callQwenOcrText(images, openrouterKey) {
   return { items, usage: data.usage || null };
 }
 
+// A real handwritten sub-answer is short; anything wildly longer than that
+// is a signal that an item boundary was missed and several items' content
+// bled into one -- see MAX_ANSWER_LEN below. Printed questions are NOT
+// capped the same way: a genuine English/Chinese word-problem question can
+// legitimately run to a full sentence, so only the (always-short,
+// handwritten) answer side is treated as suspicious when it's long.
+const MAX_ANSWER_LEN = 80;
+
 // Splits "1=4+6|6+4=10,2=2+5|5+2=7" into [{label, printedQuestion,
-// studentAnswer}]. Splitting on "," is unsafe if an answer itself contains
-// a comma (item 9 in real testing was "6+9=15,5+8=13") -- so this only
-// treats a comma as a NEW item's separator when what follows immediately
-// matches `<label>=`, not on every comma in the string.
+// studentAnswer}].
+//
+// 2026-09-21 real-photo failure #1: the original version only recognised a
+// new item starting right after a plain ASCII "," (to avoid splitting on a
+// comma that's legitimately part of one item's own multi-sub-answer text,
+// e.g. "6+9=15,5+8=13"). On a 5-item worksheet, 4 of those items' content
+// silently bled into item 1's studentAnswer as one unparsed blob.
+//
+// First fix attempt (same day) removed the comma-anchor entirely, scanning
+// for the "label=printed|" shape ANYWHERE in the text. That introduced a
+// WORSE real regression (caught on the very next real-photo re-test,
+// 2026-09-22): a genuine multi-token answer like "6+4=10" itself contains
+// an "=" -- so "6+4" got matched as a spurious label for what should have
+// been the NEXT item, shifting every subsequent item's real answer into
+// the wrong slot and leaving the true owner's answer empty. A worksheet
+// that scored 10/15 correctly under the ORIGINAL (comma-anchored) parser
+// scored 0/15 under the "anchor-free" one.
+//
+// Reverted to comma-anchoring (an item can only start at the very
+// beginning of the text or right after a ","), which is what correctly
+// handles equation-shaped answers -- but keeps the fixes that don't carry
+// that risk: normalising full-width punctuation (，＝｜；) the model
+// sometimes emits despite being asked for plain ASCII (covers the
+// full-width-comma variant of failure #1 without reopening the
+// mid-answer false-start problem), a tighter label class (max 10 chars,
+// no whitespace/";"), and the MAX_ANSWER_LEN fail-safe below. A model
+// response with NO separator at all between two items (not even a
+// full-width comma) remains a known, accepted, documented limitation --
+// see test/mark.test.js -- rather than something worth reopening this
+// exact regression for.
 function parseOcrLine(text) {
+  const norm = String(text).replace(/，/g, ",").replace(/＝/g, "=").replace(/｜/g, "|").replace(/；/g, ";");
   const items = [];
-  const re = /(?:^|,)\s*([^,=]{1,30}?)=([^|]*)\|/g;
+  const re = /(?:^|,)\s*([^,=|\s;]{1,10}?)=([^|]*?)\|/g;
   const starts = [];
   let m;
-  while ((m = re.exec(text))) starts.push({ index: m.index + (m[0].startsWith(",") ? 1 : 0), label: m[1].trim() });
+  while ((m = re.exec(norm))) starts.push({ index: m.index + (m[0][0] === "," ? 1 : 0), label: m[1].trim() });
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i].index;
-    const end = i + 1 < starts.length ? starts[i + 1].index : text.length;
-    const chunk = text.slice(start, end).replace(/,\s*$/, "");
+    const end = i + 1 < starts.length ? starts[i + 1].index : norm.length;
+    const chunk = norm.slice(start, end).replace(/,\s*$/, "");
     const eqIdx = chunk.indexOf("=");
     const barIdx = chunk.indexOf("|");
     if (eqIdx === -1 || barIdx === -1 || barIdx < eqIdx) continue;
-    items.push({
-      label: chunk.slice(0, eqIdx).trim(),
-      printedQuestion: chunk.slice(eqIdx + 1, barIdx).trim(),
-      studentAnswer: chunk.slice(barIdx + 1).trim(),
-    });
+    const label = chunk.slice(0, eqIdx).trim();
+    const printedQuestion = chunk.slice(eqIdx + 1, barIdx).trim();
+    const studentAnswer = chunk.slice(barIdx + 1).trim();
+    // Fail safe rather than silently present several items' content
+    // stitched together as if it were one clean answer -- flow it through
+    // as needs_review (verifyAnswer checks parseFailed first) instead of
+    // dropping it, so a human still sees SOMETHING was there for this
+    // label, just flagged as not reliably parsed.
+    if (studentAnswer.length > MAX_ANSWER_LEN) {
+      items.push({ label, printedQuestion, studentAnswer, parseFailed: true });
+      continue;
+    }
+    items.push({ label, printedQuestion, studentAnswer });
   }
   return items;
 }
@@ -1601,6 +1661,49 @@ function evalArithmetic(str) {
   return Number.isNaN(result) ? null : result;
 }
 
+// Recognized "blank" placeholder tokens a worksheet's OWN print uses to
+// mark a missing operand (e.g. printedQuestion "54÷?=6" or "4×□=24").
+// Confirmed via REAL Qwen3-VL-235B output on real photos (2026-09-22
+// investigation, in-band debug against worksheets B and C -- not
+// guessed from what the prompt asks for). Kept to exactly the tokens
+// actually observed; do not add more without similar real evidence.
+const BLANK_TOKENS = ["?", "□"];
+
+// Tier 1 of the blank-in-the-middle fix (2026-09-22): handles ONLY the
+// single-blank case -- exactly one recognized token anywhere in
+// printedQuestion, one (already OCR'd) answer value. Substitutes that
+// value into the blank and verifies the resulting full equation with
+// the SAME arithmetic check as case 1 below. This is verification, not
+// generation: the value being checked is what OCR already read as the
+// student's handwriting; this function never invents one.
+//
+// Deliberately narrow and fail-safe:
+// - 0 recognized tokens -> not this case; returns null so the caller
+//   falls through to the existing case 1/2 logic UNCHANGED.
+// - 2+ tokens (multiple blanks in one item, e.g. real worksheet B's
+//   "4×□=24,24÷□=4,...") -> ambiguous which blank the single answer
+//   fills, so this returns null rather than guessing a position.
+//   Multi-blank items are an explicitly deferred, separate problem
+//   (Tier 2), not attempted here.
+// - No "=" left after substitution, or either side doesn't parse as a
+//   clean number/expression -> null (needs_review), never a guess.
+function trySubstituteBlank(printedQuestion, sub) {
+  const printed = String(printedQuestion || "");
+  let token = null, count = 0;
+  for (const t of BLANK_TOKENS) {
+    const n = printed.split(t).length - 1;
+    if (n > 0) { count += n; if (!token) token = t; }
+  }
+  if (count !== 1) return null;
+  const reconstructed = printed.replace(token, sub);
+  const eqIdx = reconstructed.indexOf("=");
+  if (eqIdx === -1) return null;
+  const lhsVal = evalArithmetic(reconstructed.slice(0, eqIdx));
+  const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
+  if (lhsVal === null || Number.isNaN(rhsVal)) return null;
+  return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
+}
+
 // Deterministic verification -- code decides correct/wrong, never the AI.
 // Handles the case real testing showed AI judgment gets wrong (an equation
 // the student rewrote in a different, still-valid order/form) by only
@@ -1612,10 +1715,30 @@ function evalArithmetic(str) {
 // text) -- reported honestly rather than guessed, per explicit instruction
 // not to claim 100% code-verified when a case genuinely isn't.
 function verifyMath(printedQuestion, studentAnswer) {
-  const subAnswers = String(studentAnswer).split(";").map((s) => s.trim()).filter(Boolean);
+  // 2026-09-21 real-photo failure: on a worksheet where the printed "="
+  // sits immediately before the answer box, OCR echoed it INTO the
+  // answer ("=5" instead of "5") for every item -- which made every one
+  // of them wrongly take the case-1 "full equation" branch below on an
+  // empty, unparseable left-hand side, so a genuinely verifiable answer
+  // (25÷5=5) reported null instead of true. A bare leading "=" can never
+  // be a meaningful part of an answer's OWN value (an answer to the LEFT
+  // of nothing), so stripping it is a safe, general normalisation, not a
+  // worksheet-specific hack.
+  const subAnswers = String(studentAnswer)
+    .split(";")
+    .map((s) => s.trim().replace(/^=+\s*/, ""))
+    .filter(Boolean);
   if (!subAnswers.length) return { correct: false, correctAnswer: "" };
 
   const results = subAnswers.map((sub) => {
+    // Tier 1 blank-in-the-middle check, tried FIRST since it's more
+    // specific than the generic cases below. Returns null (not a
+    // verdict) whenever it doesn't apply -- 0 or 2+ blank tokens, or
+    // anything that doesn't cleanly reconstruct -- so every other
+    // shape's behaviour (including all existing tests) is unchanged.
+    const substituted = trySubstituteBlank(printedQuestion, sub);
+    if (substituted) return substituted;
+
     // Case 1: the student's own answer is a full equation ("5+2=7") --
     // verify it's internally true. This is the common case for "complete
     // the sum" style questions and needs no understanding of the printed
@@ -1667,7 +1790,22 @@ function detectSubject(printedQuestion, studentAnswer) {
   // PRINTED question itself is a computable expression (e.g. "4+6=").
   const hasOperatorShape = /\d\s*[+\-*x×÷/]\s*-?\d/.test(text);
   const printedIsExpression = evalArithmetic(String(printedQuestion || "").replace(/=\s*$/, "")) !== null;
-  if (hasOperatorShape || printedIsExpression) return "math";
+  // A printed line containing a recognized blank token (e.g. "54÷?=6")
+  // is unmistakably a math question, even though neither check above
+  // can parse it as-is (that's exactly what trySubstituteBlank, Tier 1
+  // 2026-09-22, exists to handle downstream) -- without this, such
+  // items fell through to "uncertain" and verifyMath was never even
+  // called. Guarded against "?" being a genuine sentence-ending
+  // question mark ("What is your name?"): only counts if digits AND an
+  // operator remain once the token itself is removed, so an ordinary
+  // English/Chinese question is never misrouted into the math lane.
+  const printedHasBlankToken = BLANK_TOKENS.some((t) => {
+    const printed = String(printedQuestion || "");
+    if (!printed.includes(t)) return false;
+    const withoutToken = printed.split(t).join("");
+    return /\d/.test(withoutToken) && /[+\-*x×÷/]/.test(withoutToken);
+  });
+  if (hasOperatorShape || printedIsExpression || printedHasBlankToken) return "math";
   if (/[一-鿿]/.test(text)) return "chinese";
   if (/[a-zA-Z]/.test(String(studentAnswer || ""))) return "english";
   return "uncertain";
@@ -1682,6 +1820,12 @@ function detectSubject(printedQuestion, studentAnswer) {
 // to fake 100% coverage. Swap in a real Chinese/English checker later by
 // adding a case here; math and the OCR/mapping layers don't change.
 function verifyAnswer(item) {
+  // parseOcrLine flagged this item's answer as too long to trust (a likely
+  // sign several items' content got merged) -- never let it reach a
+  // verification lane, which could otherwise (by coincidence) parse part
+  // of the merged text as a clean-looking equation and report a confident
+  // but meaningless verdict.
+  if (item.parseFailed) return { correct: null, correctAnswer: "", subject: "uncertain" };
   const subject = detectSubject(item.printedQuestion, item.studentAnswer);
   if (subject === "math") return { ...verifyMath(item.printedQuestion, item.studentAnswer), subject };
   return { correct: null, correctAnswer: "", subject };
@@ -1716,7 +1860,7 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   const MAX_SPAN = 5;
   let best = null;
   for (let i = 0; i < visionWords.length; i++) {
-    let acc = "", startWord = null, endWord = null;
+    let acc = "", startWord = null, endWord = null, endIdx = -1;
     for (let j = i; j < Math.min(i + MAX_SPAN, visionWords.length); j++) {
       const hay = String(visionWords[j].text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       if (!hay) continue;
@@ -1725,13 +1869,29 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
       if (!startWord) startWord = visionWords[j];
       acc = nextAcc;
       endWord = visionWords[j];
-      if (acc.length >= 2 && (!best || acc.length > best.matchLen)) {
-        best = { matchLen: acc.length, startWord, endWord };
+      endIdx = j;
+      if (acc.length >= 2) {
+        // A real transcribed expression is almost always immediately
+        // followed by "=" on the source page; a coincidental short match
+        // on unrelated text (e.g. a stray page-number digit) usually
+        // isn't. When two candidates tie on raw matched length, prefer
+        // whichever is followed by a literal "=" -- this breaks exactly
+        // the tie a short (2-char) needle is otherwise defenceless
+        // against (2026-09-21 review: a stray "46" token pair beat a real
+        // "4+6=" match on length alone), without raising the accepted
+        // minimum length itself, which would cost real bbox coverage on
+        // ordinary short single-digit sums.
+        const nextWord = visionWords[endIdx + 1];
+        const followedByEquals = !!(nextWord && String(nextWord.text || "").trim() === "=");
+        const better = !best
+          || acc.length > best.matchLen
+          || (acc.length === best.matchLen && followedByEquals && !best.followedByEquals);
+        if (better) best = { matchLen: acc.length, startWord, endWord, followedByEquals };
       }
     }
   }
   if (!best) return null;
-  const { startWord: sw, endWord: ew } = best;
+  const { startWord: sw, endWord: ew, matchLen } = best;
   const x0 = Math.min(sw.x, ew.x), y0 = Math.min(sw.y, ew.y);
   const x1 = Math.max(sw.x + sw.w, ew.x + ew.w), y1 = Math.max(sw.y + sw.h, ew.y + ew.h);
   return {
@@ -1739,8 +1899,35 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
     y: Math.round((y0 / pageHeight) * 100),
     w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
     h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
+    // Exposed so a caller comparing matches across MULTIPLE pages' word
+    // lists (handleMark) can pick the strongest one -- a short match on
+    // the wrong page must not beat a longer match on the right page.
+    matchLen,
   };
 }
+
+// Bounded-concurrency map -- runs at most `concurrency` calls to `fn` at
+// once, in index order, collecting all results (success or thrown) into an
+// array matching `items`' order regardless of completion order.
+async function mapBounded(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+// At most this many pages' Qwen calls run at once. Bounded (not
+// unlimited) so a large submission doesn't fire N simultaneous OpenRouter
+// requests; low enough to stay well inside real per-request timeouts,
+// high enough that pages still don't run fully sequentially.
+const MARK_PAGE_CONCURRENCY = 2;
 
 async function handleMark(request, env) {
   const startedAt = Date.now();
@@ -1752,56 +1939,171 @@ async function handleMark(request, env) {
     : await env.GOOGLE_VISION_API_KEY.get();
   if (!openrouterKey) return json({ error: "not_configured", message: "改功課服務未設定好，請聯絡網站管理員。" }, 503);
 
+  // Own rate-limit bucket ("markrate:"), separate from /api/check's
+  // "checkrate:" and /api/verify's "verifyrate:" -- /api/mark is an
+  // independent pipeline, not a natural follow-up call to either of
+  // those, so it shouldn't share their budget. Same threshold
+  // (CHECK_RATE_LIMIT) and same fail-open-on-KV-error behaviour as the
+  // existing endpoints, checked before parsing the body (matches
+  // handleCheckInner's ordering) so an abusive caller is turned away
+  // before any real work, AI or otherwise.
+  if (env.RATE_LIMIT_KV) {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rateKey = "markrate:" + ip;
+    let count = 0;
+    try {
+      const raw = await env.RATE_LIMIT_KV.get(rateKey);
+      count = raw ? (parseInt(raw, 10) || 0) : 0;
+    } catch (e) { /* KV unreachable -- don't block over it */ }
+    if (count >= CHECK_RATE_LIMIT) {
+      return json({ error: "rate_limited", message: "短時間內請求太多，請一小時後再試。" }, 429);
+    }
+    try {
+      await env.RATE_LIMIT_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
   const { images } = await request.json();
   if (!Array.isArray(images) || !images.length) {
     return json({ error: "bad_request", message: "images is required" }, 400);
   }
-
-  // Module 1: OCR (swappable -- callQwenOcrText is the only piece that
-  // would need replacing to try a different OCR engine; everything below
-  // consumes its plain {label, printedQuestion, studentAnswer} shape).
-  let ocrResult;
-  try {
-    ocrResult = await callQwenOcrText(images, openrouterKey);
-  } catch (e) {
-    return json({ error: e.kind || "upstream_error", message: e.uiMessage || "改功課服務暫時無法使用，請稍後再試。" }, e.status || 502);
+  // Same cap as handleCheckInner's MAX_PAGES, for the same reason:
+  // rejected here, before mapBounded ever fires a single Qwen/Vision
+  // call, not after -- an oversized submission must never reach the
+  // AI-call stage just to be told no.
+  const MARK_MAX_PAGES = 5;
+  if (images.length > MARK_MAX_PAGES) {
+    return json({ error: "too_many_pages", message: `每次最多批改 ${MARK_MAX_PAGES} 頁，請分開幾次提交。` }, 400);
   }
 
-  // Module 2: position lookup (independent of OCR engine choice).
-  let visionWords = null, pageWidth = null, pageHeight = null;
-  if (visionKey) {
-    try {
-      const ocr = await googleOcr(images[0].data, visionKey);
-      if (ocr) { visionWords = ocr.words; pageWidth = ocr.width; pageHeight = ocr.height; }
-    } catch (e) { /* position lookup is a precision upgrade, not required */ }
-  }
+  // Per-page pipeline (2026-09-21 rewrite, replacing one combined
+  // multi-image Qwen call): a real 4-page submission reliably hit
+  // callQwenOcrText's 15s per-call timeout when all 4 images went in one
+  // request, failing the ENTIRE submission with nothing recovered from
+  // any page. Calling Qwen once PER PAGE fixes that (a slow/failing page
+  // only costs that page) and also makes page identity structural --
+  // which call produced an item -- rather than guessed afterwards by
+  // matching against every page's Vision words. Pages run with bounded
+  // concurrency, each page's Qwen+Vision calls still running in parallel
+  // with each other (not sequential) as before.
+  const tPages = Date.now();
+  const pageResults = await mapBounded(images, MARK_PAGE_CONCURRENCY, async (img, pageIdx) => {
+    const tQwen = Date.now();
+    // Downscale ONLY the copy sent to Qwen -- the same 640px
+    // downscaleForCheapTier() already validated for /api/check's fast
+    // tier (its own git history root-caused real Qwen/DeepSeek "hangs"
+    // to sending full-resolution images), which /api/mark had never
+    // adopted. Vision's OWN copy (below) stays full-resolution and
+    // unchanged -- bbox percentages are computed against whichever
+    // image each model actually saw, so this can't skew bbox accuracy.
+    const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
+      .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
+    const tVision = Date.now();
+    const visionPromise = !visionKey
+      ? Promise.resolve(null)
+      : googleOcr(img.data, visionKey)
+          .then((r) => (r ? { ...r, visionMs: Date.now() - tVision } : null))
+          .catch((e) => {
+            console.log(JSON.stringify({ event: "mark_vision_page_error", page: pageIdx, error: String(e) }));
+            return null; // this page's Vision failure costs only its own bbox data, not the page's OCR
+          });
+    const [qwenOutcome, vision] = await Promise.all([qwenPromise, visionPromise]);
+    if (!qwenOutcome.ok) {
+      const e = qwenOutcome.error;
+      console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
+      return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    }
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+  });
+  const pagesMs = Date.now() - tPages;
 
-  // Module 3: subject-aware verification + Module 2's per-item bbox.
-  const results = ocrResult.items.map((item) => {
-    const verdict = verifyAnswer(item);
-    const bbox = findBboxForItem(item, visionWords, pageWidth, pageHeight) || { x: 0, y: 0, w: 0, h: 0 };
-    return {
-      question: item.label,
-      studentAnswer: item.studentAnswer,
-      correct: verdict.correct,
-      correctAnswer: verdict.correctAnswer,
-      subject: verdict.subject,
-      note: verdict.correct === null ? "需要人手複核" : "",
-      page: 0,
-      bbox,
-      anchor: item.label,
-      riskyDiagram: false,
-      verifiedBy: verdict.correct === null ? "pending" : "code",
-    };
+  // Module 2: subject-aware verification (deterministic, no I/O) -- one
+  // failed page contributes an empty verdict list, nothing more.
+  const tVerify = Date.now();
+  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => verifyAnswer(item))));
+  const verifyMs = Date.now() - tVerify;
+
+  // Module 3: bbox, scoped to each item's OWN page's Vision words only --
+  // no more cross-page guessing needed now that page identity is already
+  // structural (see above).
+  const tMap = Date.now();
+  const matchesByPage = pageResults.map((pr) =>
+    pr.failed ? [] : pr.items.map((item) => (pr.vision ? findBboxForItem(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
+  );
+  const mapMs = Date.now() - tMap;
+
+  // Deterministic merge: a failed page is recorded in `pageErrors` and
+  // simply contributes no items -- every OTHER page's results are
+  // unaffected, unlike the old single-combined-call design where one
+  // failure took down the whole submission.
+  const results = [];
+  const pageErrors = [];
+  pageResults.forEach((pr, pageIdx) => {
+    if (pr.failed) {
+      const e = pr.error;
+      pageErrors.push({ page: pageIdx, error: (e && (e.uiMessage || e.detail)) || String(e) });
+      return;
+    }
+    pr.items.forEach((item, i) => {
+      const verdict = verdictsByPage[pageIdx][i];
+      const match = matchesByPage[pageIdx][i];
+      results.push({
+        question: item.label,
+        studentAnswer: item.studentAnswer,
+        correct: verdict.correct,
+        correctAnswer: verdict.correctAnswer,
+        subject: verdict.subject,
+        // Explicit status alongside `correct` per 2026-09-21 review: null
+        // must read unambiguously as "not resolved", never silently coerced
+        // to a falsy/"wrong" UI state.
+        status: verdict.correct === null ? "needs_review" : "ok",
+        note: verdict.correct === null ? "需要人手複核" : "",
+        // Real page index (which call produced this item), not a guess.
+        page: pageIdx,
+        // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
+        // top-left bbox can never be confused with "no match found".
+        bbox: match ? { x: match.x, y: match.y, w: match.w, h: match.h } : null,
+        anchor: item.label,
+        // Not implemented in this pipeline yet. null ("unknown"), not false
+        // ("checked, not risky") -- a future consumer must not read this as
+        // a real, computed answer. /api/check's diagram-risk flag has no
+        // equivalent here yet.
+        riskyDiagram: null,
+        verifiedBy: verdict.correct === null ? "pending" : "code",
+      });
+    });
   });
 
   const correctCount = results.filter((r) => r.correct === true).length;
-  console.log(JSON.stringify({ event: "mark_usage", items: results.length, needsReview: results.filter((r) => r.correct === null).length, ocrUsage: ocrResult.usage, elapsedMs: Date.now() - startedAt }));
+  const needsReviewCount = results.filter((r) => r.correct === null).length;
+  const totalMs = Date.now() - startedAt;
+  console.log(JSON.stringify({
+    event: "mark_usage",
+    items: results.length,
+    pages: images.length,
+    pagesFailed: pageErrors.length,
+    needsReview: needsReviewCount,
+    totalMs, pagesMs, verifyMs, mapMs,
+    perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
+  }));
 
+  // Every page failed -- genuinely nothing to return, unlike a partial
+  // multi-page failure (handled below via pageErrors on an otherwise
+  // normal 200 response).
+  if (!results.length && pageErrors.length) {
+    return json({ error: "upstream_error", message: "改功課服務暫時無法使用，請稍後再試。", pageErrors }, 502);
+  }
+
+  // needsVerify has NO resolve endpoint yet (unlike /api/check's
+  // /api/verify pairing) -- this is backend-only bookkeeping, not a
+  // complete user-facing feature. Do not wire this pipeline to the
+  // frontend until a real review/resolve flow exists for these.
   return json({
     results,
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
+    ...(pageErrors.length ? { pageErrors } : {}),
   });
 }
 
