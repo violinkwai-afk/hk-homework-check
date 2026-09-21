@@ -1651,6 +1651,39 @@ function verifyMath(printedQuestion, studentAnswer) {
   return { correct: allCorrect, correctAnswer: allCorrect ? "" : results.map((r) => r.correctAnswer || "?").join(", ") };
 }
 
+// Subject classification (2026-09-21): the worksheet OCR sees is not
+// always math -- real homework mixes Chinese, English, and maths on the
+// same page. This decides which verification lane an item goes through
+// *before* any lane runs, so the dispatcher stays a plain lookup and each
+// lane stays independently swappable. Arithmetic shape is checked first
+// regardless of surrounding script, since printed instructions are often
+// Chinese even on a pure maths item ("2=2+5|5+2=7" style rows never
+// contain CJK themselves, but a worksheet's header text can).
+function detectSubject(printedQuestion, studentAnswer) {
+  const text = `${printedQuestion || ""} ${studentAnswer || ""}`;
+  const hasArithmeticShape =
+    /\d\s*[+\-*x×÷/]\s*-?\d/.test(text) ||
+    /^\s*-?\d+(\.\d+)?\s*$/.test(String(studentAnswer || "").trim());
+  if (hasArithmeticShape) return "math";
+  if (/[一-鿿]/.test(text)) return "chinese";
+  if (/[a-zA-Z]/.test(String(studentAnswer || ""))) return "english";
+  return "uncertain";
+}
+
+// Verification dispatcher: one lane per subject, all returning the same
+// {correct, correctAnswer} shape so handleMark doesn't need to know which
+// lane ran. Only "math" is deterministic today. "chinese"/"english"/
+// "uncertain" have no reference-answer or rules/AI-checking lane wired up
+// yet -- they honestly report null (needs review) rather than guessing
+// correct/incorrect just to look complete, per explicit instruction not
+// to fake 100% coverage. Swap in a real Chinese/English checker later by
+// adding a case here; math and the OCR/mapping layers don't change.
+function verifyAnswer(item) {
+  const subject = detectSubject(item.printedQuestion, item.studentAnswer);
+  if (subject === "math") return { ...verifyMath(item.printedQuestion, item.studentAnswer), subject };
+  return { correct: null, correctAnswer: "", subject };
+}
+
 // Finds an approximate bbox (0-100%) for one OCR'd item by matching its
 // printed-question text against Google Vision's word-level positions --
 // reuses the same googleOcr() call already used for rotation detection,
@@ -1658,22 +1691,32 @@ function verifyMath(printedQuestion, studentAnswer) {
 // (real testing: asking Qwen for text+bbox together more than doubled its
 // latency, 6.2s -> 14.9s, for position data this cheaper lookup already
 // provides in under 1s).
+//
+// Requires a minimum 2-character match and picks the LONGEST matching
+// vision word rather than the first one found -- a real bug caught in
+// production testing: a 1-character threshold let unrelated items collide
+// onto the same short stray token (e.g. a lone page-number digit), so
+// several different questions came back with identical duplicate bboxes.
 function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return null;
   const needle = String(item.printedQuestion || item.label || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6);
-  if (!needle) return null;
+  if (!needle || needle.length < 2) return null;
+  let best = null;
   for (const w of visionWords) {
     const hay = String(w.text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (hay && needle.startsWith(hay) && hay.length >= 1) {
-      return {
-        x: Math.round((w.x / pageWidth) * 100),
-        y: Math.round((w.y / pageHeight) * 100),
-        w: Math.round((w.w / pageWidth) * 100) || 5,
-        h: Math.round((w.h / pageHeight) * 100) || 5,
-      };
+    if (hay.length < 2) continue;
+    if (needle.startsWith(hay) && (!best || hay.length > best.hayLen)) {
+      best = { hayLen: hay.length, w };
     }
   }
-  return null;
+  if (!best) return null;
+  const w = best.w;
+  return {
+    x: Math.round((w.x / pageWidth) * 100),
+    y: Math.round((w.y / pageHeight) * 100),
+    w: Math.round((w.w / pageWidth) * 100) || 5,
+    h: Math.round((w.h / pageHeight) * 100) || 5,
+  };
 }
 
 async function handleMark(request, env) {
@@ -1710,15 +1753,16 @@ async function handleMark(request, env) {
     } catch (e) { /* position lookup is a precision upgrade, not required */ }
   }
 
-  // Module 3: deterministic verification + Module 2's per-item bbox.
+  // Module 3: subject-aware verification + Module 2's per-item bbox.
   const results = ocrResult.items.map((item) => {
-    const verdict = verifyMath(item.printedQuestion, item.studentAnswer);
+    const verdict = verifyAnswer(item);
     const bbox = findBboxForItem(item, visionWords, pageWidth, pageHeight) || { x: 0, y: 0, w: 0, h: 0 };
     return {
       question: item.label,
       studentAnswer: item.studentAnswer,
       correct: verdict.correct,
       correctAnswer: verdict.correctAnswer,
+      subject: verdict.subject,
       note: verdict.correct === null ? "需要人手複核" : "",
       page: 0,
       bbox,
