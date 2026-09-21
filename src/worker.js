@@ -1874,7 +1874,14 @@ async function handleMark(request, env) {
   const tPages = Date.now();
   const pageResults = await mapBounded(images, MARK_PAGE_CONCURRENCY, async (img, pageIdx) => {
     const tQwen = Date.now();
-    const qwenPromise = callQwenOcrText([img], openrouterKey)
+    // Downscale ONLY the copy sent to Qwen -- the same 640px
+    // downscaleForCheapTier() already validated for /api/check's fast
+    // tier (its own git history root-caused real Qwen/DeepSeek "hangs"
+    // to sending full-resolution images), which /api/mark had never
+    // adopted. Vision's OWN copy (below) stays full-resolution and
+    // unchanged -- bbox percentages are computed against whichever
+    // image each model actually saw, so this can't skew bbox accuracy.
+    const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
       .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
