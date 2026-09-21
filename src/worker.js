@@ -1492,16 +1492,17 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
-    // 2026-09-22 latency experiment, round 2: DeepSeek V4.1 Flash was
-    // tried and rejected (slower -- repeated 15s timeouts -- AND less
-    // accurate, including a real misread digit and printed-context text
-    // leaking into the answer field). Trying Qwen2.5-VL-7B-Instruct next
-    // -- same family as the original Qwen3-VL-235B baseline, much
-    // smaller, explicitly positioned by Qwen for document/OCR tasks
-    // (unlike their "Flash" tier, which does not claim OCR). Prompt,
-    // parsing, verification, bbox, downscale, concurrency, and timeout
-    // all unchanged. Function name kept as-is for this test.
-    model: "qwen/qwen-2.5-vl-7b-instruct",
+    // 2026-09-22 latency experiment, round 3: DeepSeek V4.1 Flash was
+    // tried and rejected (slower, less accurate). "qwen/qwen-2.5-vl-7b-
+    // instruct" (round 2) turned out not to exist on OpenRouter at all
+    // (confirmed against the live /api/v1/models list -- 3 consecutive
+    // instant ~1.7s failures, too fast to be a real model call, is what
+    // exposed this). Trying the real current small Qwen3-VL variant:
+    // qwen/qwen3-vl-8b-instruct -- same generation as the Qwen3-VL-235B
+    // baseline, 8B. Prompt, parsing, verification, bbox, downscale,
+    // concurrency, and timeout all unchanged. Function name kept as-is
+    // for this test.
+    model: "qwen/qwen3-vl-8b-instruct",
     max_tokens: 2000,
     messages: [
       {
