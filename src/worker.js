@@ -1873,9 +1873,41 @@ async function handleMark(request, env) {
     : await env.GOOGLE_VISION_API_KEY.get();
   if (!openrouterKey) return json({ error: "not_configured", message: "改功課服務未設定好，請聯絡網站管理員。" }, 503);
 
+  // Own rate-limit bucket ("markrate:"), separate from /api/check's
+  // "checkrate:" and /api/verify's "verifyrate:" -- /api/mark is an
+  // independent pipeline, not a natural follow-up call to either of
+  // those, so it shouldn't share their budget. Same threshold
+  // (CHECK_RATE_LIMIT) and same fail-open-on-KV-error behaviour as the
+  // existing endpoints, checked before parsing the body (matches
+  // handleCheckInner's ordering) so an abusive caller is turned away
+  // before any real work, AI or otherwise.
+  if (env.RATE_LIMIT_KV) {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rateKey = "markrate:" + ip;
+    let count = 0;
+    try {
+      const raw = await env.RATE_LIMIT_KV.get(rateKey);
+      count = raw ? (parseInt(raw, 10) || 0) : 0;
+    } catch (e) { /* KV unreachable -- don't block over it */ }
+    if (count >= CHECK_RATE_LIMIT) {
+      return json({ error: "rate_limited", message: "短時間內請求太多，請一小時後再試。" }, 429);
+    }
+    try {
+      await env.RATE_LIMIT_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+    } catch (e) { /* best-effort */ }
+  }
+
   const { images } = await request.json();
   if (!Array.isArray(images) || !images.length) {
     return json({ error: "bad_request", message: "images is required" }, 400);
+  }
+  // Same cap as handleCheckInner's MAX_PAGES, for the same reason:
+  // rejected here, before mapBounded ever fires a single Qwen/Vision
+  // call, not after -- an oversized submission must never reach the
+  // AI-call stage just to be told no.
+  const MARK_MAX_PAGES = 5;
+  if (images.length > MARK_MAX_PAGES) {
+    return json({ error: "too_many_pages", message: `每次最多批改 ${MARK_MAX_PAGES} 頁，請分開幾次提交。` }, 400);
   }
 
   // Per-page pipeline (2026-09-21 rewrite, replacing one combined
