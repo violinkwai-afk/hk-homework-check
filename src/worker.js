@@ -124,7 +124,7 @@ async function handleTestVisionOcrLatency(request, env) {
     elapsedMs,
     wordCount,
     fullText,
-    sampleWords: ocr && ocr.words ? ocr.words.slice(0, 20) : [],
+    words: ocr && ocr.words ? ocr.words : [],
   });
 }
 
