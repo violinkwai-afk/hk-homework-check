@@ -1554,6 +1554,10 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
   }
   const text = (choice.message && choice.message.content) || "";
+  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
+  // remove once resolved. Logs the exact raw model output before any
+  // parsing touches it.
+  console.log(JSON.stringify({ event: "debug_raw_ocr_text", text }));
   const items = parseOcrLine(text);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
@@ -1916,7 +1920,25 @@ async function handleMark(request, env) {
   // Module 2: subject-aware verification (deterministic, no I/O) -- one
   // failed page contributes an empty verdict list, nothing more.
   const tVerify = Date.now();
-  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => verifyAnswer(item))));
+  const verdictsByPage = pageResults.map((pr) =>
+    pr.failed ? [] : pr.items.map((item) => {
+      const verdict = verifyAnswer(item);
+      // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
+      // remove once resolved. Logs exactly what verifyAnswer/verifyMath
+      // received per item and what it decided.
+      console.log(JSON.stringify({
+        event: "debug_verify_item",
+        label: item.label,
+        printedQuestion: item.printedQuestion,
+        studentAnswer: item.studentAnswer,
+        parseFailed: !!item.parseFailed,
+        subject: verdict.subject,
+        correct: verdict.correct,
+        correctAnswer: verdict.correctAnswer,
+      }));
+      return verdict;
+    })
+  );
   const verifyMs = Date.now() - tVerify;
 
   // Module 3: bbox, scoped to each item's OWN page's Vision words only --
