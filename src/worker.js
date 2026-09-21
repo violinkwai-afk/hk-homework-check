@@ -96,6 +96,14 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // New pipeline (2026-09-21): AI does OCR only, code does the math --
+    // see the block comment above callQwenOcrText for why. Separate from
+    // /api/check (which still does the older AI-judges-correctness flow)
+    // so the two can be compared/switched between without one breaking
+    // the other.
+    if (url.pathname === "/api/mark" && request.method === "POST") {
+      return handleMark(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1453,6 +1461,280 @@ async function callDeepSeek(images, prompt, openrouterKey) {
     timeoutMs: 12000,
     providerFilter: { ignore: ["Alibaba"] },
     logPrefix: "deepseek",
+  });
+}
+
+// ---------------------------------------------------------------------
+// /api/mark pipeline (2026-09-21): AI does OCR only (read what the student
+// wrote); code does the math. Real testing found that asking a vision
+// model to JUDGE correct/wrong introduces the model's own reasoning
+// mistakes (e.g. Qwen flagging "2+5=" answered as "5+2=7" as wrong purely
+// for being reordered, on a worksheet whose entire point is that addition
+// order doesn't matter) -- a mistake that persisted even when the item was
+// cropped in isolation, so it's a genuine model misconception, not a
+// context problem. Asking the SAME model to only transcribe (not judge)
+// the identical handwriting was accurate on all 15/15 real test items,
+// including that exact case, because transcription doesn't require the
+// model to have an opinion about arithmetic order.
+// ---------------------------------------------------------------------
+
+const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責抄低學生喺呢張功課相入面手寫嘅嘢（OCR），一字不漏咁抄，唔好自己計數或者judge。相有機會打橫/倒轉，先確認閱讀方向。學生成日用鉛筆寫字，筆跡好淺——要仔細睇清楚有冇淺色筆劃，睇唔清就填"?"。
+
+呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。例如：
+1=4+6|6+4=10,2=2+5|5+2=7,9=make two sums|6+9=15;5+8=13
+
+唔好加任何其他文字、判斷、JSON。`;
+
+// Same {parsed, usage} / throw contract as callOpenRouterVisionModel, but
+// the model replies with plain "label=printed|answer" lines rather than
+// JSON, so it needs its own response parsing rather than reusing that
+// function directly.
+async function callQwenOcrText(images, openrouterKey) {
+  const prompt = OCR_ONLY_PROMPT(images.length);
+  const body = {
+    model: "qwen/qwen3-vl-235b-a22b-instruct",
+    max_tokens: 2000,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          ...images.map((img) => ({
+            type: "image_url",
+            image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` },
+          })),
+        ],
+      },
+    ],
+  };
+  const controller = new AbortController();
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      controller.abort();
+      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_timeout", status: 502 });
+    }, 15000);
+  });
+  let res;
+  try {
+    res = await Promise.race([
+      fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${openrouterKey}`,
+          "http-referer": "https://hk-homework-check.violin-kwai.workers.dev",
+          "x-title": "hk-homework-check",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+  } catch (e) {
+    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_timeout", status: 502 };
+  }
+  if (!res.ok) {
+    const errText = await res.text();
+    console.log(JSON.stringify({ event: "qwen_ocr_error", status: res.status, detail: errText.slice(0, 500) }));
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
+  }
+  const data = await res.json();
+  const choice = data.choices && data.choices[0];
+  if (!choice || choice.finish_reason !== "stop") {
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
+  }
+  const text = (choice.message && choice.message.content) || "";
+  const items = parseOcrLine(text);
+  if (!items.length) {
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
+  }
+  return { items, usage: data.usage || null };
+}
+
+// Splits "1=4+6|6+4=10,2=2+5|5+2=7" into [{label, printedQuestion,
+// studentAnswer}]. Splitting on "," is unsafe if an answer itself contains
+// a comma (item 9 in real testing was "6+9=15,5+8=13") -- so this only
+// treats a comma as a NEW item's separator when what follows immediately
+// matches `<label>=`, not on every comma in the string.
+function parseOcrLine(text) {
+  const items = [];
+  const re = /(?:^|,)\s*([^,=]{1,30}?)=([^|]*)\|/g;
+  const starts = [];
+  let m;
+  while ((m = re.exec(text))) starts.push({ index: m.index + (m[0].startsWith(",") ? 1 : 0), label: m[1].trim() });
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i].index;
+    const end = i + 1 < starts.length ? starts[i + 1].index : text.length;
+    const chunk = text.slice(start, end).replace(/,\s*$/, "");
+    const eqIdx = chunk.indexOf("=");
+    const barIdx = chunk.indexOf("|");
+    if (eqIdx === -1 || barIdx === -1 || barIdx < eqIdx) continue;
+    items.push({
+      label: chunk.slice(0, eqIdx).trim(),
+      printedQuestion: chunk.slice(eqIdx + 1, barIdx).trim(),
+      studentAnswer: chunk.slice(barIdx + 1).trim(),
+    });
+  }
+  return items;
+}
+
+// Minimal, safe arithmetic evaluator -- no eval(). Supports +, -, x/×/*,
+// /÷ between integers/decimals, left-to-right (no operator precedence
+// needed for the single/double-operation sums this targets). Returns null
+// if the string isn't a clean arithmetic expression, rather than guessing.
+function evalArithmetic(str) {
+  const cleaned = String(str).replace(/[×x]/gi, "*").replace(/÷/g, "/").replace(/\s+/g, "");
+  if (!/^-?\d+(\.\d+)?([+\-*/]-?\d+(\.\d+)?)+$/.test(cleaned)) return null;
+  const tokens = cleaned.match(/-?\d+(\.\d+)?|[+\-*/]/g);
+  if (!tokens || !tokens.length) return null;
+  let result = parseFloat(tokens[0]);
+  if (Number.isNaN(result)) return null;
+  for (let i = 1; i < tokens.length; i += 2) {
+    const op = tokens[i];
+    const val = parseFloat(tokens[i + 1]);
+    if (Number.isNaN(val)) return null;
+    if (op === "+") result += val;
+    else if (op === "-") result -= val;
+    else if (op === "*") result *= val;
+    else if (op === "/") result = val === 0 ? NaN : result / val;
+  }
+  return Number.isNaN(result) ? null : result;
+}
+
+// Deterministic verification -- code decides correct/wrong, never the AI.
+// Handles the case real testing showed AI judgment gets wrong (an equation
+// the student rewrote in a different, still-valid order/form) by only
+// checking arithmetic truth, never comparing token order or wording.
+//
+// Returns { correct: true|false|null, correctAnswer }. null means "this
+// specific answer isn't something code can verify" (e.g. a bare number
+// with no equation and no computable expected value from the printed
+// text) -- reported honestly rather than guessed, per explicit instruction
+// not to claim 100% code-verified when a case genuinely isn't.
+function verifyMath(printedQuestion, studentAnswer) {
+  const subAnswers = String(studentAnswer).split(";").map((s) => s.trim()).filter(Boolean);
+  if (!subAnswers.length) return { correct: false, correctAnswer: "" };
+
+  const results = subAnswers.map((sub) => {
+    // Case 1: the student's own answer is a full equation ("5+2=7") --
+    // verify it's internally true. This is the common case for "complete
+    // the sum" style questions and needs no understanding of the printed
+    // question's wording at all.
+    const eqIdx = sub.indexOf("=");
+    if (eqIdx !== -1) {
+      const lhs = sub.slice(0, eqIdx);
+      const rhs = sub.slice(eqIdx + 1);
+      const lhsVal = evalArithmetic(lhs);
+      const rhsVal = parseFloat(rhs);
+      if (lhsVal !== null && !Number.isNaN(rhsVal)) {
+        return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
+      }
+      return { correct: null, correctAnswer: "" };
+    }
+    // Case 2: bare number/word answer -- only checkable if the PRINTED
+    // question itself is a computable expression (e.g. "4+6="). A
+    // descriptive word problem ("10 upstairs 4 downstairs") needs
+    // semantic understanding of what to compute, which is genuinely not
+    // something this deterministic layer can do -- reported as null
+    // (needs review) rather than guessed.
+    const printedExpr = String(printedQuestion).replace(/=\s*$/, "");
+    const expected = evalArithmetic(printedExpr);
+    const studentVal = parseFloat(sub);
+    if (expected !== null && !Number.isNaN(studentVal)) {
+      return { correct: Math.abs(expected - studentVal) < 1e-9, correctAnswer: expected === studentVal ? "" : String(expected) };
+    }
+    return { correct: null, correctAnswer: "" };
+  });
+
+  if (results.some((r) => r.correct === null)) return { correct: null, correctAnswer: "" };
+  const allCorrect = results.every((r) => r.correct === true);
+  return { correct: allCorrect, correctAnswer: allCorrect ? "" : results.map((r) => r.correctAnswer || "?").join(", ") };
+}
+
+// Finds an approximate bbox (0-100%) for one OCR'd item by matching its
+// printed-question text against Google Vision's word-level positions --
+// reuses the same googleOcr() call already used for rotation detection,
+// rather than asking the vision model itself to also estimate position
+// (real testing: asking Qwen for text+bbox together more than doubled its
+// latency, 6.2s -> 14.9s, for position data this cheaper lookup already
+// provides in under 1s).
+function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
+  if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return null;
+  const needle = String(item.printedQuestion || item.label || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6);
+  if (!needle) return null;
+  for (const w of visionWords) {
+    const hay = String(w.text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (hay && needle.startsWith(hay) && hay.length >= 1) {
+      return {
+        x: Math.round((w.x / pageWidth) * 100),
+        y: Math.round((w.y / pageHeight) * 100),
+        w: Math.round((w.w / pageWidth) * 100) || 5,
+        h: Math.round((w.h / pageHeight) * 100) || 5,
+      };
+    }
+  }
+  return null;
+}
+
+async function handleMark(request, env) {
+  const startedAt = Date.now();
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  const visionKey = !env.GOOGLE_VISION_API_KEY ? null
+    : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
+    : await env.GOOGLE_VISION_API_KEY.get();
+  if (!openrouterKey) return json({ error: "not_configured", message: "改功課服務未設定好，請聯絡網站管理員。" }, 503);
+
+  const { images } = await request.json();
+  if (!Array.isArray(images) || !images.length) {
+    return json({ error: "bad_request", message: "images is required" }, 400);
+  }
+
+  // Module 1: OCR (swappable -- callQwenOcrText is the only piece that
+  // would need replacing to try a different OCR engine; everything below
+  // consumes its plain {label, printedQuestion, studentAnswer} shape).
+  let ocrResult;
+  try {
+    ocrResult = await callQwenOcrText(images, openrouterKey);
+  } catch (e) {
+    return json({ error: e.kind || "upstream_error", message: e.uiMessage || "改功課服務暫時無法使用，請稍後再試。" }, e.status || 502);
+  }
+
+  // Module 2: position lookup (independent of OCR engine choice).
+  let visionWords = null, pageWidth = null, pageHeight = null;
+  if (visionKey) {
+    try {
+      const ocr = await googleOcr(images[0].data, visionKey);
+      if (ocr) { visionWords = ocr.words; pageWidth = ocr.width; pageHeight = ocr.height; }
+    } catch (e) { /* position lookup is a precision upgrade, not required */ }
+  }
+
+  // Module 3: deterministic verification + Module 2's per-item bbox.
+  const results = ocrResult.items.map((item) => {
+    const verdict = verifyMath(item.printedQuestion, item.studentAnswer);
+    const bbox = findBboxForItem(item, visionWords, pageWidth, pageHeight) || { x: 0, y: 0, w: 0, h: 0 };
+    return {
+      question: item.label,
+      studentAnswer: item.studentAnswer,
+      correct: verdict.correct,
+      correctAnswer: verdict.correctAnswer,
+      note: verdict.correct === null ? "需要人手複核" : "",
+      page: 0,
+      bbox,
+      anchor: item.label,
+      riskyDiagram: false,
+      verifiedBy: verdict.correct === null ? "pending" : "code",
+    };
+  });
+
+  const correctCount = results.filter((r) => r.correct === true).length;
+  console.log(JSON.stringify({ event: "mark_usage", items: results.length, needsReview: results.filter((r) => r.correct === null).length, ocrUsage: ocrResult.usage, elapsedMs: Date.now() - startedAt }));
+
+  return json({
+    results,
+    score: `${correctCount} / ${results.length}`,
+    needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
   });
 }
 
