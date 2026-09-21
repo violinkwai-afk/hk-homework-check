@@ -87,9 +87,46 @@ export default {
     if (url.pathname === "/api/test-rotation-latency" && request.method === "POST") {
       return handleTestRotationLatency(request, env);
     }
+    // TEMPORARY diagnostic route -- OCR engine benchmark. Calls the existing
+    // googleOcr() (Google Cloud Vision DOCUMENT_TEXT_DETECTION, already used
+    // for rotation/bbox-refinement) directly on a real photo and reports
+    // real round-trip latency plus the raw extracted text/word count, to
+    // compare against Qwen's OCR-only latency for the same real worksheet.
+    // Remove once the benchmark is done.
+    if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
+      return handleTestVisionOcrLatency(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
+
+async function handleTestVisionOcrLatency(request, env) {
+  const visionKey = !env.GOOGLE_VISION_API_KEY ? null
+    : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
+    : await env.GOOGLE_VISION_API_KEY.get();
+  if (!visionKey) return json({ error: "no_vision_key" }, 500);
+  const { images } = await request.json();
+  const img = images[0];
+
+  const t0 = Date.now();
+  let ocr, error;
+  try {
+    ocr = await googleOcr(img.data, visionKey);
+  } catch (e) {
+    error = String(e && e.message);
+  }
+  const elapsedMs = Date.now() - t0;
+
+  if (error) return json({ elapsedMs, error });
+  const wordCount = ocr && ocr.words ? ocr.words.length : 0;
+  const fullText = (ocr && ocr.words ? ocr.words.map((w) => w.text).join(" ") : "");
+  return json({
+    elapsedMs,
+    wordCount,
+    fullText,
+    sampleWords: ocr && ocr.words ? ocr.words.slice(0, 20) : [],
+  });
+}
 
 async function handleTestRotationLatency(request, env) {
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
