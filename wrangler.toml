@@ -2,6 +2,15 @@ name = "hk-homework-check"
 main = "src/worker.js"
 compatibility_date = "2024-09-01"
 
+# Retained logs, not just live `wrangler tail` -- mark_usage (and every
+# other structured console.log line) previously existed only for whoever
+# happened to be tailing at the exact moment a request fired. This makes
+# per-image OpenRouter token usage queryable after the fact instead of
+# lost the instant the request completes.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [assets]
 directory = "./website"
 binding = "ASSETS"
