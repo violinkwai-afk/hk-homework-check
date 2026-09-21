@@ -37,6 +37,27 @@ binding = "OPENROUTER_API_KEY"
 store_id = "50b964b41eeb46d3bd4be77e059d3324"
 secret_name = "OPENROUTER_API_KEY"
 
+# Telegram MVP (2026-09-22): /telegram-webhook needs both of these to do
+# anything -- handleTelegramWebhook fails closed (503) on either being
+# unset, same convention as the keys above. Neither secret_name exists in
+# the Secrets Store yet (same situation OPENROUTER_API_KEY was in before
+# it was created via the dashboard -- see that comment above): these
+# bindings declare the wiring, they don't create the values. No real
+# token/secret value is written here or anywhere in this repo.
+[[secrets_store_secrets]]
+binding = "TELEGRAM_BOT_TOKEN"
+store_id = "50b964b41eeb46d3bd4be77e059d3324"
+secret_name = "TELEGRAM_BOT_TOKEN"
+
+# Compared against Telegram's X-Telegram-Bot-Api-Secret-Token header (set
+# via setWebhook's own secret_token parameter) so /telegram-webhook can't
+# be driven by anyone who merely learns the URL. This is a value we mint
+# ourselves (any long random string), not something Telegram issues.
+[[secrets_store_secrets]]
+binding = "TELEGRAM_WEBHOOK_SECRET"
+store_id = "50b964b41eeb46d3bd4be77e059d3324"
+secret_name = "TELEGRAM_WEBHOOK_SECRET"
+
 # IMPORTANT -- learned the hard way: this Worker auto-deploys from git, and
 # Cloudflare's dashboard-added bindings are NOT version-controlled -- every
 # new deployment resets bindings to exactly what's declared in this file,

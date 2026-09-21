@@ -22,13 +22,25 @@ const { PAGE0, PAGE1, PAGE2 } = require("./fixtures.js");
 
 const SRC = path.join(__dirname, "..", "src", "worker.js");
 const TMP = path.join(__dirname, "..", "src", "worker_nodetest_mark.mjs");
+// worker.js also imports ./annotate.js (2026-09-22 Telegram MVP), which
+// itself imports the workerd-only Photon entrypoint -- needs the same
+// sed-replace treatment, or every test in this file fails at import time.
+// Own temp filename (distinct from telegram.test.js's) so the two test
+// files' harnesses can never collide.
+const ANNOTATE_SRC = path.join(__dirname, "..", "src", "annotate.js");
+const ANNOTATE_TMP = path.join(__dirname, "..", "src", "annotate_nodetest_mark.mjs");
 
 test.before(() => {
-  const src = fs.readFileSync(SRC, "utf8").replace("@cf-wasm/photon/workerd", "@cf-wasm/photon/node");
+  const annotateSrc = fs.readFileSync(ANNOTATE_SRC, "utf8").replace("@cf-wasm/photon/workerd", "@cf-wasm/photon/node");
+  fs.writeFileSync(ANNOTATE_TMP, annotateSrc);
+  const src = fs.readFileSync(SRC, "utf8")
+    .replace("@cf-wasm/photon/workerd", "@cf-wasm/photon/node")
+    .replace('from "./annotate.js"', 'from "./annotate_nodetest_mark.mjs"');
   fs.writeFileSync(TMP, src);
 });
 test.after(() => {
   fs.rmSync(TMP, { force: true });
+  fs.rmSync(ANNOTATE_TMP, { force: true });
 });
 
 function visionResponseFor(pageFixture) {

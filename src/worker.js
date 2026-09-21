@@ -15,6 +15,8 @@
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
 import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/photon/workerd";
+import { parseTelegramUpdate, telegramGetFile, telegramDownloadFile, telegramSendPhoto, telegramSendMessage, constantTimeEqual } from "./telegram.js";
+import { annotateImage } from "./annotate.js";
 
 // Client now sends one /api/check call PER PAGE (see website/index.html), so
 // this counts pages, not submissions -- a single 5-page homework already
@@ -34,6 +36,12 @@ const MAX_HANDWRITING_SAMPLES = 12; // per device, oldest evicted first
 const HANDWRITING_SAMPLE_TTL = 60 * 60 * 24 * 90; // 90 days
 const HANDWRITING_SAMPLES_PER_REQUEST = 3; // new exemplars captured per submission
 const HANDWRITING_EXEMPLARS_USED = 4; // most recent samples sent as reference
+// Pre-decode gate on a Telegram photo download -- cheap early rejection
+// before Photon ever touches the bytes. annotateImage's own
+// MAX_ANNOTATION_MEGAPIXELS is the real memory safeguard (file size is a
+// poor proxy for decoded size), this just avoids downloading something
+// absurd in the first place.
+const MAX_TELEGRAM_PHOTO_BYTES = 20 * 1024 * 1024;
 
 export default {
   async fetch(request, env, ctx) {
@@ -103,6 +111,9 @@ export default {
     // the other.
     if (url.pathname === "/api/mark" && request.method === "POST") {
       return handleMark(request, env);
+    }
+    if (url.pathname === "/telegram-webhook" && request.method === "POST") {
+      return handleTelegramWebhook(request, env);
     }
     return env.ASSETS.fetch(request);
   },
@@ -2105,6 +2116,128 @@ async function handleMark(request, env) {
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
     ...(pageErrors.length ? { pageErrors } : {}),
   });
+}
+
+// Telegram MVP (2026-09-22): one photo in, one annotated photo out.
+// Deliberately narrow -- single photo only, no albums/multi-page, no
+// accounts, no database, no payment, no commands beyond "here's a photo".
+// Calls handleMark() directly (same module, no HTTP round-trip) rather
+// than POSTing to /api/mark itself -- handleMark's own code above this
+// function is completely unmodified by this addition.
+async function resolveSecret(envVar) {
+  if (!envVar) return null;
+  return typeof envVar === "string" ? envVar : await envVar.get();
+}
+
+async function handleTelegramWebhook(request, env) {
+  const startedAt = Date.now();
+
+  // H. Security -- verify Telegram's own webhook secret-token header
+  // BEFORE any other work: parsing the body, touching the bot token, or
+  // triggering a real (costly) marking pass. Fails closed (503) if the
+  // secret itself isn't configured yet, matching this project's existing
+  // fail-closed convention for gated endpoints elsewhere.
+  const expectedSecret = await resolveSecret(env.TELEGRAM_WEBHOOK_SECRET);
+  if (!expectedSecret) {
+    return new Response("not configured", { status: 503 });
+  }
+  const gotSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
+  if (!constantTimeEqual(gotSecret, expectedSecret)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const botToken = await resolveSecret(env.TELEGRAM_BOT_TOKEN);
+  if (!botToken) {
+    return new Response("not configured", { status: 503 });
+  }
+
+  let update;
+  try {
+    update = await request.json();
+  } catch (e) {
+    // Malformed body -- Telegram doesn't retry usefully on this, and
+    // there's no chat to reply to. 200 so it isn't retried forever.
+    console.log(JSON.stringify({ event: "telegram_bad_update", error: String(e) }));
+    return new Response("ok");
+  }
+
+  const parsed = parseTelegramUpdate(update);
+  if (!parsed) {
+    // Not a photo message (text, sticker, no message at all, ...) --
+    // nothing for this MVP to do yet. Still 200: this is a normal,
+    // expected update shape, not an error.
+    return new Response("ok");
+  }
+  const { chatId, fileId } = parsed;
+
+  // G. Errors sent to the user are always this one generic, safe
+  // sentence -- never a stack trace, API key, or internal error detail.
+  const GENERIC_ERROR = "改功課失敗，請稍後再試。";
+
+  try {
+    const filePath = await telegramGetFile(botToken, fileId);
+    const photoBytes = await telegramDownloadFile(botToken, filePath, MAX_TELEGRAM_PHOTO_BYTES);
+
+    const tMark = Date.now();
+    const markRequest = new Request("https://internal.invalid/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: bytesToBase64(photoBytes), mediaType: "image/jpeg" }] }),
+    });
+    const markResponse = await handleMark(markRequest, env);
+    const markJson = await markResponse.json();
+    // handleMark returns 200 even when every page failed (pageErrors
+    // populated, results empty) -- that's the right contract for
+    // /api/mark's own frontend (it renders per-page errors inline), but
+    // silently sending back an unannotated photo here would look like a
+    // success. Treat "nothing to show" the same as a hard failure.
+    const noUsableResults = !markJson.results || markJson.results.length === 0;
+    if (markResponse.status !== 200 || noUsableResults) {
+      console.log(JSON.stringify({ event: "telegram_mark_failed", status: markResponse.status, error: markJson && markJson.error, pageErrors: markJson && markJson.pageErrors }));
+      await telegramSendMessage(botToken, chatId, GENERIC_ERROR);
+      return new Response("ok");
+    }
+    const markMs = Date.now() - tMark;
+
+    const tAnnotate = Date.now();
+    const annotated = annotateImage(photoBytes, markJson.results || []);
+    const annotationMs = Date.now() - tAnnotate;
+
+    const tSend = Date.now();
+    // "Checked" means only "this photo was processed", NOT "every answer
+    // is correct" or "nothing needs review" -- it is not a correctness
+    // verdict and must not be read as one. v1's annotation has a real gap
+    // behind this caption: needs_review (correct === null) items get NO
+    // visual marker at all right now (see iconKindFor in annotate.js --
+    // no "?" asset exists yet, and the instruction was explicit not to
+    // reuse the cross for it), so an all-correct-looking marked-up photo
+    // may actually contain unreviewed items the parent can't see flagged.
+    // Revisit this caption (or add a "?" asset + marker) before this ever
+    // reaches real users -- kept as "Checked" for now only because this
+    // is still an internal MVP, not a decision that it's the right
+    // wording for production.
+    await telegramSendPhoto(botToken, chatId, annotated.data, annotated.mediaType, "Checked");
+    const sendPhotoMs = Date.now() - tSend;
+
+    // I. Observability -- timings and item count only, never chat_id,
+    // bot token, or any other per-user/secret detail.
+    console.log(JSON.stringify({
+      event: "telegram_mark",
+      totalMs: Date.now() - startedAt,
+      markMs, annotationMs, sendPhotoMs,
+      items: (markJson.results || []).length,
+    }));
+    return new Response("ok");
+  } catch (e) {
+    console.log(JSON.stringify({ event: "telegram_mark_error", error: String(e && e.message || e) }));
+    try {
+      await telegramSendMessage(botToken, chatId, GENERIC_ERROR);
+    } catch (sendErr) {
+      // Even the error message failed to send -- nothing more this
+      // handler can do; already logged above.
+    }
+    return new Response("ok");
+  }
 }
 
 // Re-sends only the still-unsure items to `model`, using a zoomed-in crop
