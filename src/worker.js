@@ -1492,7 +1492,16 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
-    model: "qwen/qwen3-vl-235b-a22b-instruct",
+    // 2026-09-22 latency experiment: swapped from Qwen3-VL-235B to
+    // DeepSeek V4.1 Flash, keeping the OCR-only prompt, parsing,
+    // verification, bbox, and architecture all unchanged. `provider:
+    // {ignore: ["Alibaba"]}` below is the same routing hint already used
+    // for every other DeepSeek call in this file (callDeepSeek, the
+    // diagnostic endpoints) -- not a new addition, just applying this
+    // model correctly. Function name kept as-is for this test; rename
+    // only if DeepSeek is actually adopted.
+    model: "deepseek/deepseek-v4.1-flash",
+    provider: { ignore: ["Alibaba"] },
     max_tokens: 2000,
     messages: [
       {
