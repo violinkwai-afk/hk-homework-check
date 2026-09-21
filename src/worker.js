@@ -1731,7 +1731,7 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
     }
   }
   if (!best) return null;
-  const { startWord: sw, endWord: ew } = best;
+  const { startWord: sw, endWord: ew, matchLen } = best;
   const x0 = Math.min(sw.x, ew.x), y0 = Math.min(sw.y, ew.y);
   const x1 = Math.max(sw.x + sw.w, ew.x + ew.w), y1 = Math.max(sw.y + sw.h, ew.y + ew.h);
   return {
@@ -1739,6 +1739,10 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
     y: Math.round((y0 / pageHeight) * 100),
     w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
     h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
+    // Exposed so a caller comparing matches across MULTIPLE pages' word
+    // lists (handleMark) can pick the strongest one -- a short match on
+    // the wrong page must not beat a longer match on the right page.
+    matchLen,
   };
 }
 
@@ -1757,47 +1761,105 @@ async function handleMark(request, env) {
     return json({ error: "bad_request", message: "images is required" }, 400);
   }
 
-  // Module 1: OCR (swappable -- callQwenOcrText is the only piece that
-  // would need replacing to try a different OCR engine; everything below
-  // consumes its plain {label, printedQuestion, studentAnswer} shape).
-  let ocrResult;
+  // Module 1 (OCR) and Module 2 (per-page position lookup) don't depend on
+  // each other's output, so they run concurrently rather than sequentially
+  // (2026-09-21 audit found these were two back-to-back `await`s, adding
+  // Vision's full latency on top of Qwen's for no reason).
+  //
+  // Module 2 now runs ONCE PER PAGE (previously only images[0]), because
+  // page attribution below is decided from each page's own Vision data,
+  // not from the OCR model claiming a page number -- the model was never
+  // asked for one and shouldn't be trusted for it even if it started
+  // guessing; matching against real per-page word positions is a
+  // server-side-verifiable signal, consistent with how math is verified
+  // by code rather than AI elsewhere in this pipeline.
+  let qwenMs = null, visionMs = null;
+  const tOcr = Date.now();
+  const qwenPromise = callQwenOcrText(images, openrouterKey).then((r) => { qwenMs = Date.now() - tOcr; return r; });
+  const tVision = Date.now();
+  const visionPromise = !visionKey
+    ? Promise.resolve(images.map(() => null))
+    : Promise.all(images.map((img, idx) =>
+        googleOcr(img.data, visionKey).catch((e) => {
+          console.log(JSON.stringify({ event: "mark_vision_page_error", page: idx, error: String(e) }));
+          return null; // one page's Vision failure shouldn't sink the whole request
+        })
+      )).then((r) => { visionMs = Date.now() - tVision; return r; });
+
+  let ocrResult, visionPages;
   try {
-    ocrResult = await callQwenOcrText(images, openrouterKey);
+    [ocrResult, visionPages] = await Promise.all([qwenPromise, visionPromise]);
   } catch (e) {
     return json({ error: e.kind || "upstream_error", message: e.uiMessage || "改功課服務暫時無法使用，請稍後再試。" }, e.status || 502);
   }
 
-  // Module 2: position lookup (independent of OCR engine choice).
-  let visionWords = null, pageWidth = null, pageHeight = null;
-  if (visionKey) {
-    try {
-      const ocr = await googleOcr(images[0].data, visionKey);
-      if (ocr) { visionWords = ocr.words; pageWidth = ocr.width; pageHeight = ocr.height; }
-    } catch (e) { /* position lookup is a precision upgrade, not required */ }
-  }
+  // Module 3: subject-aware verification (deterministic, no I/O).
+  const tVerify = Date.now();
+  const verdicts = ocrResult.items.map((item) => verifyAnswer(item));
+  const verifyMs = Date.now() - tVerify;
 
-  // Module 3: subject-aware verification + Module 2's per-item bbox.
-  const results = ocrResult.items.map((item) => {
-    const verdict = verifyAnswer(item);
-    const bbox = findBboxForItem(item, visionWords, pageWidth, pageHeight) || { x: 0, y: 0, w: 0, h: 0 };
+  // Module 4: bbox + page assignment -- try every page's word list, keep
+  // whichever page produced the LONGEST match (not the first found), so a
+  // short accidental match on the wrong page can't beat the real one.
+  const tMap = Date.now();
+  const matches = ocrResult.items.map((item) => {
+    let best = null;
+    visionPages.forEach((vp, pageIdx) => {
+      if (!vp) return;
+      const m = findBboxForItem(item, vp.words, vp.width, vp.height);
+      if (m && (!best || m.matchLen > best.matchLen)) best = { ...m, page: pageIdx };
+    });
+    return best;
+  });
+  const mapMs = Date.now() - tMap;
+
+  const results = ocrResult.items.map((item, i) => {
+    const verdict = verdicts[i];
+    const match = matches[i];
     return {
       question: item.label,
       studentAnswer: item.studentAnswer,
       correct: verdict.correct,
       correctAnswer: verdict.correctAnswer,
       subject: verdict.subject,
+      // Explicit status alongside `correct` per 2026-09-21 review: null
+      // must read unambiguously as "not resolved", never silently coerced
+      // to a falsy/"wrong" UI state.
+      status: verdict.correct === null ? "needs_review" : "ok",
       note: verdict.correct === null ? "需要人手複核" : "",
-      page: 0,
-      bbox,
+      // null (not 0) when no page produced a match -- a real, confirmed
+      // page-0 match and "we don't know" must stay distinguishable, since
+      // items were previously silently miscollapsed onto page 0.
+      page: match ? match.page : null,
+      // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
+      // top-left bbox can never be confused with "no match found".
+      bbox: match ? { x: match.x, y: match.y, w: match.w, h: match.h } : null,
       anchor: item.label,
-      riskyDiagram: false,
+      // Not implemented in this pipeline yet. null ("unknown"), not false
+      // ("checked, not risky") -- a future consumer must not read this as
+      // a real, computed answer. /api/check's diagram-risk flag has no
+      // equivalent here yet.
+      riskyDiagram: null,
       verifiedBy: verdict.correct === null ? "pending" : "code",
     };
   });
 
   const correctCount = results.filter((r) => r.correct === true).length;
-  console.log(JSON.stringify({ event: "mark_usage", items: results.length, needsReview: results.filter((r) => r.correct === null).length, ocrUsage: ocrResult.usage, elapsedMs: Date.now() - startedAt }));
+  const needsReviewCount = results.filter((r) => r.correct === null).length;
+  const totalMs = Date.now() - startedAt;
+  console.log(JSON.stringify({
+    event: "mark_usage",
+    items: results.length,
+    pages: images.length,
+    needsReview: needsReviewCount,
+    ocrUsage: ocrResult.usage,
+    totalMs, qwenMs, visionMs, verifyMs, mapMs,
+  }));
 
+  // needsVerify has NO resolve endpoint yet (unlike /api/check's
+  // /api/verify pairing) -- this is backend-only bookkeeping, not a
+  // complete user-facing feature. Do not wire this pipeline to the
+  // frontend until a real review/resolve flow exists for these.
   return json({
     results,
     score: `${correctCount} / ${results.length}`,
