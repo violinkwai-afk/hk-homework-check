@@ -1695,30 +1695,50 @@ function verifyAnswer(item) {
 // latency, 6.2s -> 14.9s, for position data this cheaper lookup already
 // provides in under 1s).
 //
-// Requires a minimum 2-character match and picks the LONGEST matching
-// vision word rather than the first one found -- a real bug caught in
-// production testing: a 1-character threshold let unrelated items collide
-// onto the same short stray token (e.g. a lone page-number digit), so
-// several different questions came back with identical duplicate bboxes.
+// Bridges across consecutive Vision words to reconstruct a match, rather
+// than requiring one single word to contain it -- real captured Vision
+// output on this worksheet showed printed expressions like "4+6=" split
+// into FOUR separate word tokens ("4", "+", "6", "="), so an earlier
+// version of this function that only matched a single whole word either
+// (a) accepted 1-character words and let unrelated items collide onto the
+// same short stray token (e.g. a lone page-number digit) -- several
+// questions came back with identical duplicate bboxes -- or (b), once
+// that was tightened to a 2+ character minimum, missed the split-digit
+// case entirely and returned no bbox for most items. Requiring 2+
+// accumulated characters (after bridging over empty/punctuation tokens
+// like "+"/"=") keeps the anti-collision property while still matching
+// split expressions: a lone unrelated digit can't grow past 1 accumulated
+// character before the next real word breaks the prefix match.
 function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return null;
   const needle = String(item.printedQuestion || item.label || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6);
   if (!needle || needle.length < 2) return null;
+  const MAX_SPAN = 5;
   let best = null;
-  for (const w of visionWords) {
-    const hay = String(w.text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (hay.length < 2) continue;
-    if (needle.startsWith(hay) && (!best || hay.length > best.hayLen)) {
-      best = { hayLen: hay.length, w };
+  for (let i = 0; i < visionWords.length; i++) {
+    let acc = "", startWord = null, endWord = null;
+    for (let j = i; j < Math.min(i + MAX_SPAN, visionWords.length); j++) {
+      const hay = String(visionWords[j].text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!hay) continue;
+      const nextAcc = acc + hay;
+      if (!needle.startsWith(nextAcc)) break;
+      if (!startWord) startWord = visionWords[j];
+      acc = nextAcc;
+      endWord = visionWords[j];
+      if (acc.length >= 2 && (!best || acc.length > best.matchLen)) {
+        best = { matchLen: acc.length, startWord, endWord };
+      }
     }
   }
   if (!best) return null;
-  const w = best.w;
+  const { startWord: sw, endWord: ew } = best;
+  const x0 = Math.min(sw.x, ew.x), y0 = Math.min(sw.y, ew.y);
+  const x1 = Math.max(sw.x + sw.w, ew.x + ew.w), y1 = Math.max(sw.y + sw.h, ew.y + ew.h);
   return {
-    x: Math.round((w.x / pageWidth) * 100),
-    y: Math.round((w.y / pageHeight) * 100),
-    w: Math.round((w.w / pageWidth) * 100) || 5,
-    h: Math.round((w.h / pageHeight) * 100) || 5,
+    x: Math.round((x0 / pageWidth) * 100),
+    y: Math.round((y0 / pageHeight) * 100),
+    w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
+    h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
   };
 }
 
