@@ -1492,17 +1492,24 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
-    // 2026-09-22 latency experiment, round 3: DeepSeek V4.1 Flash was
-    // tried and rejected (slower, less accurate). "qwen/qwen-2.5-vl-7b-
-    // instruct" (round 2) turned out not to exist on OpenRouter at all
-    // (confirmed against the live /api/v1/models list -- 3 consecutive
-    // instant ~1.7s failures, too fast to be a real model call, is what
-    // exposed this). Trying the real current small Qwen3-VL variant:
-    // qwen/qwen3-vl-8b-instruct -- same generation as the Qwen3-VL-235B
-    // baseline, 8B. Prompt, parsing, verification, bbox, downscale,
+    // 2026-09-22 latency experiment, round 4: qwen3-vl-8b-instruct
+    // (round 3) was fast (2-6s, often ≤3s) but rejected for real
+    // reliability problems, confirmed with debug data returned in-band
+    // in the response (wrangler tail never captured anything for this
+    // preview branch across several attempts): it silently dropped half
+    // a worksheet's items, collapsed multi-part items back into merged
+    // garbage on complex layouts, and -- most importantly -- for
+    // "blank-in-the-middle" division questions it stopped doing pure
+    // OCR and started restructuring which value counts as "printed" vs
+    // "answer" (embedding the student's own handwritten digit into
+    // printedQuestion and reporting the pre-printed quotient as
+    // studentAnswer), which violates the OCR-only/no-judging design
+    // even though the resulting verdict happened not to be wrong.
+    // Trying qwen/qwen3-vl-30b-a3b-instruct next (MoE, ~3B active
+    // params). Prompt, parsing, verification, bbox, downscale,
     // concurrency, and timeout all unchanged. Function name kept as-is
     // for this test.
-    model: "qwen/qwen3-vl-8b-instruct",
+    model: "qwen/qwen3-vl-30b-a3b-instruct",
     max_tokens: 2000,
     messages: [
       {
@@ -1558,13 +1565,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
-  // remove once resolved. `wrangler tail` never captured anything for
-  // this preview branch across 4 real attempts (it appears to only
-  // tail the production deployment, not Workers Builds preview
-  // versions), so returning the raw text in-band is the only reliable
-  // way to inspect it.
-  return { items, usage: data.usage || null, rawText: text };
+  return { items, usage: data.usage || null };
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
@@ -1898,7 +1899,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, rawText: r.rawText, qwenMs: Date.now() - tQwen }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const visionPromise = !visionKey
@@ -1915,37 +1916,14 @@ async function handleMark(request, env) {
       console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
       return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, rawText: qwenOutcome.rawText, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
   });
   const pagesMs = Date.now() - tPages;
-
-  // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
-  // remove once resolved. `wrangler tail` never captured anything for
-  // this preview branch across 4 real attempts (it appears to only
-  // tail the production deployment, not Workers Builds preview
-  // versions), so this is collected in-band and returned in the
-  // response under `_debug` instead of console.log.
-  const debugItems = [];
 
   // Module 2: subject-aware verification (deterministic, no I/O) -- one
   // failed page contributes an empty verdict list, nothing more.
   const tVerify = Date.now();
-  const verdictsByPage = pageResults.map((pr, pageIdx) =>
-    pr.failed ? [] : pr.items.map((item) => {
-      const verdict = verifyAnswer(item);
-      debugItems.push({
-        page: pageIdx,
-        label: item.label,
-        printedQuestion: item.printedQuestion,
-        studentAnswer: item.studentAnswer,
-        parseFailed: !!item.parseFailed,
-        subject: verdict.subject,
-        correct: verdict.correct,
-        correctAnswer: verdict.correctAnswer,
-      });
-      return verdict;
-    })
-  );
+  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => verifyAnswer(item))));
   const verifyMs = Date.now() - tVerify;
 
   // Module 3: bbox, scoped to each item's OWN page's Vision words only --
@@ -2028,12 +2006,6 @@ async function handleMark(request, env) {
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
     ...(pageErrors.length ? { pageErrors } : {}),
-    // TEMPORARY DEBUG (2026-09-22, C false-positive investigation) --
-    // remove once resolved.
-    _debug: {
-      rawTextByPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, rawText: pr.rawText || null })),
-      items: debugItems,
-    },
   });
 }
 
