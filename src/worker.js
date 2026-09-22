@@ -18,6 +18,20 @@ import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/phot
 import { parseTelegramUpdate, telegramGetFile, telegramDownloadFile, telegramSendPhoto, telegramSendMessage, constantTimeEqual } from "./telegram.js";
 import { annotateImage } from "./annotate.js";
 
+// 2026-09-23, explicit instruction: "At the testing stage, do NOT use
+// Sonnet/Opus to solve any questions." Claude Sonnet/Opus are meaningfully
+// more expensive per call than the OpenRouter cheap tiers (Qwen/DeepSeek) --
+// a real past incident (see the comment above the callClaude call in
+// handleCheckInner) burned through the account's whole prepaid balance in
+// under 10 real submissions. Single kill switch checked at every call site
+// that could reach Anthropic (handleCheckInner's Sonnet fallback,
+// handleVerify's Sonnet+Opus recheckPass cascade) -- flip back to false
+// once the testing phase is over and cost-per-submission is being watched
+// deliberately again, not by re-adding scattered checks. /api/mark
+// (the Telegram/OCR-only pipeline) already never calls Anthropic at all,
+// so this constant has no effect there.
+const DISABLE_ANTHROPIC_DURING_TESTING = true;
+
 // Client now sends one /api/check call PER PAGE (see website/index.html), so
 // this counts pages, not submissions -- a single 5-page homework already
 // spends 5 of these. 15 meant just 3 real five-page submissions per hour
@@ -360,13 +374,21 @@ async function handleCheck(request, env) {
 
 async function handleCheckInner(request, env) {
   const startedAt = Date.now();
-  if (!env.ANTHROPIC_API_KEY) {
+  // Previously hard-required ANTHROPIC_API_KEY up front even though the
+  // OpenRouter cheap tiers (Qwen/DeepSeek) are tried FIRST and often
+  // succeed on their own -- with DISABLE_ANTHROPIC_DURING_TESTING on,
+  // Anthropic is never reached at all (see the Sonnet call site below), so
+  // requiring the key here would fail the whole endpoint over a key this
+  // request will never actually use. Only still hard-required when the
+  // Sonnet fallback could genuinely run.
+  if (!env.ANTHROPIC_API_KEY && !DISABLE_ANTHROPIC_DURING_TESTING) {
     return json(
       { error: "not_configured", message: "自動改功課未設定好，請聯絡網站管理員。" },
       503
     );
   }
-  const apiKey = typeof env.ANTHROPIC_API_KEY === "string"
+  const apiKey = (!env.ANTHROPIC_API_KEY || DISABLE_ANTHROPIC_DURING_TESTING) ? null
+    : typeof env.ANTHROPIC_API_KEY === "string"
     ? env.ANTHROPIC_API_KEY
     : await env.ANTHROPIC_API_KEY.get();
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
@@ -629,7 +651,7 @@ async function handleCheckInner(request, env) {
       return json({ error: "upstream_error", message: "部分題目暫時無法批改，建議家長人手核對，或一分鐘後再試一次。" }, 502);
     }
   }
-  if (!parsed) {
+  if (!parsed && !DISABLE_ANTHROPIC_DURING_TESTING) {
     try {
       // Trying "medium" effort again after root-causing the real reason
       // "medium" looked unsafe the first time: verbose per-item logging
@@ -654,6 +676,13 @@ async function handleCheckInner(request, env) {
     } catch (e) {
       return json({ error: e.kind || "upstream_error", message: e.uiMessage, detail: e.detail }, e.status || 502);
     }
+  }
+  if (!parsed) {
+    // Either DISABLE_ANTHROPIC_DURING_TESTING is on, or there was no
+    // OPENROUTER_API_KEY to try the cheap tiers with in the first place --
+    // either way, same honest "can't grade this right now" response the
+    // Anthropic-unconfigured case already gave, not a silent wrong answer.
+    return json({ error: "upstream_error", message: "部分題目暫時無法批改，建議家長人手核對，或一分鐘後再試一次。" }, 502);
   }
   (parsed.results || []).forEach(fixSelfContradiction);
 
@@ -785,7 +814,12 @@ async function handleCheckInner(request, env) {
 // the way to Opus) no longer blocks the user's first sight of ANY result
 // on that page.
 async function handleVerify(request, env) {
-  if (!env.ANTHROPIC_API_KEY) return json({ patches: [] }, 200);
+  // Same graceful "nothing to patch" response the missing-key case already
+  // gave -- phase 1 (handleCheckInner) already returned its confident marks
+  // to the client before this call ever fires, so items that stay
+  // unresolved here just stay needs_review, same as any other genuinely
+  // undecidable item, not a broken request.
+  if (!env.ANTHROPIC_API_KEY || DISABLE_ANTHROPIC_DURING_TESTING) return json({ patches: [] }, 200);
   const apiKey = typeof env.ANTHROPIC_API_KEY === "string"
     ? env.ANTHROPIC_API_KEY
     : await env.ANTHROPIC_API_KEY.get();

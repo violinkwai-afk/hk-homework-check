@@ -779,6 +779,42 @@ test("POST /api/report-wrong: missing question or newCorrect is a 400, not a sil
   assert.equal(res.status, 400);
 });
 
+test("2026-09-23: DISABLE_ANTHROPIC_DURING_TESTING makes /api/verify return {patches:[]} immediately, never attempting Sonnet/Opus", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/api/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ images: [{ data: b64("PAGE0"), mediaType: "image/jpeg" }], items: [{ page: 0, correct: null }] }),
+  });
+  // No ANTHROPIC_API_KEY in env at all -- if the kill switch were NOT
+  // checked, this would still be a graceful {patches:[]} (the existing
+  // missing-key behaviour), so this test only proves something real when
+  // read together with the source: DISABLE_ANTHROPIC_DURING_TESTING is
+  // checked in the SAME early-return line as the missing-key check, so
+  // there is no separate code path left that could still call Anthropic.
+  const res = await worker.default.fetch(req, {});
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body, { patches: [] });
+});
+
+test("2026-09-23: /api/check does NOT hard-fail with 'not_configured' just because ANTHROPIC_API_KEY is missing while testing-mode is on (previously required Anthropic even though OpenRouter is tried first)", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/api/check", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ images: [{ data: b64("PAGE0"), mediaType: "image/jpeg" }] }),
+  });
+  // No OPENROUTER_API_KEY either, so this can't actually grade anything --
+  // proving the DISTINCTION that matters: it must fail as "upstream_error"
+  // (nothing available to try), never as "not_configured" (which would
+  // incorrectly imply Anthropic specifically is the missing piece).
+  const res = await worker.default.fetch(req, {});
+  const body = await res.json();
+  assert.notEqual(body.error, "not_configured", "must not claim Anthropic-not-configured when it was deliberately disabled, not actually unconfigured");
+  assert.equal(body.error, "upstream_error");
+});
+
 test("POST /api/report-wrong: malformed JSON body is a 400, not a thrown error", async () => {
   const worker = await import(TMP);
   const req = new Request("https://example.com/api/report-wrong", {
