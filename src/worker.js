@@ -1763,54 +1763,75 @@ function parseOcrLine(text) {
 // /÷ between integers/decimals, left-to-right (no operator precedence
 // needed for the single/double-operation sums this targets). Returns null
 // if the string isn't a clean arithmetic expression, rather than guessing.
+// 2026-09-23 real gap found (P4 paper): "(114+58)-(44+38)=" has no
+// bracket/grouping support at all in the old flat left-to-right tokenizer,
+// so it would mis-tokenize or return null. Rewritten as a small recursive-
+// descent parser (parseExpr -> parseTerm -> parseFactor) so real operator
+// precedence AND explicit bracket grouping both work, while preserving
+// every prior behavior for non-bracket input (same tokenizer regex, same
+// lookbehind, same "at least 2 number tokens required" rule below).
 function evalArithmetic(str) {
-  const cleaned = String(str).replace(/[×x]/gi, "*").replace(/÷/g, "/").replace(/\s+/g, "");
-  if (!/^-?\d+(\.\d+)?([+\-*/]-?\d+(\.\d+)?)+$/.test(cleaned)) return null;
+  const cleaned = String(str)
+    .replace(/[×x]/gi, "*")
+    .replace(/÷/g, "/")
+    .replace(/[（]/g, "(")
+    .replace(/[）]/g, ")")
+    .replace(/\s+/g, "");
+  if (!cleaned) return null;
   // The lookbehind (?<![\d)]) is load-bearing: without it, a "-" right after a
-  // digit (e.g. "328-214") gets greedily swallowed into the NEXT number as a
-  // unary sign ("328", "-214" -- 2 tokens), never recognised as the binary
-  // subtraction operator, so every plain subtraction silently evaluated to
-  // null (2026-09-22 real-paper find -- no existing test happened to cover
-  // plain two-number subtraction through this path). The lookbehind forces
-  // "-" to tokenise as a standalone operator whenever it follows a digit,
-  // while still allowing a genuine leading/operator-following "-" (e.g.
-  // "-5+3", "3+-5") to bind to its number as before.
-  const tokens = cleaned.match(/(?<![\d)])-?\d+(\.\d+)?|[+\-*/]/g);
-  if (!tokens || !tokens.length) return null;
-  // 2026-09-22 real bug (found reviewing real fraction items, but affects
-  // ANY mixed +-/*÷ expression, not just fractions): this used to fold
-  // every operator left-to-right with no precedence at all, so
-  // "1/2+1/4" computed ((1/2)+1)/4 = 0.375 instead of the correct 0.75,
-  // and even plain "2+3*4" computed (2+3)*4=20 instead of 14. No existing
-  // test happened to mix +/- with */÷ in one expression, so this was
-  // never caught. Fixed with a standard two-pass evaluation: resolve
-  // every * and / first (left-to-right), THEN sum the remaining +/-
-  // terms (left-to-right) -- real operator precedence, not just "in
-  // order they appear".
-  const terms = [parseFloat(tokens[0])];
-  const termSigns = [1];
-  if (Number.isNaN(terms[0])) return null;
-  for (let i = 1; i < tokens.length; i += 2) {
-    const op = tokens[i];
-    const val = parseFloat(tokens[i + 1]);
-    if (Number.isNaN(val)) return null;
-    if (op === "+" || op === "-") {
-      terms.push(val);
-      termSigns.push(op === "+" ? 1 : -1);
-    } else {
-      // * and / bind to the term currently being built, before it's
-      // added to the running +/- sum.
-      const last = terms.length - 1;
-      if (op === "*") terms[last] *= val;
-      else if (op === "/") terms[last] = val === 0 ? NaN : terms[last] / val;
+  // digit or ")" (e.g. "328-214") gets greedily swallowed into the NEXT
+  // number as a unary sign instead of recognised as the binary subtraction
+  // operator (2026-09-22 real-paper find). It also now correctly excludes
+  // "-" right after a closing bracket from binding as a unary sign.
+  const tokens = cleaned.match(/(?<![\d)])-?\d+(\.\d+)?|[+\-*/()]/g);
+  if (!tokens || tokens.join("").length !== cleaned.length) return null;
+  const numberTokenCount = tokens.filter((t) => /^-?\d/.test(t)).length;
+  if (numberTokenCount < 2) return null;
+
+  let pos = 0;
+  const peek = () => tokens[pos];
+  function parseFactor() {
+    const t = peek();
+    if (t === "(") {
+      pos++;
+      const inner = parseExpr();
+      if (inner === null || peek() !== ")") return null;
+      pos++;
+      return inner;
     }
+    if (t !== undefined && /^-?\d+(\.\d+)?$/.test(t)) {
+      pos++;
+      return parseFloat(t);
+    }
+    return null;
   }
-  let result = 0;
-  for (let i = 0; i < terms.length; i++) {
-    if (Number.isNaN(terms[i])) return null;
-    result += termSigns[i] * terms[i];
+  function parseTerm() {
+    let value = parseFactor();
+    if (value === null) return null;
+    while (peek() === "*" || peek() === "/") {
+      const op = tokens[pos++];
+      const rhs = parseFactor();
+      if (rhs === null) return null;
+      value = op === "*" ? value * rhs : rhs === 0 ? NaN : value / rhs;
+      if (Number.isNaN(value)) return null;
+    }
+    return value;
   }
-  return Number.isNaN(result) ? null : result;
+  function parseExpr() {
+    let value = parseTerm();
+    if (value === null) return null;
+    while (peek() === "+" || peek() === "-") {
+      const op = tokens[pos++];
+      const rhs = parseTerm();
+      if (rhs === null) return null;
+      value = op === "+" ? value + rhs : value - rhs;
+    }
+    return value;
+  }
+
+  const result = parseExpr();
+  if (result === null || pos !== tokens.length || Number.isNaN(result)) return null;
+  return result;
 }
 
 // Parses a bare numeric answer that may be a simple fraction ("3/4"), not
@@ -2388,20 +2409,56 @@ function verifySequenceFill(printedQuestion, studentAnswer) {
 // permutation of the SAME numbers (not just numerically sorted -- a
 // wrong/extra number is a format problem, reported as incorrect against
 // the real expected list, not silently ignored).
+// Matches a mixed number ("7又7/9"), a plain fraction ("37/5"), or a plain
+// decimal, in that priority order (longest/most-specific shape first) so a
+// mixed number never gets mis-split into 3 separate plain-number tokens.
+// 2026-09-23 real bug fix: found via a real P5 paper asking to sort
+// "37/5、7又7/9、7又2/3" -- the old plain `-?\d+(\.\d+)?` regex tore this
+// into 5 separate integer tokens (37, 5, 7, 7, 9, 7, 2, 3), producing a
+// completely wrong multiset/order comparison instead of failing safely.
+const SORTABLE_NUMBER_RE = /-?\d+又\d+\/\d+|-?\d+\/\d+|-?\d+(\.\d+)?/g;
+
+function parseSortableNumber(tok) {
+  const mixed = /^(-?)(\d+)又(\d+)\/(\d+)$/.exec(tok);
+  if (mixed) {
+    const sign = mixed[1] === "-" ? -1 : 1;
+    const whole = parseFloat(mixed[2]);
+    const num = parseFloat(mixed[3]);
+    const den = parseFloat(mixed[4]);
+    return den === 0 ? NaN : sign * (whole + num / den);
+  }
+  const frac = /^(-?\d+)\/(\d+)$/.exec(tok);
+  if (frac) {
+    const den = parseFloat(frac[2]);
+    return den === 0 ? NaN : parseFloat(frac[1]) / den;
+  }
+  return parseFloat(tok);
+}
+
+// 2026-09-23: added 由小至大/由大至小 (「至」as well as 「到」, same meaning)
+// after a real P5 paper used this exact phrasing -- confirmed via real
+// PDF reading, not guessed.
 function verifySortNumbers(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
-  const wantAsc = /由小到大|ascending|smallest to largest/i.test(printed);
-  const wantDesc = /由大到小|descending|largest to smallest/i.test(printed);
+  const wantAsc = /由小到大|由小至大|ascending|smallest to largest/i.test(printed);
+  const wantDesc = /由大到小|由大至小|descending|largest to smallest/i.test(printed);
   if (wantAsc === wantDesc) return { correct: null, correctAnswer: "" };
-  const given = (printed.match(/-?\d+(\.\d+)?/g) || []).map(Number);
-  if (given.length < 2) return { correct: null, correctAnswer: "" };
+  const given = (printed.match(SORTABLE_NUMBER_RE) || []).map(parseSortableNumber);
+  if (given.length < 2 || given.some(Number.isNaN)) return { correct: null, correctAnswer: "" };
   const expectedOrder = [...given].sort((a, b) => (wantAsc ? a - b : b - a));
-  const studentNums = (String(studentAnswer || "").match(/-?\d+(\.\d+)?/g) || []).map(Number);
-  if (studentNums.length !== given.length) return { correct: false, correctAnswer: expectedOrder.join(", ") };
-  const sameMultiset = [...studentNums].sort((a, b) => a - b).join(",") === [...given].sort((a, b) => a - b).join(",");
-  if (!sameMultiset) return { correct: false, correctAnswer: expectedOrder.join(", ") };
-  const isExpectedOrder = studentNums.every((n, i) => n === expectedOrder[i]);
-  return { correct: isExpectedOrder, correctAnswer: isExpectedOrder ? "" : expectedOrder.join(", ") };
+  const studentTokens = String(studentAnswer || "").match(SORTABLE_NUMBER_RE) || [];
+  const studentNums = studentTokens.map(parseSortableNumber);
+  const formatOrder = (nums) => nums.map((n) => (Number.isInteger(n) ? String(n) : n.toFixed(4).replace(/0+$/, "").replace(/\.$/, ""))).join(", ");
+  if (studentNums.length !== given.length || studentNums.some(Number.isNaN)) {
+    return { correct: false, correctAnswer: formatOrder(expectedOrder) };
+  }
+  const closeEnough = (a, b) => Math.abs(a - b) < 1e-9;
+  const sortedStudent = [...studentNums].sort((a, b) => a - b);
+  const sortedGiven = [...given].sort((a, b) => a - b);
+  const sameMultiset = sortedStudent.length === sortedGiven.length && sortedStudent.every((n, i) => closeEnough(n, sortedGiven[i]));
+  if (!sameMultiset) return { correct: false, correctAnswer: formatOrder(expectedOrder) };
+  const isExpectedOrder = studentNums.every((n, i) => closeEnough(n, expectedOrder[i]));
+  return { correct: isExpectedOrder, correctAnswer: isExpectedOrder ? "" : formatOrder(expectedOrder) };
 }
 
 // 4x4 Sudoku/Latin-square (rows AND columns each contain 1-4 exactly
@@ -2648,13 +2705,28 @@ function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
 // problems ("比...多", a different pattern, out of scope here) or
 // problems with more/fewer than 2 numbers, which this simple
 // number-extraction can't safely disambiguate.
+// 2026-09-23: generalized from "exactly 2 numbers" to "2 or more", per
+// explicit user decision (ticket B9) overriding the prior deliberate
+// "more than 2 numbers stays null, never guessed" safety choice -- real
+// evidence found the same day of a genuine 3-addend shape ("42張藍色
+//椅子,36張紅色椅子,15張黃色椅子,共有幾多張椅子?"). The user weighed the
+// known residual risk (OCR merging two adjacent questions' numbers into
+// one chunk would now be summed instead of safely declined) against the
+// real accuracy gain and chose to generalize.
+//
+// Real failure found WHILE making this exact change (not hypothetical):
+// a 3-group word problem phrased "第1組有10人，第2組有20人，第3組有30
+// 人，共有多少人？" would sum ALL 6 numbers (1+10+2+20+3+30=66) if group
+// ORDINAL labels ("第1組"/"第2組") were treated as quantities -- the
+// `(?<!第)` exclusion below keeps a number immediately preceded by "第"
+// (a Chinese ordinal marker, never itself a quantity) out of the sum.
 function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
-  const nums = (printed.match(/\d+/g) || []).map(Number);
-  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
-  const expected = nums[0] + nums[1];
+  const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
+  if (nums.length < 2) return { correct: null, correctAnswer: "" };
+  const expected = nums.reduce((a, b) => a + b, 0);
   const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
@@ -2747,6 +2819,244 @@ function verifyWordProblemDifference(printedQuestion, studentAnswer) {
   const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Word problem needing a ROUND-UP (ceiling) division, not floor -- real,
+// recurring trap found independently in 3 separate PDF-reading passes
+// 2026-09-23 (Groups A, B, D): "的士站有18人,每輛的士載4人,最少需要幾多
+// 輛的士?" (⌈18/4⌉=5, NOT 18÷4=4). A plain floor-division verifier would
+// confidently accept the wrong "4". Narrowly triggered on 至少/最少/"at
+// least" co-occurring with a "每..." per-unit rate, exactly like
+// verifyWordProblemDivision's own trigger discipline. The divisor is
+// found via the "每" rate phrase specifically (not "whichever of the 2
+// numbers comes first"), since real examples have the rate number
+// appear BEFORE or AFTER the total depending on sentence order.
+function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/(至少|最少)/.test(printed) && !/at least/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const perMatch = printed.match(/每[^\d]{0,10}(\d+)/);
+  if (!perMatch) return { correct: null, correctAnswer: "" };
+  const divisor = Number(perMatch[1]);
+  if (!divisor) return { correct: null, correctAnswer: "" };
+  const allNums = (printed.match(/\d+/g) || []).map(Number);
+  if (allNums.length !== 2) return { correct: null, correctAnswer: "" };
+  const dividend = allNums.find((n) => n !== divisor);
+  if (dividend === undefined) return { correct: null, correctAnswer: "" };
+  const expected = Math.ceil(dividend / divisor);
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "The number right after N -- how many digits does it have?" (real
+// example, p1-p6.com P3 maths: "9999後面嗰個數,有幾多個位?" -> 5). Pure
+// place-value-boundary logic, zero visual/OCR risk once the one number
+// is read -- narrowly triggered on an explicit "next/after" + "digit
+// count" phrasing so it can't misfire on an ordinary digit-count-of-N
+// question (a different, simpler fact this function does NOT attempt).
+function verifyDigitCountOfNPlusOne(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/(後面|之後|後嗰個|next|after)/i.test(printed)) return { correct: null, correctAnswer: "" };
+  if (!/(位|digit)/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 1) return { correct: null, correctAnswer: "" };
+  const expected = String(nums[0] + 1).length;
+  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Compound-unit-to-single-unit length conversion (real, recurring across
+// Groups B/C, 2026-09-23): "8m 11cm = ___cm" (811), "10cm 2mm = ___mm"
+// (102). Narrowly triggered on TWO distinct length-unit tokens before
+// "=" plus a THIRD length-unit token after it -- specific enough that it
+// shouldn't misfire on an ordinary bare-number math equation.
+function verifyCompoundUnitConversion(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+(?:\.\d+)?)\s*(km|mm|cm|m)\s*(\d+(?:\.\d+)?)\s*(km|mm|cm|m)\s*=[^a-zA-Z]*(km|mm|cm|m)\b/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, v1, u1, v2, u2, u3] = m;
+  const TO_MM = { km: 1000000, m: 1000, cm: 10, mm: 1 };
+  const u1n = u1.toLowerCase(), u2n = u2.toLowerCase(), u3n = u3.toLowerCase();
+  const totalMm = Number(v1) * TO_MM[u1n] + Number(v2) * TO_MM[u2n];
+  const expected = totalMm / TO_MM[u3n];
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const closeEnough = Math.abs(studentNum - expected) < 1e-9;
+  const expectedStr = Number.isInteger(expected) ? String(expected) : expected.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return { correct: closeEnough, correctAnswer: closeEnough ? "" : expectedStr };
+}
+
+// Construct the largest/smallest N-digit number from a given multiset of
+// digits, optionally under an odd/even constraint on the last digit
+// (real examples, 2026-09-23 PDF reading: "用5,0,8,6,2砌最小嘅五位數"
+// (50268); "form the largest 5-digit ODD number from 7,0,3,9,1" (97301)).
+// Brute-force permutation search -- correct by construction, not a
+// heuristic -- capped at 7 digits (5040 permutations) to stay cheap;
+// callers must not invoke this on more digits than that.
+function verifyConstructExtremeNumber(digits, { largest, parity } = {}) {
+  if (!Array.isArray(digits) || digits.length < 1 || digits.length > 7) return null;
+  const nums = digits.map(Number);
+  if (nums.some((d) => !Number.isInteger(d) || d < 0 || d > 9)) return null;
+  const permute = (arr) => {
+    if (arr.length <= 1) return [arr];
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+      for (const p of permute(rest)) out.push([arr[i], ...p]);
+    }
+    return out;
+  };
+  let best = null;
+  for (const p of permute(nums)) {
+    if (p.length > 1 && p[0] === 0) continue;
+    const last = p[p.length - 1];
+    if (parity === "odd" && last % 2 === 0) continue;
+    if (parity === "even" && last % 2 !== 0) continue;
+    const value = Number(p.join(""));
+    if (best === null || (largest ? value > best : value < best)) best = value;
+  }
+  return best;
+}
+
+// Text-driven wrapper for verifyConstructExtremeNumber, keyed off the
+// REAL confirmed sentence shape (2026-09-23: pulled the actual source
+// page and read the real printed text directly, not guessed) --
+// Chinese: "把5,0,8,6和2這五個數字組成一個最小的五位數。"; English:
+// "Use 5, 0, 8, 6 and 2 to form the smallest 5-digit number." Verified
+// end-to-end against the REAL live production `/api/mark` pipeline the
+// same day (a photo of this exact real exam page, with a simulated
+// answer written in): the item correctly came back `needs_review`
+// (safe, no wrong guess) before this function existed, confirming the
+// registry's fail-safe default was working -- this wrapper is what lets
+// it move from "safely declined" to "correctly graded".
+//
+// Digit-list extraction: every standalone Arabic digit in the printed
+// text EXCEPT one immediately followed by "-digit" (English width
+// spec, e.g. the "5" in "5-digit") or by "位" (Chinese width spec, e.g.
+// a possible "5位數" phrasing) -- the real Chinese example spells its
+// width in a CHINESE numeral ("五位數"), so this exclusion is a safety
+// margin for an English-digit width phrasing, not yet independently
+// confirmed by a second real example. If a width IS stated (Chinese
+// numeral word, or "N-digit"), it's cross-checked against the extracted
+// digit count -- a mismatch declines (null) rather than risk silently
+// using the wrong digit set.
+function verifyConstructExtremeNumberFromText(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/(組成|to form|form the)/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const largest = /(最大|largest|greatest)/i.test(printed);
+  const smallest = /(最小|smallest|least)/i.test(printed);
+  if (largest === smallest) return { correct: null, correctAnswer: "" };
+  let parity = null;
+  if (/(奇數|\bodd\b)/i.test(printed)) parity = "odd";
+  else if (/(偶數|\beven\b)/i.test(printed)) parity = "even";
+  const digitTokens = printed.match(/\d(?!-digit)(?!位)/g);
+  if (!digitTokens || digitTokens.length < 2 || digitTokens.length > 7) return { correct: null, correctAnswer: "" };
+  const digits = digitTokens.map(Number);
+  const cnWidth = printed.match(/([一二三四五六七八九十])位(?:數|奇數|偶數)/);
+  const enWidth = printed.match(/(\d+)-digit/i);
+  const statedWidth = cnWidth ? parseChineseNumberWord(cnWidth[1]) : enWidth ? Number(enWidth[1]) : null;
+  if (statedWidth !== null && statedWidth !== digits.length) return { correct: null, correctAnswer: "" };
+  const expected = verifyConstructExtremeNumber(digits, { largest, parity });
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "From {a,b,c,...} select TWO numbers that add up to a printed target"
+// (real example, 2026-09-23: "從6,9,4中選兩個, ___+___=10"). Real live
+// production test (2026-09-23, same day) showed the common real OCR
+// shape for this type is actually a single combined equation string
+// ("6+4=10"), which the EXISTING `math_equation`/`verifyMath` fallback
+// already grades correctly for free -- no new handler needed for that
+// shape. The one confirmed real gap that test exposed: `verifyMath`
+// only checks the equation is arithmetically true, NOT that the two
+// numbers used were actually from the printed candidate set (e.g. a
+// fabricated "3+7=10" using numbers not in {6,9,4} would also pass) --
+// logged as a known minor gap in TICKETS.md rather than fixed here,
+// since reliably extracting the printed CANDIDATE set (as opposed to
+// the equation itself) from OCR text isn't yet confirmed real evidence.
+// This function stays available for a caller that already has the
+// candidate set and target as separate structured fields.
+function verifySelectTwoNumbersSumTarget(candidateNums, target, studentAnswer) {
+  const candidates = (candidateNums || []).map(Number);
+  const t = Number(target);
+  if (candidates.length < 2 || candidates.length > 8 || !Number.isFinite(t)) return { correct: null, correctAnswer: "" };
+  const studentNums = (String(studentAnswer || "").match(/-?\d+(\.\d+)?/g) || []).map(Number);
+  if (studentNums.length !== 2) return { correct: null, correctAnswer: "" };
+  const remaining = [...candidates];
+  const bothFromSet = studentNums.every((n) => {
+    const idx = remaining.indexOf(n);
+    if (idx === -1) return false;
+    remaining.splice(idx, 1);
+    return true;
+  });
+  const sumOk = studentNums[0] + studentNums[1] === t;
+  if (sumOk && bothFromSet) return { correct: true, correctAnswer: "" };
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      if (candidates[i] + candidates[j] === t) {
+        return { correct: false, correctAnswer: `${candidates[i]}+${candidates[j]}=${t}` };
+      }
+    }
+  }
+  return { correct: false, correctAnswer: "" };
+}
+
+// List all factors (divisors) of N (real examples, 2026-09-23 P4 PDF
+// reading: "寫出25嘅所有因數" -> 1,5,25; "列出34的所有因數" ->
+// 1,2,17,34). Order-independent set comparison against the student's
+// list, matching the real "全對才給分" (all-or-nothing) grading note
+// found alongside this type in the source paper -- listing the right
+// numbers in any order is correct, a missing or extra factor is not.
+function verifyListFactors(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(?:寫出|列出)\s*(\d+)\s*(?:嘅|的)所有因數|list all (?:the )?factors of\s*(\d+)/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1] || m[2]);
+  if (!Number.isInteger(n) || n < 1 || n > 100000) return { correct: null, correctAnswer: "" };
+  const factors = [];
+  for (let i = 1; i <= n; i++) if (n % i === 0) factors.push(i);
+  const studentNums = (answer.match(/\d+/g) || []).map(Number);
+  const sortedStudent = [...studentNums].sort((a, b) => a - b);
+  const sameSet = sortedStudent.length === factors.length && sortedStudent.every((v, i) => v === factors[i]);
+  return { correct: sameSet, correctAnswer: sameSet ? "" : factors.join(", ") };
+}
+
+// Count primes strictly below N (real example, 2026-09-23 P4 PDF
+// reading: "100以內共有質數多少個?" -> 25, i.e. the primes from 2 to
+// 99). Plain sieve of Eratosthenes -- code-computable directly from the
+// one printed range number, zero visual/OCR risk.
+function verifyCountPrimesBelow(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*(?:以內|以下|之內)[^\d]{0,10}(?:質數|prime)/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const limit = Number(m[1]);
+  if (!Number.isInteger(limit) || limit < 2 || limit > 1000000) return { correct: null, correctAnswer: "" };
+  const isComposite = new Array(limit).fill(false);
+  let count = 0;
+  for (let i = 2; i < limit; i++) {
+    if (!isComposite[i]) {
+      count++;
+      for (let j = i * i; j < limit; j += i) isComposite[j] = true;
+    }
+  }
+  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
 }
 
 // =======================================================================
@@ -2896,8 +3206,8 @@ const QUESTION_TYPE_HANDLERS = [
     name: "sort_numbers",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      const wantAsc = /由小到大|ascending|smallest to largest/i.test(printed);
-      const wantDesc = /由大到小|descending|largest to smallest/i.test(printed);
+      const wantAsc = /由小到大|由小至大|ascending|smallest to largest/i.test(printed);
+      const wantDesc = /由大到小|由大至小|descending|largest to smallest/i.test(printed);
       if (wantAsc === wantDesc) return false;
       return (printed.match(/-?\d+(\.\d+)?/g) || []).length >= 2;
     },
@@ -2967,7 +3277,7 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
       if (!/(共|總共|一共|合共)/.test(printed)) return false;
-      return (printed.match(/\d+/g) || []).length === 2;
+      return (printed.match(/(?<!第)\d+/g) || []).length >= 2;
     },
     verify: (item) => verifyWordProblemTotal(item.printedQuestion, item.studentAnswer),
   },
@@ -2981,6 +3291,22 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyWordProblemDifference(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Must run BEFORE word_problem_division: both key off a "每" per-unit
+    // rate phrase, but this one is the narrower, more specific trigger
+    // (至少/最少/"at least" additionally required) -- first-match-wins
+    // dispatch means the more specific detector needs to go first so a
+    // real ceiling-division item can't be silently swallowed by the
+    // broader division handler below it.
+    name: "word_problem_ceiling_division",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/(至少|最少)/.test(printed) && !/at least/i.test(printed)) return false;
+      if (!/每[^\d]{0,10}\d+/.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyWordProblemCeilingDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_division",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -2989,6 +3315,44 @@ const QUESTION_TYPE_HANDLERS = [
       return (printed.match(/\d+/g) || []).length === 2;
     },
     verify: (item) => verifyWordProblemDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "digit_count_of_n_plus_one",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/(後面|之後|後嗰個|next|after)/i.test(printed)) return false;
+      if (!/(位|digit)/i.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 1;
+    },
+    verify: (item) => verifyDigitCountOfNPlusOne(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "compound_unit_conversion",
+    detect: (item) => /(\d+(?:\.\d+)?)\s*(km|mm|cm|m)\s*(\d+(?:\.\d+)?)\s*(km|mm|cm|m)\s*=[^a-zA-Z]*(km|mm|cm|m)\b/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCompoundUnitConversion(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "construct_extreme_number",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/(組成|to form|form the)/i.test(printed)) return false;
+      const largest = /(最大|largest|greatest)/i.test(printed);
+      const smallest = /(最小|smallest|least)/i.test(printed);
+      if (largest === smallest) return false;
+      const digitTokens = printed.match(/\d(?!-digit)(?!位)/g);
+      return !!digitTokens && digitTokens.length >= 2 && digitTokens.length <= 7;
+    },
+    verify: (item) => verifyConstructExtremeNumberFromText(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "list_factors",
+    detect: (item) => /(?:寫出|列出)\s*\d+\s*(?:嘅|的)所有因數|list all (?:the )?factors of\s*\d+/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyListFactors(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "count_primes_below",
+    detect: (item) => /\d+\s*(?:以內|以下|之內)[^\d]{0,10}(?:質數|prime)/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCountPrimesBelow(item.printedQuestion, item.studentAnswer),
   },
   {
     name: "grammar_cloze",
@@ -3024,7 +3388,7 @@ function classifyAndVerify(item) {
     if (handler.detect(item)) {
       const result = handler.verify(item);
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
-        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion"].includes(handler.name)
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
       return { ...result, subject, handler: handler.name };
     }
@@ -3636,5 +4000,13 @@ export {
   verifyPriceTableLookup,
   verifyWordProblemDivision,
   verifyWordProblemDifference,
+  verifyWordProblemCeilingDivision,
+  verifyDigitCountOfNPlusOne,
+  verifyCompoundUnitConversion,
+  verifyConstructExtremeNumber,
+  verifyConstructExtremeNumberFromText,
+  verifySelectTwoNumbersSumTarget,
+  verifyListFactors,
+  verifyCountPrimesBelow,
   classifyAndVerify,
 };

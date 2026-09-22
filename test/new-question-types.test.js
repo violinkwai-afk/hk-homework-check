@@ -552,9 +552,17 @@ test("word problem total: no '共' keyword present stays null (avoids misreading
   assert.equal(r.correct, null);
 });
 
-test("word problem total: more than 2 numbers in the text stays null, never guessed", async () => {
+// 2026-09-23: generalized to 2+ numbers per explicit user decision
+// (ticket B9) -- this used to assert null on a 3-number example; the
+// user weighed the known residual risk and chose to sum all of them.
+test("word problem total: 3+ numbers are all summed, per 2026-09-23 user decision (ticket B9)", async () => {
   const r = mod.verifyWordProblemTotal("第1組有10人，第2組有20人，第3組有30人，共有多少人？", "60");
-  assert.equal(r.correct, null);
+  assert.equal(r.correct, true);
+});
+
+test("word problem total: real 3-addend example (42+36+15 chairs)", async () => {
+  const r = mod.verifyWordProblemTotal("42張藍色椅子，36張紅色椅子，15張黃色椅子，共有多少張椅子？", "93");
+  assert.equal(r.correct, true);
 });
 
 // --- Price-table lookup + compute ---------------------------------------
@@ -785,4 +793,224 @@ test("verifyMath: a fraction-form answer to a fraction expression is marked corr
 test("verifyMath: a fraction-form answer that's actually wrong is marked incorrect, not silently null", () => {
   const r = mod.verifyMath("1/2+1/4=", "1/2");
   assert.equal(r.correct, false);
+});
+
+// --- evalArithmetic: bracket/grouping support (2026-09-23) --------------
+
+test("evalArithmetic: brackets compute the grouped value first", () => {
+  assert.equal(mod.evalArithmetic("(114+58)-(44+38)"), 90);
+});
+
+test("evalArithmetic: nested brackets", () => {
+  assert.equal(mod.evalArithmetic("((2+3)*4)-1"), 19);
+});
+
+test("evalArithmetic: unmatched bracket returns null, not a guess", () => {
+  assert.equal(mod.evalArithmetic("(5+3"), null);
+});
+
+test("evalArithmetic: a bare bracketed number with no real operator still returns null", () => {
+  assert.equal(mod.evalArithmetic("(56)"), null);
+});
+
+test("evalArithmetic: full-width Chinese brackets are normalized", () => {
+  assert.equal(mod.evalArithmetic("（1+2）*3"), 9);
+});
+
+// --- verifySortNumbers: fraction / mixed-number tokens (2026-09-23 bug fix) --
+
+test("sort: real P5 fraction/mixed-number example is parsed correctly, not torn into plain integers", () => {
+  const r = mod.verifySortNumbers("把37/5、7又7/9、7又2/3由小至大排列", "37/5、7又2/3、7又7/9");
+  assert.equal(r.correct, true);
+});
+
+test("sort: fraction/mixed-number example, wrong order is caught with the real expected order", () => {
+  const r = mod.verifySortNumbers("把37/5、7又7/9、7又2/3由小至大排列", "7又7/9、7又2/3、37/5");
+  assert.equal(r.correct, false);
+  assert.ok(r.correctAnswer.includes("7.4"));
+});
+
+// --- verifyWordProblemCeilingDivision (2026-09-23) ----------------------
+
+test("ceiling division: real taxi example, must round UP not down", () => {
+  const r = mod.verifyWordProblemCeilingDivision("的士站有18人排隊，每輛的士可以載4人，最少需要幾多輛的士？", "5");
+  assert.equal(r.correct, true);
+});
+
+test("ceiling division: naive floor-division answer is caught as wrong", () => {
+  const r = mod.verifyWordProblemCeilingDivision("的士站有18人排隊，每輛的士可以載4人，最少需要幾多輛的士？", "4");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "5");
+});
+
+test("ceiling division: works when the per-unit rate number appears BEFORE the total in the sentence", () => {
+  const r = mod.verifyWordProblemCeilingDivision("每個盒可以放7個波，總共有66個波，最少需要幾多個盒？", "10");
+  assert.equal(r.correct, true);
+});
+
+test("ceiling division: no 至少/最少 keyword stays null, never guessed", () => {
+  const r = mod.verifyWordProblemCeilingDivision("的士站有18人排隊，每輛的士可以載4人，需要幾多輛的士？", "5");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyDigitCountOfNPlusOne (2026-09-23) ----------------------------
+
+test("digit count of N+1: real example, 9999 -> 10000 has 5 digits", () => {
+  const r = mod.verifyDigitCountOfNPlusOne("9999後面嗰個數，有幾多個位？", "5");
+  assert.equal(r.correct, true);
+});
+
+test("digit count of N+1: wrong answer is caught", () => {
+  const r = mod.verifyDigitCountOfNPlusOne("9999後面嗰個數，有幾多個位？", "4");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "5");
+});
+
+test("digit count of N+1: no next/after keyword stays null", () => {
+  const r = mod.verifyDigitCountOfNPlusOne("9999有幾多個位？", "4");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyCompoundUnitConversion (2026-09-23) --------------------------
+
+test("compound unit conversion: real example, 8m 11cm -> 811cm", () => {
+  const r = mod.verifyCompoundUnitConversion("8m 11cm = ___cm", "811");
+  assert.equal(r.correct, true);
+});
+
+test("compound unit conversion: real example, 10cm 2mm -> 102mm", () => {
+  const r = mod.verifyCompoundUnitConversion("10cm 2mm = ___mm", "102");
+  assert.equal(r.correct, true);
+});
+
+test("compound unit conversion: wrong answer is caught with the real expected value", () => {
+  const r = mod.verifyCompoundUnitConversion("8m 11cm = ___cm", "800");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "811");
+});
+
+test("compound unit conversion: plain single-unit equation does not falsely trigger", () => {
+  const r = mod.verifyCompoundUnitConversion("34+23=", "57");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyConstructExtremeNumber (2026-09-23, exported but not yet wired) --
+
+test("construct extreme number: smallest 5-digit number from a digit set, no leading zero", () => {
+  assert.equal(mod.verifyConstructExtremeNumber([5, 0, 8, 6, 2], { largest: false }), 20568);
+});
+
+test("construct extreme number: largest 5-digit number from a digit set", () => {
+  assert.equal(mod.verifyConstructExtremeNumber([5, 0, 8, 6, 2], { largest: true }), 86520);
+});
+
+test("construct extreme number: largest 5-digit ODD number under a parity constraint", () => {
+  assert.equal(mod.verifyConstructExtremeNumber([7, 0, 3, 9, 1], { largest: true, parity: "odd" }), 97301);
+});
+
+test("construct extreme number: smallest 3-digit number, no leading zero, from digits including 0", () => {
+  assert.equal(mod.verifyConstructExtremeNumber([7, 0, 9], { largest: false }), 709);
+});
+
+test("construct extreme number: too many digits refuses rather than being slow/wrong", () => {
+  assert.equal(mod.verifyConstructExtremeNumber([1, 2, 3, 4, 5, 6, 7, 8], { largest: true }), null);
+});
+
+// --- verifySelectTwoNumbersSumTarget (2026-09-23, exported but not yet wired) --
+
+test("select two numbers summing to target: real example, correct pair", () => {
+  const r = mod.verifySelectTwoNumbersSumTarget([6, 9, 4], 10, "6+4");
+  assert.equal(r.correct, true);
+});
+
+test("select two numbers summing to target: wrong pair is caught with a valid example given", () => {
+  const r = mod.verifySelectTwoNumbersSumTarget([6, 9, 4], 10, "9+4");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "6+4=10");
+});
+
+test("select two numbers summing to target: a number not in the candidate set is rejected", () => {
+  const r = mod.verifySelectTwoNumbersSumTarget([6, 9, 4], 10, "6+5");
+  assert.equal(r.correct, false);
+});
+
+// --- verifyConstructExtremeNumberFromText (2026-09-23, wired after a real production probe) --
+
+test("construct extreme number from text: real Chinese example, smallest 5-digit number", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("把5,0,8,6和2這五個數字組成一個最小的五位數。", "20568");
+  assert.equal(r.correct, true);
+});
+
+test("construct extreme number from text: real English example, same question", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("Use 5, 0, 8, 6 and 2 to form the smallest 5-digit number.", "20568");
+  assert.equal(r.correct, true);
+});
+
+test("construct extreme number from text: wrong answer is caught with the real expected value", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("把5,0,8,6和2這五個數字組成一個最小的五位數。", "50268");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "20568");
+});
+
+test("construct extreme number from text: largest with an odd-parity constraint", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("Use 7, 0, 3, 9 and 1 to form the largest 5-digit ODD number.", "97301");
+  assert.equal(r.correct, true);
+});
+
+test("construct extreme number from text: stated width mismatching the real digit count declines rather than guesses", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("把5,0,8,6和2這五個數字組成一個最小的六位數。", "20568");
+  assert.equal(r.correct, null);
+});
+
+test("construct extreme number from text: no largest/smallest keyword stays null", () => {
+  const r = mod.verifyConstructExtremeNumberFromText("把5,0,8,6和2這五個數字組成一個五位數。", "20568");
+  assert.equal(r.correct, null);
+});
+
+test("classifyAndVerify: real construct-extreme-number example routes to its own handler, not math_equation", () => {
+  const verdict = mod.classifyAndVerify({ printedQuestion: "把5,0,8,6和2這五個數字組成一個最小的五位數。", studentAnswer: "20568" });
+  assert.equal(verdict.handler, "construct_extreme_number");
+  assert.equal(verdict.correct, true);
+  assert.equal(verdict.subject, "math");
+});
+
+// --- verifyListFactors (2026-09-23) --------------------------------------
+
+test("list factors: real example, 25 -> 1,5,25", () => {
+  const r = mod.verifyListFactors("寫出25嘅所有因數", "1,5,25");
+  assert.equal(r.correct, true);
+});
+
+test("list factors: order doesn't matter", () => {
+  const r = mod.verifyListFactors("寫出25嘅所有因數", "25,1,5");
+  assert.equal(r.correct, true);
+});
+
+test("list factors: missing a factor is wrong, all-or-nothing", () => {
+  const r = mod.verifyListFactors("寫出25嘅所有因數", "1,25");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "1, 5, 25");
+});
+
+test("list factors: English phrasing, real example 34", () => {
+  const r = mod.verifyListFactors("列出34的所有因數", "1,2,17,34");
+  assert.equal(r.correct, true);
+});
+
+// --- verifyCountPrimesBelow (2026-09-23) --------------------------------
+
+test("count primes below: real example, 100以內 -> 25", () => {
+  const r = mod.verifyCountPrimesBelow("100以內共有質數多少個？", "25");
+  assert.equal(r.correct, true);
+});
+
+test("count primes below: wrong count is caught", () => {
+  const r = mod.verifyCountPrimesBelow("100以內共有質數多少個？", "24");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "25");
+});
+
+test("count primes below: no matching phrase stays null", () => {
+  const r = mod.verifyCountPrimesBelow("100以內有幾多個雙數？", "50");
+  assert.equal(r.correct, null);
 });

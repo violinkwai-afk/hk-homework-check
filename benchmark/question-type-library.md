@@ -477,9 +477,235 @@ new content. New/confirming rows found in the rest:
 | Spatial/compass direction from a floor-plan diagram | V | 2nd+ real example | — | P4/P2, appears repeatedly — same type already flagged, now confirmed recurring across multiple independent papers |
 | Clock + "N hours later, what time" (analog reading + time arithmetic) | V | 2nd real example, teacher-marked ground truth found | — | P1 term2 — this exact page had real red-pen teacher marks, useful as ground truth if clock-reading is ever revisited |
 
-## Chinese
+## 2026-09-23 — 4-fork parallel read of remaining 21 PDFs (224 pages)
+
+Groups A, C, D complete (Group B still running, will be appended separately
+when done). Combined: ~164 of 224 pages read this pass. Two duplicate-file
+findings confirmed (`p2_maths_p1p6com_2023_2024_term2exam.pdf` = byte-identical
+dup of `p2_math_test_2023_2024.pdf`; `p2_maths_p1p6com_2024_2025_a.pdf`'s 29
+"pages" are one 15-page exam appearing twice, blank + teacher-marked).
+
+**Real bug found in an EXISTING built verifier:** `verifySortNumbers`'s number
+regex (`-?\d+(\.\d+)?`) does not parse fraction ("37/5") or mixed-number
+("7又7/9") tokens — would silently mis-extract a real P5 sort-fractions
+question. Needs a fix, not a new function. (Group D)
+
+**Real gap found in `evalArithmetic`:** no bracket/parenthesis support at all
+— "(114+58)-(44+38)=" would mis-tokenize or return null. Distinct from the
+already-fixed operator-precedence bug. (Group D)
+
+**Recurring new pattern (found independently twice, P4 2021-2022 AND P4
+2024-2025):** inferring an obscured/ink-stained PRINTED digit (not a student
+blank) from a divisibility/estimation constraint, then often a follow-up
+computation. Genuinely new concept the pipeline has no notion of yet. (Group D)
+
+**Structural finding, not a single question type:** real teacher marking uses
+PER-STEP partial credit on word problems (equation / numeric answer /
+conclusion sentence, separately scored) — this pipeline's binary
+correct/wrong model doesn't reflect that. (Group A) Also: a direction-word
+English answer was marked wrong purely for capitalization per that teacher's
+own stated rule — case-sensitivity may need to follow the specific paper's
+convention, not be assumed lenient. (Group A)
+
+**Drawing-only answers** (student must draw a line/shape, no text
+representation exists at all) confirmed recurring across multiple papers
+(Group C, Group D) — flagged as a structurally out-of-scope category, not a
+V-tier/AI-solvable gap, so it should be explicitly classified "not
+applicable, always defer" rather than attempted.
+
+**Clock illustrations often redundant**: several "clock reading" items give
+the anchor time as printed/spoken TEXT alongside a decorative clock-face
+graphic — these are actually pure A-tier time arithmetic, not V-tier
+image-reading. Worth checking whether the time is already stated in text
+before classifying an item as needing clock-reading. (Group C)
+
+### Group A — new types (P1/P2 papers, money/calendar/geometry heavy)
 
 | Type | Tier | Status | Example (real) | Notes |
+|---|---|---|---|---|
+| Coin denomination recognition from drawn coin image | V | found, NOT built | "$5" coin drawn with small print | high-value recurring type across nearly every P1/P2 money page |
+| Count specific coin type among a mixed group | V then A | found, NOT built | "上圖有___個十元硬幣" | |
+| Sum coin values in a hand/group image → dollars+jiao | V then A | found, NOT built | "$10+$10+$10 → ___元___角" | |
+| Currency exchange-ratio arithmetic | A (needs a small HK-coin constants table) | found, NOT built | "1個$10可換$2___個" | code-solvable once a denomination table exists |
+| Price tag → dollars+jiao format conversion | A | found, NOT built | "$75.80 → ___元___角" | pure format conversion |
+| Pay-exact-amount: circle which coins to use | V (+A) | found, NOT built | | hard to verify — checks WHICH coins circled |
+| Weekly activity-schedule table reasoning | A (once table OCR'd as grid) | found, NOT built | "文文一星期有___天需要上課外活動班" | recurring |
+| Calendar-grid reasoning (weekday of date, Nth weekday, days remaining) | A (once calendar OCR'd as grid) | found, NOT built | "母親節在5月的第二個星期日" | very recurring across P1 papers |
+| Column addition/subtraction with separate 十位/個位 boxes | A | found, same computation as plain arithmetic, different answer shape | "25+21" answer split into 2 boxes | worth confirming pipeline handles split-box answers |
+| Select 2 of N numbers summing to a target | A | found, first concrete real example for existing G7 entry | "從6,9,4中選兩個, ___+___=10" | brute-force pairs, trivial |
+| Multi-step addition with an intermediate partial-sum blank | A | found, NOT built | "15+33+24 = ___+24 = ___" | 2 blanks, different expected values |
+| Largest/smallest N-digit number under a parity constraint | A (fixed knowledge table) | found, NOT built | "最大的三位數和最小的三位奇數相差是___" | |
+| Estimation MC (round-then-match) | A | found, NOT built | "以下哪道算式最適合估算791−496?" | standard round-to-nearest-hundred rule |
+| MC solve-for-unknown "★" placeholder | A | found, NOT built | "如果16÷★=4, ★代表的數是多少?" | note: uses ★ not just ?/□ |
+| Ceiling-division word problem (round UP) | A | found, NOT built — distinct trap | "18人,每輛載4人,最少需要幾多輛?" (⌈18/4⌉=5) | naive floor-division would wrongly accept 4 |
+| 3-addend word problem (sum of THREE quantities) | A | found — extends `verifyWordProblemTotal` | "42+36+15張椅子共___" | existing function is 2-number only |
+| Repeated-quantity-over-N-periods word problem | A | found, NOT built | "每個月儲蓄50元,三個月後共___" (50×3) | |
+| Two-step inverse-operation loop diagram | A | found, NOT built | "7 →(+4)→ ___ →(−4)→" | |
+| Multi-part chained word problem (compute→compare→conclude) | A+V/J | found, complex | "$80−$60=$20; 比$33多/少; 夠唔夠錢買?" | 3 linked answers, each depends on the previous |
+| Clock reading given hand positions AS TEXT | A (if OCR captures the words) | found, NOT built | "長針指着12,短針指着5,那時是___時正" | distinct from image-based clock reading |
+| "Circle ALL matching a property" (multi-select) | A | found, NOT built | "把方格中所有單數圈出來" | all-or-nothing, not single-answer MC |
+| Visual thickness/size comparison | V | found, NOT built | "圈出比較厚的漢堡包" | |
+| Multi-runner relative-position ordering | V | found, NOT built | "Joe比Ben遠/近,又比Candy遠/近" | |
+| Angle-size visual comparison/ranking | V | found, NOT built | "以下哪一個角最大?" | MC and 3-way ranking variants |
+| Mark/count angles in a shape | V | found, NOT built | "圖內有幾多個銳角" | real trap: a plain circle has 0 angles |
+| "Perpendicular is always shortest distance" (fixed geometric fact) | A (constant law, not diagram-dependent) | found, NOT built | | doesn't need to measure the drawing |
+| Identify perpendicular line from labeled candidates | V | found, NOT built | | |
+| "Which letters formed by curves only" (font classification) | V | found, NOT built | "(Q/H/R/S)" — real answer only S | font-dependent, needs to look at glyph shapes |
+| Curve-vs-straight path discrimination | V | found, NOT built | | |
+| Multi-hop compass-direction sequence + final-facing reasoning | V | found, NOT built | | richer chained version of simpler direction type |
+
+### Group C — new types (misc P2/P3 papers, shapes/units/tables heavy)
+
+| Type | Tier | Status | Example (real) | Notes |
+|---|---|---|---|---|
+| Shape naming from a drawn outline | V | found, NOT built | "Name the quadrilateral" | rotation/skew-invariant recognition needed |
+| Shape-property tick table (✔/✖ per drawn shape) | V | found, NOT built | | unusual answer shape: 2 tick boxes + circled word per shape |
+| Validate rectangle consistency from 4 labelled side lengths | A/V hybrid | found, NOT built | "10cm/5cm/5cm/1cm → valid rectangle?" | rule is trivial once 4 numbers known |
+| **Drawing-only answer** | out of scope | found, recurring | "draw a simple vertical pictograph" | no text representation exists at all |
+| Largest/smallest N-digit number with odd/even constraint | A | found, NOT built | "form largest 5-digit ODD number from 7,0,3,9,1" | generalizes existing extremal-number entry |
+| N-digit number magnitude-threshold formation | A | found, NOT built | "form 5-digit numbers > 40,000 from 0,0,4,8,2" | combinatorics + inequality |
+| Count hidden squares/rectangles in an n×n grid | A | found, NOT built | "4×4 grid — find all hidden squares/rectangles" | **fully code-solvable from grid size alone**, closed formulas |
+| Word-phrase multiplication ("N twenty-fives") | A | found, NOT built | "four twenty-fives are ___" (100) | parses English number-word phrase |
+| Word problem, quantity×per-unit→total | A | found — mirrors existing division verifier, inverse op | "6 jars×50 biscuits ___" | |
+| Chained/derived unit-price word problem (2-step) | A | found, NOT built | "2 mango cakes=1 cheesecake price, 3 cheesecakes?" | derives intermediate unit price first |
+| Word problem with "twice back-and-forth" multiplier trap | A, flagged risk | found, NOT built | "25m pool, back and forth TWICE →100m not 50m" | same trap family as existing "另外" trap |
+| Scaffolded multi-blank + circle-word combined answer | A, complex parse | found, NOT built | compare→sum→conclude in one answer box | genuinely chained |
+| Map/graph distance-path arithmetic | V | found, NOT built | sum along path; "at least" = shorter of 2 routes | needs graph topology |
+| Choose the correct UNIT (not a number) | A/J | found, NOT built | "A P2 student is about 120 ___ tall" → cm | answer is a unit word |
+| Unit conversion (m↔cm, km↔m, cm↔mm) | A | found, NOT built | "8m 11cm = ___cm" | trivial once conversion factor known |
+| Stack-and-sum height from labelled diagram | A (if OCR-readable) | found, NOT built | 100cm cabinet + 30cm box → 130cm | both numbers are diagram labels |
+| Coin subset-sum ("circle coins that make $X") | A, novel answer-capture | found, NOT built | "$3.60 — circle coins from set" | subset-sum enumeration, but capture shape is the real blocker |
+| Multi-select list-of-labels answer | V, novel answer-capture | found, NOT built | "Write all acute angles: B, F" | needs order-independent set comparison |
+| Right-angle-counting inside one complex polygon | V | found, NOT built | | distinct from angle-MC bucket |
+| Calendar table lookup — Nth weekday | A | found, first worked example for G7 entry | "third Friday in June?" | code-solvable once calendar grid OCR'd |
+| Place-value meaning of one specific digit | A (once abacus/number read) | found, NOT built | "4 beads in ten-thousands place = ___" (40000) | |
+| Digit-count of N+1 (place-value boundary) | A | found, NOT built | "number after 9999 has ___ digits" | `len(str(n+1))`, trivial |
+| Relative/comparative reasoning without absolute numbers | A | found, NOT built | "Sarah 3s longer than Linda, 2s shorter than Jessie" | parses relational statements into ordering |
+| Digital-clock-display reading | V, plausibly easy | 2nd real example, still untested | "16:15" → "4:15 in the afternoon" | |
+| Compass-direction reading from icon map + rose | V | found, 1st worked example for G7 entry | "___ is east/south of school" | |
+| 3D shape distinguishing (quadrilateral lateral faces) | V | found, 1st worked example for G7 entry | | |
+| Pictogram MC-by-picture (circle icon, not letter) | V, novel answer-capture | found, NOT built | | choices ARE pictures |
+
+### Group B — new types (40 rows, P2 papers, money/place-value/word-problem heavy)
+
+Real OCR/format notes: remainder answers have ≥3 written forms ("R2",
+dot-ellipsis "5...2", and bracket/tableau long-division "8)48"); a "★" blank
+placeholder appears (not currently in `BLANK_TOKENS`, which only has "?"/"□");
+word problems in this batch overwhelmingly need a 4-part answer (橫式/直式/
+steps/full-sentence answer), a systemic gap vs. the single-`studentAnswer`
+field OCR contract; 2 of 6 PDFs contained third-party AI-generated answer-key
+pages mixed into the same file as the real worksheet.
+
+| Type | Tier | Status | Example | Notes |
+|---|---|---|---|---|
+| Construct largest/smallest N-digit number under a parity constraint | A | found, NOT built | "largest 3-digit ODD number from 0,1,7" | real edge case: duplicate-digit cards seen too |
+| Construct MULTIPLE distinct N-digit numbers under a constraint, ranked | A | found, NOT built | "form THREE different 4-digit EVEN numbers, largest to smallest" | harder — enumerate multiple outputs |
+| Single-step multiplication word problem | A | found, NOT built | "100 rubber bands/box, 8 boxes → ___" | existing rows cover total/difference/division, not plain multiplication |
+| "Total÷unit→quantity" word problem (inverse framing) | A | found, NOT built | "want 75 oranges, 25/pack → ___ packs" | distinct trigger phrasing from existing division verifier |
+| Change-from-payment word problem (plain, non-price-table) | A (currently declined) | confirmed real | "$50 pays for $18 toy, change=___" | matches existing declined shape, new citation |
+| Multi-step word problem: qty×price for MULTIPLE categories, summed | A (parsing-hard)/J | found, NOT built | "2 adults@$234+1 child@$120" | real student error confirms this trips people up too |
+| Two-step relational word problem ("A is N fewer than B, find A+B") | A (parsing-hard) | found, NOT built | "67 books, 12 fewer than B, total?" | extends existing comparative-reasoning row to 2-step |
+| THREE-person chained relative comparison word problem | A (parsing-hard) | found, NOT built | 2-hop chain across 3 people | harder than the 2-person case |
+| Abacus reading, output in Chinese numeral WORDS | V then A | found, NOT built | "用中國數字寫出算柱表示的數" | existing abacus row is Arabic-digit output only |
+| Place-value digit-position arithmetic (extract+combine 2 digits) | A | found, NOT built | "in 2490, tens+hundreds digit=___" (13) | pure digit extraction, no visual needed |
+| Reverse construction from place-value clues | A | found, NOT built | build a number from stated digit meanings | |
+| 3D shape name ↔ face-count reverse lookup | A (small closed table) | found, NOT built | "3 faces → name it" (cylinder) | shape not shown, just the fact |
+| Time format: 12h-English → Chinese civil format | A | found, NOT built | "11:59 p.m. 即___午___時___分" | variant of existing 12h/24h row |
+| Currency equivalence algebra (solve unknown note/coin count) | V+A | found, NOT built | "2×$500 and ___×$100 = 2×$1000" | read denominations then solve linear eq |
+| Multi-item money word problem: sum shown notes/coins, subtract purchase | V+A | found, NOT built | | harder than 2-item price-table sum/diff |
+| Money answer split into two blanks (dollars, cents) | A (output-format) | found, NOT built | "$122.00 → ___dollars ___cents" | one value, two output fields |
+| "How much MORE is needed" (insufficient funds) | A | found, NOT built | "$50 note, $64.20 item, need $___more" | inverse of change-from-payment |
+| Select EXACT currency items for an exact payment | V (multi-select) | found, NOT built | circle notes/coins for $122.00 exactly | must pick the physical items, not state counts |
+| Length reading from a wrapped/curved tape measure | V | found, untested | can circumference ≈24cm | harder variant of ruler-reading |
+| Measure using a repeated non-standard-unit icon | V | found, untested | "octopus card ≈ ___ finger-widths" | |
+| Weekday extrapolation beyond a given calendar table | A (mod-7 reasoning) | found, NOT built | table shows Sept; "3 Oct was ___" | needs days-past-table-end mod 7, not lookup |
+| Classify multiple labeled angles sharing one vertex by type | V | found, untested | | |
+| Compare/rank multiple drawn angles by visual size | V | found, untested | | |
+| Count shape-types within one composite 2D figure | V | found, untested | | |
+| Classify figures by line-type composition (straight+curved mix) | V | found, untested | | |
+| Multi-select "write ALL matching letters" from labeled 3D shapes | V | found, untested | | |
+| Decompose a compound 3D solid into constituent named solids | V | found, untested | | |
+| True/false (✓/✗) property-judgment grid for shape statements | A/V (format) | found, untested | "sphere has 1 curved surface only (✓/✗)" | new answer format: checkbox/circle grid |
+| MC where each option is a symbolic EXPRESSION, not a value | A/J | found, untested | "which expression models this word problem?" | distinct from `verifyComputationMC` (value-match) |
+| Base-10 block (Dienes blocks) reading | V | found, untested | | same place-value concept as abacus, different graphic |
+| Chained multi-step vertical arithmetic, sequential intermediate boxes | A | found, NOT built | "235+557=[box], then [box]-281=[box]" | two dependent results, not one |
+| Multi-step arithmetic with an explicit intermediate NEGATIVE value | A | found, NOT built | "292-411+204" (step 1 goes negative) | must not be treated as an error |
+| Complete/draw a pictogram from a data table | V (construction) | found, structurally un-answerable via text | | draw-the-answer, no text/numeric output |
+| Geometric construction/drawing tasks (general family) | V (construction) | found, structurally out of scope | draw largest square/perpendicular line/etc. | **flag as distinct systemic category, needs permanent exclusion or image-diff, not a verifier** |
+| Reverse modular-arithmetic reasoning MC | A (harder) | found, untested | "shared among 10, 1 left — which COULD be total?" | candidate-checking against N mod 10 = 1 |
+| Choose appropriate NON-standard measuring reference for a large distance | J/A (heuristic) | found, untested | footstep/thumb-width/hand-span for a hall | distinct from choose-appropriate-UNIT row |
+| Constrained-resource max-combinations word problem (min of 2 ratios) | A (harder) | found, NOT built | "2 bows+3 buttons/dress; 11 bows,19 buttons; max dresses?" = min(⌊11/2⌋,⌊19/3⌋) | |
+| Ceiling/round-up division word problem ("at least how many containers") | A (error-prone) | found, NOT built | "7/box, 66 balls, AT LEAST ___ boxes" (→10 not 9) | same ceiling-division trap as Group A's row |
+| "How many MORE needed to complete a partial extra group" | A | found, NOT built | "groups of 4, 15 bulbs, leftover becomes extra group, ___ more needed" (1) | distinct from plain remainder AND ceiling-division |
+| Derive a multiplication AND division equation from one array picture | V+A | found, untested | 16-item array → "8×___=___" and "___÷8=___" | |
+| Pictogram: find category matching a MULTIPLICATIVE relationship | V+A | found, untested | "___ sold is TWICE erasers sold" | needs multiplicative match, not additive |
+| Compare/sum distances in MIXED units on a map | A (needs unit normalization) | found, untested | "9m", "785cm", "10m" — nearest? total? | must normalize units before comparing |
+| Geometric figure line-length comparison by INFERENCE | V | found, untested | | not measuring, inferring from stated relationship |
+| Select matching geo-strips that assemble into a target shape | V | found, untested | | |
+| Multi-select "which irregular/concave shapes are quadrilaterals" | V | found, untested | | |
+
+### Group D — new types (P4/P5/P6 papers, word problems/geometry/fractions heavy)
+
+General observation: P4-P6 papers skew much more toward multi-step word
+problems, 3D geometry, and decimal/fraction arithmetic than P1-P3 — real
+gap-filling for the library's coverage.
+
+| Type | Tier | Status | Example (real) | Notes |
+|---|---|---|---|---|
+| Arithmetic with brackets/parentheses | A | **NOT BUILT — real `evalArithmetic` gap** | "(114+58)-(44+38)=" | no grouping support at all |
+| Find missing factor + restate ("A×B=C×(?), (?)=") | A | found, NOT built | "9×8=4×( ), ( )=" | two positionally-linked blanks |
+| Derive a related product from a given fact | A | found, NOT built | "328×84=27552, 330×84=27552+◆" | reuses first equation's given product |
+| Compute using extremal-number constraints | A | found, NOT built | "最大三位數×最小兩位數" (999×10) | |
+| Reverse-solve divisor from quotient+remainder | A | found, NOT built | "750÷※=16…14,※=?" | |
+| Smallest addition for divisibility | A | found, NOT built | "625最少要加上多少先被3整除?" | recurs at P6 for primality too |
+| Combinatorics: enumerate N-digit numbers + divisibility constraint | A (harder) | found, NOT built | "用3、5、0組成被5整除嘅三位數,共幾多個?" | needs real enumeration, not one formula |
+| Reverse-solve base number from "Nth multiple" | A | found, NOT built | "某數第十三個倍數是169,某數?" | |
+| Count primes in a range | A | found, NOT built | "100以內共有質數幾多個?" (25) | needs primality sieve |
+| "Which even number is NOT composite" | A | found, NOT built | | trap: 2 is the one even prime |
+| Reverse-solve number from factor-sum | A | found, NOT built | "最小和最大因數之和係37" (min factor always 1, so 36) | |
+| List all factors of a number | A | found, NOT built | "寫出25嘅所有因數" | all-or-nothing list match |
+| Difference between two specific multiples | A | found, NOT built | "17嘅第十一同第十七個倍數相差?" | |
+| Infer obscured/ink-stained printed digit from divisibility constraint | A (harder) | **found TWICE independently — recurring** | "62÷1◉≈6" / "35◯能被3整除,沾污墨水" | genuinely new concept: a PRINTED digit the paper obscures, not a student blank |
+| Word problem: average-split | A | found, NOT built | "6人合資516元,平均每人?" | |
+| Word problem: max-affordable-quantity (floor division) | A | found, NOT built | "68元,每把12元,最多買幾多把?" | |
+| Word problem: monthly-total from daily rate | A | found, NOT built | "每天營業額870元,六月共?" | needs external fact: June=30 days |
+| Drawing-based question (no extractable text answer) | N/A | found, real problem for pipeline design | 畫平行四邊形/分割形狀 | explicit "always defer" classification recommended |
+| Shape identification from labelled set | V | found | | |
+| Shape composition (2 shapes → named quadrilateral) | V | found | | |
+| Shape composition via digit-cards + largest/smallest N-digit | A | found, concrete evidence for G7 entry | "用9、0、7、1揀2張組成最大兩位合成數" | |
+| Rotation-from-facing-direction (turn N right-angles) | V then A | found | "向左轉兩個直角,面向___方" | read starting direction (V) then apply rotation (A) |
+| Bar chart reading + derived computation (single-series) | V | found, reinforces G7 | read value/compare/threshold-count/redistribute | |
+| Bar chart reading + derived computation (multi-series) | V | found, harder | | 2-series compound chart |
+| Rounding to nearest hundred, complete a table | A | found, NOT built | "1584→1600, 1733→1700" | |
+| Fraction-of-remainder 3-way split word problem | A | found — **real evidence B4 is common at P5** | "1/3綠色,2/9紫色,餘下粉紅色" | |
+| Chained fraction-of-fraction word problem | A | found, NOT built | "7/12是男生,男生中3/7戴眼鏡" | |
+| MC: which result could be (fraction × proper fraction) | A (range-check) | found, NOT built | | |
+| MC: estimation/approximate-equality reasoning | A (range-check) | found, NOT built | | |
+| Column subtraction with unknown variable digit + follow-up | A | found, NOT built | "83−Y2=21, find Y" | |
+| Algebra: translate word description → expression | A/J borderline | found, hardest A-tier item this batch | "每瓶紙星星有S顆,平均分3人" → S/3 | needs Chinese-sentence→symbolic parsing |
+| Algebra: substitute a given value | A | found, NOT built | "T=8, 10+T-6=___" | |
+| Algebra: MC, which expression differs from a given one for arbitrary n | A (symbolic reasoning) | found, NOT built | "邊道代數式與4n唔同?" | single substitution unsafe |
+| Compound-shape area/perimeter from labelled diagram | V+A hybrid | found, many real examples | | mostly "match printed number to shape side" then formula |
+| Large-number Chinese-word → Arabic digit (100M+ scale) | A | found — extends existing 0-99 converter | "五億零八百萬零二十" (508000020) | needs 億/萬-scale support |
+| Place-value magnitude difference (same digit, two positions) | A | found, NOT built | "71460864,兩個「6」相差?" | |
+| Sort/order fractions and mixed numbers | A | **real gap in EXISTING `verifySortNumbers`** | "37/5、7又7/9、7又2/3排序" | regex doesn't parse fraction/mixed tokens |
+| Chained relative-price word problem (3+ linked prices) | A | found, NOT built | | |
+| Mixed unit-and-fraction word problem | A | found, NOT built | "1盒12隻蛋,2盒,打破3隻,用去5/6盒" | |
+| Decimal arithmetic with a rounding directive | A | found, NOT built | "40.9÷1.2≈(取值至十分位)" | must parse the rounding instruction itself |
+| Recurring decimal notation (dot-above-digit) | A/OCR-risk | found, flag as OCR-fragility risk | "0.7322222222……" | dot placement changes the value; may not survive OCR |
+| Decimal-quotient magnitude reasoning MC | A | found, NOT built | "邊道算式嘅商小於1?" | |
+| Reverse repeated-addition count | A | found, NOT built | "___個「0.3」相加後,總和是30" (100) | |
+| 3D solid net ↔ solid identification (both directions) | V | found, big expansion of G7 entry | | genuinely open-ended spatial reasoning |
+| Cross-section shape from a cutting-plane diagram | V | found | | |
+| Edge/vertex/face counting on a drawn 3D solid | V | found | | |
+| Compound 3D volume from a labelled diagram | V+A hybrid | found, harder than simple box volume | | |
+| Water-displacement volume word problem | A (multi-step) | found, NOT built | | derive area, subtract volume, recompute height |
+| Sequential water-level diagrams → infer added-object volume | V | found | | |
+| Tiered/graduated pricing-table computation | A | found — **distinct from existing flat-lookup verifier** | 的士首2公里$22,之後每0.2公里$1.60 | base+per-increment+flat-fee composition |
+| 3D packing/volume-comparison word problem | V+A hybrid | found | | |
+| Weight-scale (analog dial) reading | V | found — direct 2nd citation for already-verified technique | | worth testing against the proven weight-scale method |
+
+
 |---|---|---|---|---|
 | 選詞填充 (select word from passage) | A | done, PARTIAL/reject-only (`verifySelectFromPassage`) | "我哋高興地[討論]剛才嘅情況" | ⚠️ needs the SOURCE passage photographed too — often on a different page, not always available. ⚠️⚠️ (user-caught correction 2026-09-22) this check can ONLY safely reject (word not in passage at all) — it must NEVER confirm correctness, since a real passage word could be the RIGHT word in the WRONG blank (a swap). Always returns `null`, never `true`, when the word is found. |
 | 圈出詞語 (circle words in passage) | n/a | n/a | — | not representable as a text answer at all; current "?" refusal is correct behavior |
