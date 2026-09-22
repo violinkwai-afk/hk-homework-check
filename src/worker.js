@@ -1493,18 +1493,18 @@ async function callQwenOcrText(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
     // 2026-09-22: back to the validated baseline. DeepSeek V4.1 Flash,
-    // Qwen3-VL-8B, and Qwen3-VL-30B-A3B were all tried as latency
-    // candidates and rejected -- the two smaller Qwen3-VL variants
-    // shared the same real failure (dropped/merged items on complex
-    // layouts, and a confirmed false positive on "blank-in-the-middle"
-    // division questions where the model restructures which value
-    // counts as "printed" vs "answer" -- see test/mark.test.js's
-    // "printed/answer swap" regression test). 235B remains the most
-    // reliable model for this task; latency is being addressed by
-    // other means (downscale, already applied; see the ongoing
-    // latency-audit findings in memory/commit history) rather than by
-    // continuing to swap models.
-    model: "qwen/qwen3-vl-235b-a22b-instruct",
+    // Qwen3-VL-8B, Qwen3-VL-30B-A3B, and Qwen3-VL-32B were all tried as
+    // latency candidates and rejected -- see memory
+    // (project_hk_homework_check_model_watch.md) for the full list and
+    // failure modes. 235B remains the most reliable model for this task.
+    //
+    // TEMPORARY (branch test/gemini-flash-lite-benchmark, 2026-09-22):
+    // swapped to Gemini 3.5 Flash Lite for a real-photo latency/quality
+    // benchmark against the 235B baseline above -- a DIFFERENT model
+    // family (not another small Qwen-VL variant), OpenRouter's own
+    // description markets it as latency-oriented. Preview-branch-only;
+    // do not merge this line to main.
+    model: "google/gemini-3.5-flash-lite",
     // 2026-09-22 latency audit #1 result: provider:{sort:"latency"} was
     // tried and rejected -- real benchmark showed it made every case
     // SLOWER (not faster) and one case notably LESS accurate (matching
