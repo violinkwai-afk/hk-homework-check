@@ -1656,20 +1656,72 @@ function parseOcrLine(text) {
 function evalArithmetic(str) {
   const cleaned = String(str).replace(/[×x]/gi, "*").replace(/÷/g, "/").replace(/\s+/g, "");
   if (!/^-?\d+(\.\d+)?([+\-*/]-?\d+(\.\d+)?)+$/.test(cleaned)) return null;
-  const tokens = cleaned.match(/-?\d+(\.\d+)?|[+\-*/]/g);
+  // The lookbehind (?<![\d)]) is load-bearing: without it, a "-" right after a
+  // digit (e.g. "328-214") gets greedily swallowed into the NEXT number as a
+  // unary sign ("328", "-214" -- 2 tokens), never recognised as the binary
+  // subtraction operator, so every plain subtraction silently evaluated to
+  // null (2026-09-22 real-paper find -- no existing test happened to cover
+  // plain two-number subtraction through this path). The lookbehind forces
+  // "-" to tokenise as a standalone operator whenever it follows a digit,
+  // while still allowing a genuine leading/operator-following "-" (e.g.
+  // "-5+3", "3+-5") to bind to its number as before.
+  const tokens = cleaned.match(/(?<![\d)])-?\d+(\.\d+)?|[+\-*/]/g);
   if (!tokens || !tokens.length) return null;
-  let result = parseFloat(tokens[0]);
-  if (Number.isNaN(result)) return null;
+  // 2026-09-22 real bug (found reviewing real fraction items, but affects
+  // ANY mixed +-/*÷ expression, not just fractions): this used to fold
+  // every operator left-to-right with no precedence at all, so
+  // "1/2+1/4" computed ((1/2)+1)/4 = 0.375 instead of the correct 0.75,
+  // and even plain "2+3*4" computed (2+3)*4=20 instead of 14. No existing
+  // test happened to mix +/- with */÷ in one expression, so this was
+  // never caught. Fixed with a standard two-pass evaluation: resolve
+  // every * and / first (left-to-right), THEN sum the remaining +/-
+  // terms (left-to-right) -- real operator precedence, not just "in
+  // order they appear".
+  const terms = [parseFloat(tokens[0])];
+  const termSigns = [1];
+  if (Number.isNaN(terms[0])) return null;
   for (let i = 1; i < tokens.length; i += 2) {
     const op = tokens[i];
     const val = parseFloat(tokens[i + 1]);
     if (Number.isNaN(val)) return null;
-    if (op === "+") result += val;
-    else if (op === "-") result -= val;
-    else if (op === "*") result *= val;
-    else if (op === "/") result = val === 0 ? NaN : result / val;
+    if (op === "+" || op === "-") {
+      terms.push(val);
+      termSigns.push(op === "+" ? 1 : -1);
+    } else {
+      // * and / bind to the term currently being built, before it's
+      // added to the running +/- sum.
+      const last = terms.length - 1;
+      if (op === "*") terms[last] *= val;
+      else if (op === "/") terms[last] = val === 0 ? NaN : terms[last] / val;
+    }
+  }
+  let result = 0;
+  for (let i = 0; i < terms.length; i++) {
+    if (Number.isNaN(terms[i])) return null;
+    result += termSigns[i] * terms[i];
   }
   return Number.isNaN(result) ? null : result;
+}
+
+// Parses a bare numeric answer that may be a simple fraction ("3/4"), not
+// just a decimal. Distinct from evalArithmetic, which requires at least
+// one operator (rejects a bare "56") and is for the printed EXPRESSION
+// side, not a student's own answer value. 2026-09-22 real bug: comparing
+// a fraction-form answer with plain `parseFloat` silently mis-parsed
+// "3/4" as just 3 (parseFloat stops at the first non-numeric character),
+// so a correct fraction answer could never match a decimal-computed
+// expected value. Only handles a single a/b fraction (no mixed numbers
+// like "1 1/2", no nested expressions) -- anything else falls back to
+// plain parseFloat, same as before this fix.
+function parseNumericAnswer(str) {
+  const s = String(str).trim();
+  const fractionMatch = /^(-?\d+)\/(\d+)$/.exec(s);
+  if (fractionMatch) {
+    const num = parseFloat(fractionMatch[1]);
+    const den = parseFloat(fractionMatch[2]);
+    return den === 0 ? NaN : num / den;
+  }
+  return parseFloat(s);
 }
 
 // Recognized "blank" placeholder tokens a worksheet's OWN print uses to
@@ -1759,7 +1811,7 @@ function verifyMath(printedQuestion, studentAnswer) {
       const lhs = sub.slice(0, eqIdx);
       const rhs = sub.slice(eqIdx + 1);
       const lhsVal = evalArithmetic(lhs);
-      const rhsVal = parseFloat(rhs);
+      const rhsVal = parseNumericAnswer(rhs);
       if (lhsVal !== null && !Number.isNaN(rhsVal)) {
         return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
       }
@@ -1773,7 +1825,7 @@ function verifyMath(printedQuestion, studentAnswer) {
     // (needs review) rather than guessed.
     const printedExpr = String(printedQuestion).replace(/=\s*$/, "");
     const expected = evalArithmetic(printedExpr);
-    const studentVal = parseFloat(sub);
+    const studentVal = parseNumericAnswer(sub);
     if (expected !== null && !Number.isNaN(studentVal)) {
       return { correct: Math.abs(expected - studentVal) < 1e-9, correctAnswer: expected === studentVal ? "" : String(expected) };
     }
