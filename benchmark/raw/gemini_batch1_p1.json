@@ -1,0 +1,20 @@
+{
+  "batchId": "gemini_batch1_p1",
+  "photoPaths": [
+    "benchmark/photos/batch1/p1_chinese_sentence_match.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:32:21.733Z",
+  "httpStatus": 502,
+  "latencyMs": 3184,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "改功課服務暫時無法使用，請稍後再試。"
+      }
+    ]
+  }
+}

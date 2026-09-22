@@ -1,0 +1,163 @@
+{
+  "batchId": "backfill_batch3_missing_english_modals",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch3_missing_english_modals.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:41:55.188Z",
+  "httpStatus": 200,
+  "latencyMs": 4140,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "Yes, I can.✓",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 22,
+          "y": 23,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "No, I can't.✓",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 22,
+          "y": 23,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "Yes, I can.✓",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 22,
+          "y": 23,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "No, I can't.✓",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 22,
+          "y": 23,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "Can you play basketball?",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "6",
+        "studentAnswer": "I can play the violin and the recorder.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "6",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "7",
+        "studentAnswer": "I can't play tennis or badminton.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "7",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 7",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "6"
+      },
+      {
+        "page": 0,
+        "question": "7"
+      }
+    ]
+  }
+}

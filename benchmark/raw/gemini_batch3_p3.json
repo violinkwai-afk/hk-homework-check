@@ -1,0 +1,86 @@
+{
+  "batchId": "gemini_batch3_p3",
+  "photoPaths": [
+    "benchmark/photos/batch3/p3_english_letter_fill_blank.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:33:15.667Z",
+  "httpStatus": 200,
+  "latencyMs": 2689,
+  "response": {
+    "results": [
+      {
+        "question": "2",
+        "studentAnswer": "David likes noodles but he doesn't like rice",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 30,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "We have two hamburgers and three hot dogs.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 36,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "I don't like dolls and teddy bears.,1=but,2=and,3=or,4=but,5=and,6=or,7=but,8=but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 42,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 3",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      }
+    ]
+  }
+}

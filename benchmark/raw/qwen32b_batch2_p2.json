@@ -1,0 +1,40 @@
+{
+  "batchId": "qwen32b_batch2_p2",
+  "photoPaths": [
+    "benchmark/photos/batch2/p2_division_expressions_arrows.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:29:57.300Z",
+  "httpStatus": 200,
+  "latencyMs": 12289,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "2, Horizontal form: 9 ÷ 3 = 3, 3, 9, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9, 3, 9",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 31,
+          "w": 8,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      }
+    ]
+  }
+}

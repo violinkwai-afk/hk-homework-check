@@ -1,0 +1,109 @@
+{
+  "batchId": "gemini_batch2_p1",
+  "photoPaths": [
+    "benchmark/photos/batch2/p1_apples_erasers_pencils_division.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:32:53.871Z",
+  "httpStatus": 200,
+  "latencyMs": 2939,
+  "response": {
+    "results": [
+      {
+        "question": "3",
+        "studentAnswer": "7;3;2;1",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 15,
+          "y": 33,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "14;4;3;2",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 43,
+          "y": 16,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "3;2;2;1;1",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 55,
+          "y": 60,
+          "w": 8,
+          "h": 2
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "1;2;0;4;3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 55,
+          "y": 60,
+          "w": 8,
+          "h": 2
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 4",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      }
+    ]
+  }
+}

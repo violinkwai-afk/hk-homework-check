@@ -1,0 +1,143 @@
+{
+  "batchId": "gemini_batch1_p3",
+  "photoPaths": [
+    "benchmark/photos/batch1/p3_chinese_fill_blank_and_match.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:32:28.032Z",
+  "httpStatus": 200,
+  "latencyMs": 3532,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "討論|剛才比賽的情況。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "生動|,兩雙眼睛閃閃發亮。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "目的|是為了幫助貧窮的老人。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "遊覽|了黃山。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "詳盡|參觀的安排。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "6",
+        "studentAnswer": "出發|,不要遲到。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "6",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "7",
+        "studentAnswer": "到達|目的地後,|首先|參觀遊客中心的展覽,然後才自由活動。,句子配對 1=住在隔壁的嘉明哥哥,不但學業成績優良,|(C)|,句子配對 2=台上的舞蹈員,不但表情生動,|(E)|,句子配對 3=爸爸送給我的小說,不但故事有趣,|(B)|,句子配對 4=媽媽做的蜜桃排骨,不但顏色鮮豔,|(A)|",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "7",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 7",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "6"
+      },
+      {
+        "page": 0,
+        "question": "7"
+      }
+    ]
+  }
+}

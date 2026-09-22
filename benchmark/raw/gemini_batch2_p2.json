@@ -1,0 +1,63 @@
+{
+  "batchId": "gemini_batch2_p2",
+  "photoPaths": [
+    "benchmark/photos/batch2/p2_division_expressions_arrows.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:32:56.843Z",
+  "httpStatus": 200,
+  "latencyMs": 2993,
+  "response": {
+    "results": [
+      {
+        "question": "Date",
+        "studentAnswer": "3;3|9|9;Horizontal form: 9÷3=3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "math",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 85,
+          "y": 15,
+          "w": 10,
+          "h": 2
+        },
+        "anchor": "Date",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "2;3;4|1|1|8|3;Horizontal form: 11÷4=2...3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "math",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 14,
+          "y": 59,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 2",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "Date"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      }
+    ]
+  }
+}

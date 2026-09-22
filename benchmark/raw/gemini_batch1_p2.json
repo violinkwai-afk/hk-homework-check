@@ -1,0 +1,71 @@
+{
+  "batchId": "gemini_batch1_p2",
+  "photoPaths": [
+    "benchmark/photos/batch1/p2_chinese_reading_comprehension.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:32:24.944Z",
+  "httpStatus": 200,
+  "latencyMs": 3058,
+  "response": {
+    "results": [
+      {
+        "question": "日期",
+        "studentAnswer": "不可或缺",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "math",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "日期",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "總述;分述;矢看視;近視、遠視、散光;護目;病毒、細菌、風塵、陽光、陽光;特例;3=?",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "B. 介紹不同眼鏡的用途。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 3",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "日期"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      }
+    ]
+  }
+}

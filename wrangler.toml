@@ -15,6 +15,16 @@ head_sampling_rate = 1
 directory = "./website"
 binding = "ASSETS"
 
+# Real, automatic build/version traceability (2026-09-23, G1) -- Cloudflare's
+# own native binding, confirmed via Cloudflare's docs to inject the actual
+# deploy's Worker version UUID + tag + upload timestamp at request time, no
+# CI config or manual version-bumping needed (replaces the earlier
+# hand-maintained BUILD_VERSION string in worker.js, which required
+# remembering to bump it on every deploy-worthy change -- a real gap this
+# closes for good). Available on env.CF_VERSION_METADATA.{id,tag,timestamp}.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [[secrets_store_secrets]]
 binding = "ANTHROPIC_API_KEY"
 store_id = "50b964b41eeb46d3bd4be77e059d3324"

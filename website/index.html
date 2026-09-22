@@ -587,7 +587,26 @@ function applyMarkCorrect(data, page, idx, correct){
   const pageItems = (data.results || []).filter(x => (x.page||0) === page);
   const r = pageItems[idx];
   if (!r) return;
+  const previousCorrect = r.correct;
   r.correct = correct;
+
+  // 2026-09-23 real fix: this used to only flip the mark in the parent's
+  // OWN browser -- nothing was ever sent back, so every correction was
+  // invisible to us. Best-effort, fire-and-forget: never blocks the UI
+  // update above, never surfaces an error to the parent (a failed report
+  // is far less bad than a broken tap-to-correct interaction).
+  fetch('/api/report-wrong', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      question: r.question,
+      studentAnswer: r.studentAnswer,
+      correctAnswer: r.correctAnswer,
+      subject: r.subject || r.verifiedBy || '',
+      previousCorrect,
+      newCorrect: correct,
+    }),
+  }).catch(() => {});
 
   const markEl = document.querySelector(`.mark[data-page="${page}"][data-idx="${idx}"]`);
   if (markEl) {

@@ -1,0 +1,215 @@
+{
+  "batchId": "batch1_p3",
+  "photoPaths": [
+    "benchmark/photos/batch1/p3_chinese_fill_blank_and_match.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:32:58.836Z",
+  "httpStatus": 200,
+  "latencyMs": 6747,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "討論",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "生動",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "目的",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "遊覽",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "講解",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "6",
+        "studentAnswer": "出發",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "6",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "7",
+        "studentAnswer": "到達,首先",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "7",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "8",
+        "studentAnswer": "B",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "8",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "9",
+        "studentAnswer": "D",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "9",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "10",
+        "studentAnswer": "A",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "10",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "11",
+        "studentAnswer": "C",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "11",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 11",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "6"
+      },
+      {
+        "page": 0,
+        "question": "7"
+      },
+      {
+        "page": 0,
+        "question": "8"
+      },
+      {
+        "page": 0,
+        "question": "9"
+      },
+      {
+        "page": 0,
+        "question": "10"
+      },
+      {
+        "page": 0,
+        "question": "11"
+      }
+    ]
+  }
+}

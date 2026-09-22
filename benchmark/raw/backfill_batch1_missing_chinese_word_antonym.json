@@ -1,0 +1,215 @@
+{
+  "batchId": "backfill_batch1_missing_chinese_word_antonym",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch1_missing_chinese_word_antonym.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:41:46.440Z",
+  "httpStatus": 200,
+  "latencyMs": 6066,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "在",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "堅硬",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "可靠的人。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "便利",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "移動方向。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "6",
+        "studentAnswer": "相連,來來往往的人很多。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "6",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "7",
+        "studentAnswer": "新式飛機能載更多乘客,飛行時也更穩定",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "7",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "8",
+        "studentAnswer": "清楚（全/全）",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "8",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "9",
+        "studentAnswer": "安全,不要在街上追逐,避免發生意外。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "9",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "10",
+        "studentAnswer": "特別,跟普通的大熊貓相比,它十分特別。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "10",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "11",
+        "studentAnswer": "猛烈了,請幫我按下牆壁的按鈕,讓光線變得柔和一點。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "11",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 11",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "6"
+      },
+      {
+        "page": 0,
+        "question": "7"
+      },
+      {
+        "page": 0,
+        "question": "8"
+      },
+      {
+        "page": 0,
+        "question": "9"
+      },
+      {
+        "page": 0,
+        "question": "10"
+      },
+      {
+        "page": 0,
+        "question": "11"
+      }
+    ]
+  }
+}

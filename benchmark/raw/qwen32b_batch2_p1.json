@@ -1,0 +1,40 @@
+{
+  "batchId": "qwen32b_batch2_p1",
+  "photoPaths": [
+    "benchmark/photos/batch2/p1_apples_erasers_pencils_division.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:29:48.277Z",
+  "httpStatus": 200,
+  "latencyMs": 8986,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "There are 7 apples. Divide them equally among 7 plates. There are 1 apple on each plate. 1 apple(s) is/are left.\n\n2=Circle the objects to show how to divide them. Write the numbers in the □.|Divide 16 erasers into boxes of 4. There are 4 boxes and 0 eraser(s) is/are left.\n\n3=Divide 10 pencils equally among the number of people as shown in the table. How many pencils does each person get? How many pencils are left?|Number of people: 3, Number of pencils each person gets: 3, Number of pencils left: 1; Number of people: 4, Number of pencils each person gets: 2, Number of pencils left: 2; Number of people: 5, Number of pencils each person gets: 2, Number of pencils left: 0; Number of people: 6, Number of pencils each person gets: 1, Number of pencils left: 4; Number of people: 7, Number of pencils each person gets: 1, Number of pencils left: 3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 11,
+          "y": 18,
+          "w": 5,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      }
+    ]
+  }
+}

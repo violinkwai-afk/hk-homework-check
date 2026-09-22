@@ -1,0 +1,20 @@
+{
+  "batchId": "qwen32b_batch3_p1",
+  "photoPaths": [
+    "benchmark/photos/batch3/p1_english_and_or_rewrite.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:30:34.244Z",
+  "httpStatus": 502,
+  "latencyMs": 7575,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "改功課服務暫時無法使用，請稍後再試。"
+      }
+    ]
+  }
+}

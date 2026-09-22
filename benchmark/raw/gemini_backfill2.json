@@ -1,0 +1,40 @@
+{
+  "batchId": "gemini_backfill2",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch2_missing_sharing_subtraction.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:33:29.336Z",
+  "httpStatus": 200,
+  "latencyMs": 2312,
+  "response": {
+    "results": [
+      {
+        "question": "Date",
+        "studentAnswer": "2;|2",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "math",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 88,
+          "y": 4,
+          "w": 12,
+          "h": 2
+        },
+        "anchor": "Date",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "Date"
+      }
+    ]
+  }
+}

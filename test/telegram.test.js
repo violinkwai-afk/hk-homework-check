@@ -123,7 +123,13 @@ test("1. valid photo update: downloads, marks, annotates, and sends a photo back
   assert.ok(calls.some((u) => u.includes("/getFile")), "expected a getFile call");
   assert.ok(calls.some((u) => u.includes("/file/bot")), "expected a file download call");
   assert.ok(calls.some((u) => u.includes("/sendPhoto")), "expected a sendPhoto call");
-  assert.ok(!calls.some((u) => u.includes("/sendMessage")), "success path should not send a text error message");
+  // The success path now sends exactly ONE text message: the "改緊功課..."
+  // in-progress notice sent right after download, before marking starts.
+  // GENERIC_ERROR is only ever sent from the failure branches (tests 4-6),
+  // which never reach sendPhoto -- so on a path that DOES reach sendPhoto,
+  // a single sendMessage can only be that progress notice, not an error.
+  const sendMessageCalls = calls.filter((u) => u.includes("/sendMessage"));
+  assert.equal(sendMessageCalls.length, 1, "expected exactly one sendMessage call: the in-progress notice");
 });
 
 test("2. no photo update: returns ok, makes no Telegram/OpenRouter calls at all", async () => {
@@ -245,6 +251,21 @@ test("8. annotateImage produces valid JPEG bytes, and a cross specifically chang
     Buffer.from(withCross.data),
     Buffer.from(withoutAnyMark.data),
     "an incorrect item's cross should change the output relative to an otherwise-identical call with no marks to draw"
+  );
+});
+
+test("8a2. a needs_review (correct: null) item draws its own '?' mark, isolated from the cross path", async () => {
+  const { annotateImage } = await import(ANNOTATE_TMP);
+  const withReviewMark = annotateImage(new Uint8Array(REAL_JPEG), [
+    { bbox: { x: 10, y: 70, w: 20, h: 8 }, correct: null },
+  ]);
+  const withNoMarks = annotateImage(new Uint8Array(REAL_JPEG), [
+    { bbox: { x: 50, y: 50, w: 20, h: 8 }, correct: true },
+  ]);
+  assert.notDeepEqual(
+    Buffer.from(withReviewMark.data),
+    Buffer.from(withNoMarks.data),
+    "a needs_review item should draw a visible '?' mark, distinct from drawing nothing"
   );
 });
 

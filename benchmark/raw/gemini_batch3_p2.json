@@ -1,0 +1,224 @@
+{
+  "batchId": "gemini_batch3_p2",
+  "photoPaths": [
+    "benchmark/photos/batch3/p2_english_but_and_dialogue.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:33:12.221Z",
+  "httpStatus": 200,
+  "latencyMs": 3413,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 15,
+          "y": 44,
+          "w": 10,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 15,
+          "y": 50,
+          "w": 9,
+          "h": 2
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "and",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 16,
+          "y": 57,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "and",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 16,
+          "y": 59,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "and",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 16,
+          "y": 65,
+          "w": 10,
+          "h": 2
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 16,
+          "y": 68,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "and",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 15,
+          "y": 40,
+          "w": 9,
+          "h": 1
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 15,
+          "y": 42,
+          "w": 9,
+          "h": 1
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 16,
+          "y": 76,
+          "w": 12,
+          "h": 2
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 9",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      }
+    ]
+  }
+}

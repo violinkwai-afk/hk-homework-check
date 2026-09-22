@@ -1,0 +1,20 @@
+{
+  "batchId": "qwen32b_batch1_p1",
+  "photoPaths": [
+    "benchmark/photos/batch1/p1_chinese_sentence_match.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:28:55.048Z",
+  "httpStatus": 502,
+  "latencyMs": 15856,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "改功課服務暫時無法使用，請稍後再試。"
+      }
+    ]
+  }
+}

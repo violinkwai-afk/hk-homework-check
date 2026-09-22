@@ -3,8 +3,14 @@
 // drawn SVG strokes -- see src/annotation-icons.js) onto a homework photo
 // using Photon's watermark(). Never modifies /api/mark's result objects --
 // a read-only consumer of its output, not a second source of truth.
-import { PhotonImage, resize, watermark, SamplingFilter } from "@cf-wasm/photon/workerd";
+import { PhotonImage, resize, watermark, SamplingFilter, Rgba, draw_text_with_color } from "@cf-wasm/photon/workerd";
 import { CHECK_PNG_BASE64, CROSS_PNG_BASE64 } from "./annotation-icons.js";
+
+// needs_review has no PNG asset (see iconKindFor below) -- rendered as a
+// literal "?" via Photon's own draw_text_with_color instead of a stamped
+// image, so no new binary asset had to be created/maintained for it. Amber,
+// not red/green, so it reads as "unresolved" rather than right/wrong.
+const REVIEW_MARK_COLOR = [230, 162, 0, 255];
 
 // Same 128MB Photon memory-cap concern the package's own README warns
 // about (see downscaleForCheapTier/cropItem in worker.js for the existing
@@ -40,18 +46,17 @@ function markPosition(bbox, width, height) {
 // correct item gets a visible mark" hiddenStyle rule):
 //   - incorrect (correct === false) -> cross.png, exactly like the
 //     website's visible "bad" mark.
-//   - needs_review (correct === null) -> the website shows a distinct
-//     "?" glyph here, which this MVP has no PNG asset for. Per explicit
-//     instruction not to treat needs_review as incorrect, this returns
-//     "none" here rather than substituting the cross -- a known,
-//     deliberate v1 gap (no visual marker at all for needs_review yet),
-//     not a silent misclassification.
+//   - needs_review (correct === null) -> "review": a literal "?" drawn
+//     with Photon's draw_text_with_color (see annotateImage), not the
+//     cross -- per explicit instruction not to treat needs_review as
+//     incorrect.
 //   - correct (correct === true) -> the website itself keeps this
 //     invisible by design (a real usability fix -- see markIcon's own
 //     comment history about cluttered pages). "none" matches that
 //     existing product decision, not a shortcut taken here.
 function iconKindFor(result) {
   if (result.correct === false) return "cross";
+  if (result.correct === null || result.correct === undefined) return "review";
   return "none";
 }
 
@@ -87,6 +92,18 @@ export function annotateImage(originalBytes, results) {
       if (!r.bbox) continue;
       const kind = iconKindFor(r);
       if (kind === "none") continue;
+
+      if (kind === "review") {
+        const size = iconSizeFor(r.bbox, height);
+        const { cx, cy } = markPosition(r.bbox, width, height);
+        const x = Math.max(0, Math.round(cx - size / 2));
+        const y = Math.max(0, Math.round(cy - size / 2));
+        // draw_text_with_color takes ownership of `color` (consumes its
+        // wasm pointer internally) -- do not also call color.free(), that
+        // double-frees and crashes with "null pointer passed to rust".
+        draw_text_with_color(photonImg, "?", x, y, size, new Rgba(...REVIEW_MARK_COLOR));
+        continue;
+      }
 
       let baseIcon = iconCache.get(kind);
       if (!baseIcon) {

@@ -1,0 +1,53 @@
+{
+  "batchId": "batch1_p1",
+  "photoPaths": [
+    "benchmark/photos/batch1/p1_chinese_sentence_match.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:32:33.597Z",
+  "httpStatus": 200,
+  "latencyMs": 4225,
+  "response": {
+    "results": [
+      {
+        "question": "三",
+        "studentAnswer": "1.F,2.A,3.D,4.B,5.C",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "三",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "四",
+        "studentAnswer": "1.如果雞蛋放進鹽水裏,雞蛋會浮起來。(會),2.如果把紅色和藍色的顏料倒進同一個容器裏,容器裏的顏料會變成紫色。(會)",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "chinese",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "四",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 2",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "三"
+      },
+      {
+        "page": 0,
+        "question": "四"
+      }
+    ]
+  }
+}

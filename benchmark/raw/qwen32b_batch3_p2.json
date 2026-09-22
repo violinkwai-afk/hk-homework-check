@@ -1,0 +1,40 @@
+{
+  "batchId": "qwen32b_batch3_p2",
+  "photoPaths": [
+    "benchmark/photos/batch3/p2_english_but_and_dialogue.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:30:41.852Z",
+  "httpStatus": 200,
+  "latencyMs": 7846,
+  "response": {
+    "results": [
+      {
+        "question": "2",
+        "studentAnswer": "but, A 1=I like cherries. B: I like strawberries. | I like cherries but I don't like strawberries, A 2=Does Sally help with the housework? B: She washes the dishes _but_ she doesn't tidy her room. | but, A 3=Do you have any brothers or sisters? A: I have two brothers _and_ one sister. B: I have one sister _and_ two brothers. | and; and, A 4=What can you do? A: I can play basketball _and_ badminton. What about you? B: I can't play basketball _but_ I can play badminton. | and; but, A 5=I like lemon tea _and_ soya milk. B: I like soya milk _but_ I don't like lemon tea. C: I don't like soya milk _but_ I like lemon tea. | and; but; but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 13,
+          "y": 29,
+          "w": 3,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "2"
+      }
+    ]
+  }
+}

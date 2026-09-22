@@ -1,0 +1,63 @@
+{
+  "batchId": "batch2_p2_division_expressions_arrows",
+  "photoPaths": [
+    "benchmark/photos/batch2/p2_division_expressions_arrows.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:33:57.581Z",
+  "httpStatus": 200,
+  "latencyMs": 2215,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 31,
+          "w": 8,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "2;3",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 14,
+          "y": 59,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 2",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      }
+    ]
+  }
+}

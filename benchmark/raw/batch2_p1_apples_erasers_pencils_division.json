@@ -1,0 +1,86 @@
+{
+  "batchId": "batch2_p1_apples_erasers_pencils_division",
+  "photoPaths": [
+    "benchmark/photos/batch2/p1_apples_erasers_pencils_division.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:33:52.040Z",
+  "httpStatus": 200,
+  "latencyMs": 5511,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "7 apples;3 plates;2 apples on each plate;1 apple is left",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 11,
+          "y": 18,
+          "w": 5,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "14 erasers;boxes of 4;3 boxes;2 erasers left",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 10,
+          "y": 39,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "3 people→3 pencils each→1 left;4 people→2 pencils each→2 left;5 people→2 pencils each→0 left;6 people→1 pencil each→4 left;7 people→1 pencil each→3 left",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 11,
+          "y": 59,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 3",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "batchId": "qwen32b_batch1_p2",
+  "photoPaths": [
+    "benchmark/photos/batch1/p2_chinese_reading_comprehension.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:29:10.934Z",
+  "httpStatus": 502,
+  "latencyMs": 15956,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "AbortError: The operation was aborted"
+      }
+    ]
+  }
+}

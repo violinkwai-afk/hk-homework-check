@@ -1,0 +1,35 @@
+{
+  "batchId": "smoketest_deploy_verify",
+  "photoPaths": [
+    "benchmark/photos/batch1/p1_chinese_sentence_match.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T21:19:48.923Z",
+  "httpStatus": 200,
+  "latencyMs": 4347,
+  "response": {
+    "results": [
+      {
+        "question": "三",
+        "studentAnswer": "1.F,2.A,3.C,4.D,5.B\n四=改寫句子 仿照例子,運用「如果……就……」的句式改寫句子。|1.如果把熱水倒進杯子裏,杯裏的表面會顯露出卡通圖案。;2.如果把紅色和藍色的顏料倒進同一個容器裏,容器裏的顏料就會變成紫色。",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "三",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "三"
+      }
+    ]
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "batchId": "gemini_batch3_p1",
+  "photoPaths": [
+    "benchmark/photos/batch3/p1_english_and_or_rewrite.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:33:09.428Z",
+  "httpStatus": 200,
+  "latencyMs": 2764,
+  "response": {
+    "results": [
+      {
+        "question": "Date",
+        "studentAnswer": "I can do ballet and play badminton.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "Date",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "I can't play the violin or the recorder",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 72,
+          "y": 29,
+          "w": 6,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "I can swim and ride a bicycle.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 20,
+          "y": 28,
+          "w": 5,
+          "h": 1
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "I don't like sandwiches or hot dogs",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 21,
+          "y": 68,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "I don't have any brothers or sisters",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 21,
+          "y": 68,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "6",
+        "studentAnswer": "I do my homework and read books in the evening.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 21,
+          "y": 80,
+          "w": 10,
+          "h": 2
+        },
+        "anchor": "6",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 6",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "Date"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      },
+      {
+        "page": 0,
+        "question": "6"
+      }
+    ]
+  }
+}

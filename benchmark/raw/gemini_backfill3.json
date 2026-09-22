@@ -1,0 +1,20 @@
+{
+  "batchId": "gemini_backfill3",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch3_missing_english_modals.jpg"
+  ],
+  "endpoint": "https://test-gemini-flash-lite-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-22T00:33:31.678Z",
+  "httpStatus": 502,
+  "latencyMs": 2614,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "改功課服務暫時無法使用，請稍後再試。"
+      }
+    ]
+  }
+}

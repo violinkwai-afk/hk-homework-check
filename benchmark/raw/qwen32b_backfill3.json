@@ -1,0 +1,40 @@
+{
+  "batchId": "qwen32b_backfill3",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch3_missing_english_modals.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:31:19.098Z",
+  "httpStatus": 200,
+  "latencyMs": 4499,
+  "response": {
+    "results": [
+      {
+        "question": "2",
+        "studentAnswer": "can , can't, Date: 21th, Sept., A Look at the pictures. Finish the questionnaire. Follow the example. Questionnaire Name: Rachel Lee Class: 3B 1 Can you play football? Yes, I can. 2 Can you play table tennis? No, I can't. × 3 Can you do ballet? Yes, I can. √ 4 Can you play the piano? No, I can't. × B Rearrange the words to form sentences. Use capital letters where necessary. 1 ? play basketball you can I Can you play basketball? 2 the violin and the can I play recorder I can play the violin and the recorder. √ 3 play I badminton tennis or can't I can't play tennis or badminton. ✓",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 17,
+          "y": 20,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "2"
+      }
+    ]
+  }
+}

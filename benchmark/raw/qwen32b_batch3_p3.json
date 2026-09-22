@@ -1,0 +1,104 @@
+{
+  "batchId": "qwen32b_batch3_p3",
+  "photoPaths": [
+    "benchmark/photos/batch3/p3_english_letter_fill_blank.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:30:49.729Z",
+  "httpStatus": 200,
+  "latencyMs": 9253,
+  "response": {
+    "results": [
+      {
+        "question": "B",
+        "studentAnswer": "Flora is hungry. She is thirsty. Flora is hungry and thirsty.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": null,
+        "anchor": "B",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "David likes noodles but he doesn't like rice.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 30,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "We have two hamburgers and three hot dogs.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 36,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "I don't like dolls and teddy bears.\n\nComplete the letter with 'and', 'but' or 'or'.|Hi Alan, My name is Eric. I have three classes 1 but I don't have any brothers. I like fruit very much. I like cherries 2 and peaches. I don't like cheese 3 or milk. I like cool weather. I like winter 4 but I don't like summer. In winter, I usually eat hotpot 5 and drink hot chocolate. I can't swim 6 but I ride a bicycle. I can play football 7 but I can't play table tennis. I like music. I can play the piano 8 but I can't play the violin. White soon, Eric",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 42,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 4",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "B"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      }
+    ]
+  }
+}

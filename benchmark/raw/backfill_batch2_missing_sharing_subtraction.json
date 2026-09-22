@@ -1,0 +1,54 @@
+{
+  "batchId": "backfill_batch2_missing_sharing_subtraction",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch2_missing_sharing_subtraction.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:41:52.536Z",
+  "httpStatus": 200,
+  "latencyMs": 2620,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "8÷4=2",
+        "correct": true,
+        "correctAnswer": "",
+        "subject": "math",
+        "status": "ok",
+        "note": "",
+        "page": 0,
+        "bbox": {
+          "x": 7,
+          "y": 19,
+          "w": 12,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "code"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "12÷5=2 R2",
+        "correct": false,
+        "correctAnswer": "2.4",
+        "subject": "math",
+        "status": "ok",
+        "note": "",
+        "page": 0,
+        "bbox": {
+          "x": 10,
+          "y": 46,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "code"
+      }
+    ],
+    "score": "1 / 2",
+    "needsVerify": []
+  }
+}

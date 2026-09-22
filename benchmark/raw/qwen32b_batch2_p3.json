@@ -1,0 +1,20 @@
+{
+  "batchId": "qwen32b_batch2_p3",
+  "photoPaths": [
+    "benchmark/photos/batch2/p3_shuttlecocks_fact_families.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:30:09.620Z",
+  "httpStatus": 502,
+  "latencyMs": 15837,
+  "response": {
+    "error": "upstream_error",
+    "message": "改功課服務暫時無法使用，請稍後再試。",
+    "pageErrors": [
+      {
+        "page": 0,
+        "error": "AbortError: The operation was aborted"
+      }
+    ]
+  }
+}

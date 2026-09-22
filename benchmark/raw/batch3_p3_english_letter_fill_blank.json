@@ -1,0 +1,132 @@
+{
+  "batchId": "batch3_p3_english_letter_fill_blank",
+  "photoPaths": [
+    "benchmark/photos/batch3/p3_english_letter_fill_blank.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:35:11.906Z",
+  "httpStatus": 200,
+  "latencyMs": 6258,
+  "response": {
+    "results": [
+      {
+        "question": "B1",
+        "studentAnswer": "Flora is hungry and thirsty.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 11,
+          "y": 24,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "B1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "B2",
+        "studentAnswer": "David likes noodles but he doesn't like rice.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 30,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "B2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "B3",
+        "studentAnswer": "We have two hamburgers and three hot dogs.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 36,
+          "w": 11,
+          "h": 2
+        },
+        "anchor": "B3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "B4",
+        "studentAnswer": "I don't like dolls and teddy bears.",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 42,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "B4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "and;and;and;or;but;and;or;or;but",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 12,
+          "y": 54,
+          "w": 7,
+          "h": 1
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 5",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "B1"
+      },
+      {
+        "page": 0,
+        "question": "B2"
+      },
+      {
+        "page": 0,
+        "question": "B3"
+      },
+      {
+        "page": 0,
+        "question": "B4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      }
+    ]
+  }
+}

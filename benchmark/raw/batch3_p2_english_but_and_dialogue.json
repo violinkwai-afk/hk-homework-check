@@ -1,0 +1,132 @@
+{
+  "batchId": "batch3_p2_english_but_and_dialogue",
+  "photoPaths": [
+    "benchmark/photos/batch3/p2_english_but_and_dialogue.jpg"
+  ],
+  "endpoint": "https://hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T19:35:07.165Z",
+  "httpStatus": 200,
+  "latencyMs": 4709,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "but I don't like strawberries",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 19,
+          "y": 36,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "2",
+        "studentAnswer": "but she doesn't tidy her room",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 19,
+          "y": 48,
+          "w": 6,
+          "h": 2
+        },
+        "anchor": "2",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "3",
+        "studentAnswer": "and one sister. C: I have one brother|and two brothers",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "english",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 20,
+          "y": 55,
+          "w": 8,
+          "h": 1
+        },
+        "anchor": "3",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "4",
+        "studentAnswer": "and badminton. What about you? A: I can't play basketball|but I can play badminton",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 20,
+          "y": 63,
+          "w": 7,
+          "h": 2
+        },
+        "anchor": "4",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      },
+      {
+        "question": "5",
+        "studentAnswer": "and soya milk. B: I like soya milk|but I don't like lemon tea. C: I don't like soya milk|but I like lemon tea",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 19,
+          "y": 40,
+          "w": 5,
+          "h": 1
+        },
+        "anchor": "5",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 5",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      },
+      {
+        "page": 0,
+        "question": "2"
+      },
+      {
+        "page": 0,
+        "question": "3"
+      },
+      {
+        "page": 0,
+        "question": "4"
+      },
+      {
+        "page": 0,
+        "question": "5"
+      }
+    ]
+  }
+}

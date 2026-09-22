@@ -1,0 +1,40 @@
+{
+  "batchId": "qwen32b_backfill2",
+  "photoPaths": [
+    "benchmark/photos/backfill/batch2_missing_sharing_subtraction.jpg"
+  ],
+  "endpoint": "https://test-qwen32b-benchmark-hk-homework-check.violin-kwai.workers.dev/api/mark",
+  "requestedAt": "2026-09-21T22:31:14.734Z",
+  "httpStatus": 200,
+  "latencyMs": 4333,
+  "response": {
+    "results": [
+      {
+        "question": "1",
+        "studentAnswer": "8-4=4;8÷4=2, There are 2 sweets in each jar.\n\n2=There are 42 gummy bears. Put them into bags in groups of 5.|12-5=7;42÷5=8余2, There are 8 groups altogether;6×(2) gummy bears are left",
+        "correct": null,
+        "correctAnswer": "",
+        "subject": "uncertain",
+        "status": "needs_review",
+        "note": "需要人手複核",
+        "page": 0,
+        "bbox": {
+          "x": 7,
+          "y": 19,
+          "w": 12,
+          "h": 2
+        },
+        "anchor": "1",
+        "riskyDiagram": null,
+        "verifiedBy": "pending"
+      }
+    ],
+    "score": "0 / 1",
+    "needsVerify": [
+      {
+        "page": 0,
+        "question": "1"
+      }
+    ]
+  }
+}

@@ -43,9 +43,32 @@ const HANDWRITING_EXEMPLARS_USED = 4; // most recent samples sent as reference
 // absurd in the first place.
 const MAX_TELEGRAM_PHOTO_BYTES = 20 * 1024 * 1024;
 
+// 2026-09-23 (G1): closes the "no version/build traceability" gap flagged
+// in TICKETS.md -- rollback previously meant manually cross-referencing
+// `wrangler deployments list` timestamps against `git log` timestamps by
+// hand. Uses Cloudflare's own native `version_metadata` binding
+// (`[version_metadata]` in wrangler.toml, binding = "CF_VERSION_METADATA")
+// -- confirmed via Cloudflare's docs to be injected automatically at
+// deploy time with the real Worker version UUID/tag/upload timestamp, no
+// CI config or manual bumping needed. Replaces the earlier hand-maintained
+// BUILD_VERSION string, which needed remembering to bump on every
+// deploy-worthy change -- this is fully automatic instead. Falls back to
+// "unknown" only if the binding is somehow missing (e.g. run outside a
+// real Workers deploy, like these node:test fixtures), never throws.
+function versionInfo(env) {
+  const meta = env && env.CF_VERSION_METADATA;
+  if (!meta) return { id: "unknown", tag: "", timestamp: "unknown" };
+  return { id: meta.id || "unknown", tag: meta.tag || "", timestamp: meta.timestamp || "unknown" };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === "/health" && request.method === "GET") {
+      return new Response(JSON.stringify({ ok: true, version: versionInfo(env), time: new Date().toISOString() }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.pathname === "/api/check" && request.method === "POST") {
       return handleCheck(request, env);
     }
@@ -114,6 +137,9 @@ export default {
     }
     if (url.pathname === "/telegram-webhook" && request.method === "POST") {
       return handleTelegramWebhook(request, env);
+    }
+    if (url.pathname === "/api/report-wrong" && request.method === "POST") {
+      return handleReportWrong(request, env);
     }
     return env.ASSETS.fetch(request);
   },
@@ -1152,6 +1178,56 @@ async function handleForgetHandwriting(request, env) {
   return json({ ok: true }, 200);
 }
 
+// 2026-09-23: real fix for the website's "AI答錯咗" gap found this session --
+// tapping a mark on the photo (applyMarkCorrect in website/index.html) only
+// ever flipped the mark LOCALLY in the parent's own browser; nothing was
+// ever sent back here, so every correction a parent made was invisible to
+// the developer. This is the actual report-to-developer half that was
+// missing (per explicit instruction: fix the website, NOT the Telegram bot
+// -- Telegram needs a different UI shape and was explicitly declined).
+//
+// Deliberately minimal, matching this repo's existing coverage-expansion-log
+// convention (mark_unresolved_question in handleMark): a structured
+// console.log line to Cloudflare's persistent Workers Logs, not a new KV/D1
+// store -- no new infra, consistent with how the OTHER "log it for later
+// batch review" feature already works.
+//
+// KNOWN LIMITATION (honestly scoped, not silently hidden): /api/check's own
+// response shape never sends the full printed question text to the client
+// (only a short `question` label like "3" -- confirmed by reading both
+// handleCheckInner's result-building code and website/index.html's own
+// data.results usage), so this can only report the label + the answers
+// already visible client-side, not the original question wording. Making
+// this fully diagnosable would mean also including printedQuestion in
+// /api/check's response -- a separate, larger change to a live public API
+// shape, not done here without a decision on that tradeoff.
+async function handleReportWrong(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: "bad_request" }, 400); }
+  const question = typeof body.question === "string" ? body.question.slice(0, 50) : "";
+  const studentAnswer = typeof body.studentAnswer === "string" ? body.studentAnswer.slice(0, 200) : "";
+  const correctAnswer = typeof body.correctAnswer === "string" ? body.correctAnswer.slice(0, 200) : "";
+  const subject = typeof body.subject === "string" ? body.subject.slice(0, 20) : "";
+  const previousCorrect = body.previousCorrect === true || body.previousCorrect === false ? body.previousCorrect : null;
+  const newCorrect = body.newCorrect === true || body.newCorrect === false ? body.newCorrect : null;
+  if (!question || newCorrect === null) return json({ error: "bad_request" }, 400);
+  console.log(JSON.stringify({
+    event: "report_mark_disputed",
+    question,
+    studentAnswer,
+    correctAnswer,
+    subject,
+    previousCorrect,
+    newCorrect,
+    // The interesting direction is true->false (parent says the AI's
+    // "correct" was actually wrong) -- flagged explicitly so a later batch
+    // review can filter to that signal without re-deriving it from the two
+    // raw booleans each time.
+    isAiWrongReport: previousCorrect === true && newCorrect === false,
+  }));
+  return json({ ok: true }, 200);
+}
+
 function normalizeAnchor(s) {
   return String(s || "").replace(/[\s.()（）、,，]/g, "").toLowerCase();
 }
@@ -1874,14 +1950,1061 @@ function detectSubject(printedQuestion, studentAnswer) {
   return "uncertain";
 }
 
-// Verification dispatcher: one lane per subject, all returning the same
-// {correct, correctAnswer} shape so handleMark doesn't need to know which
-// lane ran. Only "math" is deterministic today. "chinese"/"english"/
-// "uncertain" have no reference-answer or rules/AI-checking lane wired up
-// yet -- they honestly report null (needs review) rather than guessing
-// correct/incorrect just to look complete, per explicit instruction not
-// to fake 100% coverage. Swap in a real Chinese/English checker later by
-// adding a case here; math and the OCR/mapping layers don't change.
+// ---------------------------------------------------------------------
+// New question-type verifiers (2026-09-22), built from a real sample of
+// 5 published HK primary-school workbooks the user sent 2026-09-11 to
+// 09-18 (read directly, no AI/API cost -- see the coverage-catalog
+// report for the full page-by-page findings). Each one is Tier A in
+// that catalog: the correct answer is derivable by pure code from the
+// PRINTED question text alone, no book-specific answer key needed --
+// same philosophy as verifyMath above.
+//
+// IMPORTANT: none of these are wired into detectSubject/verifyAnswer's
+// dispatcher yet. Doing so safely needs a real per-type detector (so an
+// ordinary math item's stray digits/letters don't misfire one of these)
+// AND a decision on how OCR would represent "which MC option did the
+// student pick" -- a different shape than the existing single
+// label=printed|answer line. Left as standalone, independently tested
+// functions, ready for that integration decision later.
+// ---------------------------------------------------------------------
+
+// Chinese number-word -> digit, scoped to 0-99 (the range actually
+// evidenced in the sampled workbooks -- not extended to 百/千 without
+// real evidence, same discipline as BLANK_TOKENS above).
+const CN_DIGIT_WORDS = { 零: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+function parseChineseNumberWord(s) {
+  const str = String(s || "").trim();
+  if (!str) return null;
+  if (CN_DIGIT_WORDS[str] !== undefined) return CN_DIGIT_WORDS[str];
+  if (str === "十") return 10;
+  const m = str.match(/^([一二三四五六七八九])?十([一二三四五六七八九])?$/);
+  if (!m) return null;
+  const tens = m[1] ? CN_DIGIT_WORDS[m[1]] : 1;
+  const ones = m[2] ? CN_DIGIT_WORDS[m[2]] : 0;
+  return tens * 10 + ones;
+}
+function numberToChineseWord(n) {
+  if (!Number.isInteger(n) || n < 0 || n > 99) return null;
+  const REV = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+  if (n < 10) return REV[n];
+  if (n === 10) return "十";
+  const tens = Math.floor(n / 10), ones = n % 10;
+  return (tens === 1 ? "十" : REV[tens] + "十") + (ones === 0 ? "" : REV[ones]);
+}
+
+// English number-word -> digit, scoped to 0-99 (same real-evidence scope).
+const EN_NUM_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+  seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+  sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+const EN_NUM_WORDS_REV = {};
+for (const [w, v] of Object.entries(EN_NUM_WORDS)) if (EN_NUM_WORDS_REV[v] === undefined) EN_NUM_WORDS_REV[v] = w;
+function parseEnglishNumberWord(s) {
+  const str = String(s || "").trim().toLowerCase().replace(/[^a-z\s-]/g, "");
+  if (!str) return null;
+  if (EN_NUM_WORDS[str] !== undefined) return EN_NUM_WORDS[str];
+  const parts = str.split(/[\s-]+/).filter(Boolean);
+  if (parts.length === 2) {
+    const tens = EN_NUM_WORDS[parts[0]];
+    const ones = EN_NUM_WORDS[parts[1]];
+    if (tens !== undefined && tens >= 20 && tens % 10 === 0 && ones !== undefined && ones > 0 && ones < 10) {
+      return tens + ones;
+    }
+  }
+  return null;
+}
+function numberToEnglishWord(n) {
+  if (!Number.isInteger(n) || n < 0 || n > 99) return null;
+  if (EN_NUM_WORDS_REV[n]) return EN_NUM_WORDS_REV[n];
+  const tens = Math.floor(n / 10) * 10, ones = n % 10;
+  if (!EN_NUM_WORDS_REV[tens] || !EN_NUM_WORDS_REV[ones]) return null;
+  return `${EN_NUM_WORDS_REV[tens]}-${EN_NUM_WORDS_REV[ones]}`;
+}
+
+// "Write <digit> in words" / "Write '<word>' in numerals" -- a real,
+// common HK P1 question type (found 2026-09-22 in real published
+// workbook pages, both English and Chinese forms). Detects direction
+// from a quoted word (word->digit) vs. a bare printed digit (digit->
+// word); only claims a verdict when exactly one clean interpretation
+// exists, otherwise null/needs_review, never a guess.
+function verifyNumberWordConversion(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "").trim();
+  const answer = String(studentAnswer || "").trim();
+  if (!printed || !answer) return { correct: null, correctAnswer: "" };
+
+  const quoted = printed.match(/'([a-zA-Z\s-]+)'|"([a-zA-Z\s-]+)"|「([一二三四五六七八九十零]+)」/);
+  const wordSource = quoted ? (quoted[1] || quoted[2] || quoted[3]) : null;
+  if (wordSource) {
+    const target = /[一二三四五六七八九十零]/.test(wordSource)
+      ? parseChineseNumberWord(wordSource)
+      : parseEnglishNumberWord(wordSource);
+    const studentVal = parseInt(answer, 10);
+    if (target !== null && !Number.isNaN(studentVal) && /^-?\d+$/.test(answer)) {
+      return { correct: target === studentVal, correctAnswer: target === studentVal ? "" : String(target) };
+    }
+    return { correct: null, correctAnswer: "" };
+  }
+
+  const digitMatch = printed.match(/\b(\d{1,2})\b/);
+  const isWordAnswer = /[a-zA-Z]/.test(answer) || /[一二三四五六七八九十零]/.test(answer);
+  if (digitMatch && isWordAnswer) {
+    const target = parseInt(digitMatch[1], 10);
+    const expectedEn = numberToEnglishWord(target);
+    const expectedCn = numberToChineseWord(target);
+    const normAnswer = answer.toLowerCase().replace(/[\s-]+/g, "");
+    const matchesEn = expectedEn && normAnswer === expectedEn.toLowerCase().replace(/-/g, "");
+    const matchesCn = expectedCn && answer.replace(/\s+/g, "") === expectedCn;
+    if (matchesEn || matchesCn) return { correct: true, correctAnswer: "" };
+    if (expectedEn || expectedCn) return { correct: false, correctAnswer: expectedEn || expectedCn };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
+// "Fill in > or <" between two printed numbers -- found 2026-09-22 in a
+// real workbook page. Only the two ASCII symbols actually used in the
+// sample are accepted; "=" was never evidenced so isn't handled (a
+// printed pair that's actually equal returns null, never guesses which
+// symbol was "meant").
+function verifyComparisonSymbol(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const nums = printed.match(/-?\d+(\.\d+)?/g);
+  if (!nums || nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const a = parseFloat(nums[0]), b = parseFloat(nums[1]);
+  if (Number.isNaN(a) || Number.isNaN(b) || a === b) return { correct: null, correctAnswer: "" };
+  const expected = a > b ? ">" : "<";
+  const answer = String(studentAnswer || "").trim();
+  if (answer !== ">" && answer !== "<") return { correct: null, correctAnswer: "" };
+  return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
+}
+
+// "Which option below contains only even/odd numbers?" MC (found
+// 2026-09-22, real workbook page). printedQuestion must carry the full
+// question text (so the even/odd keyword is visible) followed by
+// "A. n,n B. n,n C. n,n D. n,n"; studentAnswer is the picked letter.
+// Only claims a verdict when exactly one option uniquely matches.
+function verifyParityMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const wantEven = /\beven\b|偶數/i.test(printed);
+  const wantOdd = /\bodd\b|奇數/i.test(printed);
+  if (wantEven === wantOdd) return { correct: null, correctAnswer: "" };
+  const optionMatches = [...printed.matchAll(/([A-D])[.．]\s*([\d,\s]+?)(?=\s*[A-D][.．]|$)/g)];
+  if (optionMatches.length < 2) return { correct: null, correctAnswer: "" };
+  let correctLetter = null, matchCount = 0;
+  for (const m of optionMatches) {
+    const nums = m[2].match(/\d+/g);
+    if (!nums || !nums.length) continue;
+    if (nums.every((n) => (parseInt(n, 10) % 2 === 0) === wantEven)) { correctLetter = m[1]; matchCount++; }
+  }
+  if (matchCount !== 1) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim().toUpperCase();
+  return { correct: answer === correctLetter, correctAnswer: answer === correctLetter ? "" : correctLetter };
+}
+
+// "Which option's computed value equals the target?" MC -- generalizes
+// two real shapes found 2026-09-22 in sampled workbooks: "same sum as
+// 39+12+28?" (a quoted expression target) and "decomposition of 18?"
+// (a named-number target). Each option is either a full arithmetic
+// expression, or an "X and Y" / "X 和 Y" pair (evaluated as X+Y -- the
+// only pairing form evidenced). Only claims a verdict when exactly one
+// option matches the target.
+function verifyComputationMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const quoted = printed.match(/[「"']([^」"']+)[」"']/);
+  let target = quoted ? evalArithmetic(quoted[1]) : null;
+  if (target === null) {
+    const m = printed.match(/(?:decomposition of|分解)\s*(\d+)/i);
+    if (m) target = parseFloat(m[1]);
+  }
+  if (target === null) return { correct: null, correctAnswer: "" };
+
+  const optionMatches = [...printed.matchAll(/([A-D])[.．]\s*([^A-D]+?)(?=\s*[A-D][.．]|$)/g)];
+  if (optionMatches.length < 2) return { correct: null, correctAnswer: "" };
+  let correctLetter = null, matchCount = 0;
+  for (const m of optionMatches) {
+    const text = m[2].trim();
+    let val = evalArithmetic(text);
+    if (val === null) {
+      const pair = text.match(/(\d+)\s*(?:and|和)\s*(\d+)/i);
+      if (pair) val = parseFloat(pair[1]) + parseFloat(pair[2]);
+    }
+    if (val !== null && Math.abs(val - target) < 1e-9) { correctLetter = m[1]; matchCount++; }
+  }
+  if (matchCount !== 1) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim().toUpperCase();
+  return { correct: answer === correctLetter, correctAnswer: answer === correctLetter ? "" : correctLetter };
+}
+
+// ---------------------------------------------------------------------
+// Second batch of new verifiers (2026-09-22, later same session), from
+// the same real-workbook sample plus the real SFA P1 English quiz PDF
+// (`61ecd818-SFA-P1-ENG-1920-QUIZ.pdf`, 5 pages, read directly) and the
+// real Chinese benchmark photos already in `benchmark/photos/`. Same
+// discipline as the batch above: standalone, tested, NOT wired into
+// verifyAnswer's dispatcher yet, fail-safe to null on any ambiguity.
+// ---------------------------------------------------------------------
+
+// Multiple separate single-blank sub-equations sharing one comma-joined
+// answer string, e.g. real captured shape "4×□=24,24÷□=4,□×4=24,24÷4=□"
+// with studentAnswer "6,6,6,6" (a "fact family" exercise). This is
+// explicitly the Tier-2 case trySubstituteBlank's own comment defers --
+// handled here as its own function (not a change to trySubstituteBlank)
+// by positionally pairing each comma-separated sub-question with the
+// same-index sub-answer and reusing trySubstituteBlank per pair
+// unchanged. Any sub-question that isn't a clean single-blank shape, or
+// a count mismatch between sub-questions and sub-answers, is not this
+// case -- returns null rather than guessing a pairing.
+function verifyMultiBlankMath(printedQuestion, studentAnswer) {
+  const subQuestions = String(printedQuestion || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const subAnswers = String(studentAnswer || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (subQuestions.length < 2 || subQuestions.length !== subAnswers.length) return { correct: null, correctAnswer: "" };
+  const results = subQuestions.map((q, i) => trySubstituteBlank(q, subAnswers[i]));
+  if (results.some((r) => !r)) return { correct: null, correctAnswer: "" };
+  const allCorrect = results.every((r) => r.correct === true);
+  return { correct: allCorrect, correctAnswer: allCorrect ? "" : results.map((r) => r.correctAnswer || "?").join(", ") };
+}
+
+// "Fill in the missing digit" where the blank is ONE digit embedded
+// inside a multi-digit number in an otherwise-complete equation (e.g.
+// "7□+15=82", the blank is the ones digit of 7□) -- distinct from
+// BLANK_TOKENS/trySubstituteBlank, which substitutes a whole missing
+// OPERAND, not a digit within one. Brute-forces 0-9 (a 10-way search is
+// trivially cheap) and only claims a verdict when exactly one digit
+// makes the equation true, same "ambiguous -> null" discipline as
+// everywhere else. NOTE (scoped honestly): a real sampled workbook page
+// ("在方格內填上數字完成直式") showed a HARDER real case with TWO blank
+// digits in two different operands of a column subtraction (e.g.
+// "□8-3□=45") -- that two-blank-digit generalization is NOT handled by
+// this function (a 100-way joint search rather than two independent
+// 10-way ones, and needs its own ambiguity handling for multiple valid
+// digit pairs) and is left as a known follow-up, not silently claimed.
+function verifyMissingDigitInNumber(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  let token = null, count = 0;
+  for (const t of BLANK_TOKENS) {
+    const n = printed.split(t).length - 1;
+    if (n > 0) { count += n; if (!token) token = t; }
+  }
+  if (count !== 1) return { correct: null, correctAnswer: "" };
+  // Must be adjacent to a digit (embedded in a number), not standing
+  // alone as a whole operand -- that's trySubstituteBlank's case, not
+  // this one, so this function stays narrowly scoped to what it's named for.
+  const idx = printed.indexOf(token);
+  const before = printed[idx - 1], after = printed[idx + token.length];
+  if (!/\d/.test(before || "") && !/\d/.test(after || "")) return { correct: null, correctAnswer: "" };
+
+  const eqIdx = printed.indexOf("=");
+  if (eqIdx === -1) return { correct: null, correctAnswer: "" };
+  const candidates = [];
+  for (let d = 0; d <= 9; d++) {
+    const reconstructed = printed.replace(token, String(d));
+    const lhsVal = evalArithmetic(reconstructed.slice(0, eqIdx));
+    const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
+    if (lhsVal !== null && !Number.isNaN(rhsVal) && Math.abs(lhsVal - rhsVal) < 1e-9) candidates.push(d);
+  }
+  if (candidates.length !== 1) return { correct: null, correctAnswer: "" };
+  const expected = candidates[0];
+  const studentVal = parseInt(String(studentAnswer || "").trim(), 10);
+  if (Number.isNaN(studentVal)) return { correct: null, correctAnswer: "" };
+  return { correct: studentVal === expected, correctAnswer: studentVal === expected ? "" : String(expected) };
+}
+
+// General N-blank version of verifyMissingDigitInNumber above (real
+// example, 2026-09-22, p1-p6.com P3 maths Q15: "2□9+32=□9□", TWO blank
+// digits in TWO different operands with a carry between them). Written
+// as a NEW function rather than extending verifyMissingDigitInNumber in
+// place: that function's `count !== 1` guard and its callers/tests
+// assume exactly one blank, and its single `printed.replace(token, ...)`
+// call is specifically a single-substitution shape -- generalizing it to
+// N independent blank positions changes its substitution strategy
+// entirely (each blank needs its OWN digit, not one digit repeated at
+// every occurrence of the token), so reusing the name would either
+// silently change already-tested behaviour or need the same branching
+// this split avoids. This function is a strict superset: it also
+// correctly handles the old N=1 case (verified by test below), so once
+// wired in, this one function can replace both without behaviour loss --
+// not done here, left as a "which one wins" call for a human/PR review.
+//
+// Brute-forces every blank position independently (up to 4 blanks =
+// 10,000 combinations, milliseconds) rather than solving the column
+// arithmetic symbolically -- simpler, and this codebase's own
+// `verifyMissingDigitInNumber` already established brute force as the
+// house style for this shape of problem. Requires a UNIQUE solution
+// (declines, doesn't guess, if more than one digit-combination satisfies
+// the equation) -- same honesty guarantee as every other verify* function
+// here.
+function verifyMissingDigitsInEquation(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const positions = [];
+  for (let i = 0; i < printed.length; i++) {
+    if (BLANK_TOKENS.includes(printed[i])) positions.push(i);
+  }
+  if (positions.length === 0 || positions.length > 4) return { correct: null, correctAnswer: "" };
+  const eqIdx = printed.indexOf("=");
+  if (eqIdx === -1) return { correct: null, correctAnswer: "" };
+  // At least one blank must be embedded next to a digit (this is the
+  // "missing digit inside a number" shape, not trySubstituteBlank's
+  // "blank stands alone as a whole operand" shape).
+  const embedded = positions.some((i) => /\d/.test(printed[i - 1] || "") || /\d/.test(printed[i + 1] || ""));
+  if (!embedded) return { correct: null, correctAnswer: "" };
+
+  const totalCombinations = 10 ** positions.length;
+  const solutions = [];
+  for (let combo = 0; combo < totalCombinations; combo++) {
+    const digits = [];
+    let rest = combo;
+    for (let k = 0; k < positions.length; k++) {
+      digits.push(rest % 10);
+      rest = Math.floor(rest / 10);
+    }
+    const chars = printed.split("");
+    positions.forEach((pos, k) => {
+      chars[pos] = String(digits[k]);
+    });
+    const reconstructed = chars.join("");
+    // RHS is a bare (post-substitution) number, not an expression --
+    // evalArithmetic requires at least one operator and returns null for
+    // a plain number like "291", so this uses parseFloat here, matching
+    // verifyMissingDigitInNumber's existing convention for the same
+    // reason.
+    const lhsVal = evalArithmetic(reconstructed.slice(0, eqIdx));
+    const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
+    if (lhsVal !== null && !Number.isNaN(rhsVal) && Math.abs(lhsVal - rhsVal) < 1e-9) solutions.push(digits);
+  }
+  if (solutions.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedDigits = solutions[0];
+
+  // Student answer is expected as the blank digits, in the SAME left-to-
+  // right reading order as they appear in printedQuestion (matches how
+  // trySubstituteBlank/verifyMissingDigitInNumber's single-value answer
+  // convention generalizes to multiple blanks) -- e.g. for
+  // "2□9+32=□9□" with blanks solving to [7,0], the expected answer text
+  // is "7,0" or "70" (both accepted; OCR's exact joining convention for
+  // this genuinely new shape is unconfirmed, so both are tolerated
+  // rather than guessing one).
+  const answerDigits = String(studentAnswer || "")
+    .replace(/[,\s]+/g, "")
+    .split("")
+    .filter((c) => /\d/.test(c))
+    .map(Number);
+  if (answerDigits.length !== expectedDigits.length) return { correct: null, correctAnswer: "" };
+  const correct = answerDigits.every((d, k) => d === expectedDigits[k]);
+  return { correct, correctAnswer: correct ? "" : expectedDigits.join(",") };
+}
+
+// Multi-box digit answer: the answer to an arithmetic expression is
+// split across N separate boxes, one digit each (real example,
+// 2026-09-22, p1-p6.com P3 maths Q11: "634×2=" with the product written
+// across 4 boxes). Distinct from a normal single-field answer -- OCR
+// realistically hands this back as the boxes' digits read left to right
+// (however many boxes actually had a mark in them), which may have FEWER
+// digits than boxes if the true answer is shorter than the box count
+// (e.g. a 3-digit product in a 4-box grid, blank leading box) -- so this
+// compares by numeric VALUE (parseInt drops leading zeros/blanks
+// naturally), not by exact string/box-count match.
+function verifyMultiBoxDigitAnswer(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "").trim();
+  const eqIdx = printed.indexOf("=");
+  if (eqIdx === -1) return { correct: null, correctAnswer: "" };
+  const expression = printed.slice(0, eqIdx);
+  const expected = evalArithmetic(expression);
+  if (expected === null || !Number.isInteger(expected)) return { correct: null, correctAnswer: "" };
+
+  const digits = String(studentAnswer || "").replace(/[,\s]+/g, "");
+  if (!/^\d+$/.test(digits)) return { correct: null, correctAnswer: "" };
+  const studentVal = parseInt(digits, 10);
+  const correct = studentVal === expected;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Small (<=6-number) ascending/descending sequence with exactly one
+// blank slot, constant step inferred from the OTHER numbers present
+// (found in sampled workbooks as a standard P1/P2 pattern exercise).
+// Only claims a verdict when the non-blank numbers agree on a single
+// constant step -- an inconsistent or too-short sequence returns null
+// rather than guessing a rule.
+function verifySequenceFill(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const tokenIdx = printed.split(/[,，]/).findIndex((part) => BLANK_TOKENS.some((t) => part.includes(t)) || /^_+$/.test(part.trim()));
+  const parts = printed.split(/[,，]/).map((s) => s.trim());
+  if (tokenIdx === -1 || parts.length < 3) return { correct: null, correctAnswer: "" };
+  const nums = parts.map((p, i) => (i === tokenIdx ? null : parseFloat(p)));
+  if (nums.some((n, i) => i !== tokenIdx && Number.isNaN(n))) return { correct: null, correctAnswer: "" };
+  const steps = [];
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] === null || nums[i - 1] === null) continue;
+    steps.push(nums[i] - nums[i - 1]);
+  }
+  if (!steps.length || steps.some((s) => s !== steps[0])) return { correct: null, correctAnswer: "" };
+  const step = steps[0];
+  const expected = tokenIdx > 0 && nums[tokenIdx - 1] !== null
+    ? nums[tokenIdx - 1] + step
+    : (tokenIdx < nums.length - 1 && nums[tokenIdx + 1] !== null ? nums[tokenIdx + 1] - step : null);
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const studentVal = parseFloat(studentAnswer);
+  if (Number.isNaN(studentVal)) return { correct: null, correctAnswer: "" };
+  return { correct: Math.abs(studentVal - expected) < 1e-9, correctAnswer: studentVal === expected ? "" : String(expected) };
+}
+
+// "Sort these numbers ascending/descending" -- printedQuestion carries
+// the given numbers plus a direction keyword; studentAnswer is the
+// comma/space-separated ordering. Only claims a verdict when the
+// direction is unambiguous AND the student's answer is a genuine
+// permutation of the SAME numbers (not just numerically sorted -- a
+// wrong/extra number is a format problem, reported as incorrect against
+// the real expected list, not silently ignored).
+function verifySortNumbers(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const wantAsc = /由小到大|ascending|smallest to largest/i.test(printed);
+  const wantDesc = /由大到小|descending|largest to smallest/i.test(printed);
+  if (wantAsc === wantDesc) return { correct: null, correctAnswer: "" };
+  const given = (printed.match(/-?\d+(\.\d+)?/g) || []).map(Number);
+  if (given.length < 2) return { correct: null, correctAnswer: "" };
+  const expectedOrder = [...given].sort((a, b) => (wantAsc ? a - b : b - a));
+  const studentNums = (String(studentAnswer || "").match(/-?\d+(\.\d+)?/g) || []).map(Number);
+  if (studentNums.length !== given.length) return { correct: false, correctAnswer: expectedOrder.join(", ") };
+  const sameMultiset = [...studentNums].sort((a, b) => a - b).join(",") === [...given].sort((a, b) => a - b).join(",");
+  if (!sameMultiset) return { correct: false, correctAnswer: expectedOrder.join(", ") };
+  const isExpectedOrder = studentNums.every((n, i) => n === expectedOrder[i]);
+  return { correct: isExpectedOrder, correctAnswer: isExpectedOrder ? "" : expectedOrder.join(", ") };
+}
+
+// 4x4 Sudoku/Latin-square (rows AND columns each contain 1-4 exactly
+// once) -- real 4x4 grid puzzles found in a sampled workbook
+// (`1789314979267-...pdf`, "Do it yourself: Complete the following
+// Sudokus"). `givenGrid` is the 16 printed cells (null for a blank),
+// `studentGrid` is the same shape with the student's filled values.
+// Standard Latin-square puzzles of this size have a UNIQUE solution by
+// construction, so this checks the student's FULL grid directly against
+// the Latin-square constraints (not against a separately-solved answer)
+// -- any given (printed) cell that's been changed, any row/column
+// repeat, or any cell outside 1-4 is incorrect; an incomplete grid
+// (blank cells left blank) is null/needs_review, never guessed.
+function verifySudoku4x4(givenGrid, studentGrid) {
+  if (!Array.isArray(givenGrid) || givenGrid.length !== 16 || !Array.isArray(studentGrid) || studentGrid.length !== 16) {
+    return { correct: null, correctAnswer: "" };
+  }
+  if (studentGrid.some((v) => v === null || v === undefined || v === "")) return { correct: null, correctAnswer: "" };
+  const grid = studentGrid.map((v) => parseInt(v, 10));
+  if (grid.some((v) => Number.isNaN(v) || v < 1 || v > 4)) return { correct: false, correctAnswer: "" };
+  for (let i = 0; i < 16; i++) {
+    const given = givenGrid[i];
+    if (given !== null && given !== undefined && given !== "" && parseInt(given, 10) !== grid[i]) return { correct: false, correctAnswer: "" };
+  }
+  for (let r = 0; r < 4; r++) {
+    const row = [0, 1, 2, 3].map((c) => grid[r * 4 + c]);
+    if (new Set(row).size !== 4) return { correct: false, correctAnswer: "" };
+  }
+  for (let c = 0; c < 4; c++) {
+    const col = [0, 1, 2, 3].map((r) => grid[r * 4 + c]);
+    if (new Set(col).size !== 4) return { correct: false, correctAnswer: "" };
+  }
+  return { correct: true, correctAnswer: "" };
+}
+
+// Chinese 選詞填充 / 填反義詞 -- "select the word/its antonym FROM THE
+// PASSAGE" (real photos: batch1/p3_chinese_fill_blank_and_match.jpg,
+// backfill/batch1_missing_chinese_word_antonym.jpg -- both instruct
+// "從課文裏選出...，寫在＿＿上", i.e. the correct word is literally
+// present somewhere in a SOURCE PASSAGE, whether it's the exact word
+// (選詞填充) or its antonym (填反義詞 -- the antonym itself is also
+// drawn from the passage per the real instruction text, not from a
+// dictionary). `passageText` is the OCR'd text of that source passage
+// -- ⚠️ a real, separate pipeline gap (not solved here): the source
+// passage is often on a DIFFERENT physical page than the fill-in
+// sentences, so this function can only run when that page was actually
+// captured; when passageText isn't available, the caller should not
+// call this at all (falls through to the existing null/needs_review
+// default).
+//
+// ⚠️ IMPORTANT SCOPE CORRECTION (caught by the user 2026-09-22): "the
+// word appears somewhere in the passage" can ONLY ever safely REJECT an
+// answer, never CONFIRM one. A word genuinely from the passage/word-bank
+// could still be the student's answer to the WRONG blank (e.g. two
+// blanks' correct words swapped) -- finding it present doesn't prove
+// THIS blank is where it belongs, since "does it exist in the source"
+// says nothing about position. So this function returns `false` only
+// when the answer is NOT in the passage at all (a certain, safe catch --
+// a fabricated/wrong word), and `null` in EVERY case where the word IS
+// found (regardless of how many times) -- it must never return `true`.
+// Confirming correctness for this type genuinely needs to know which
+// specific blank each word belongs to, which is out of scope here.
+function verifySelectFromPassage(studentAnswer, passageText) {
+  const answer = String(studentAnswer || "").trim();
+  const passage = String(passageText || "");
+  if (!answer || !passage) return { correct: null, correctAnswer: "" };
+  const occurrences = passage.split(answer).length - 1;
+  if (occurrences === 0) return { correct: false, correctAnswer: "" };
+  return { correct: null, correctAnswer: "", inPassage: true };
+}
+
+// English "fill with is/am/are/has/have" and "fill with its/it's" --
+// real sentences from `61ecd818-SFA-P1-ENG-1920-QUIZ.pdf` sections C
+// ("I 1.___ a good friend."->am, "He 3.___ big eyes."->has, "His sister
+// 5.___ lovely."->is, "They 7.___ a dog."->have) and E ("1.___
+// beautiful."->It's, "2.___ beak is orange."->Its). Subject pronoun ->
+// be-verb and possessive-vs-contraction are closed, well-defined rules
+// (not passage lookup) -- this implements ONLY the small, real,
+// evidenced rule set, not a general grammar engine: 1st person -> am,
+// 2nd/3rd-plural (you/we/they) -> are, 3rd-singular (he/she/it/a
+// name/"His sister"-style noun phrase) -> is/has ambiguous by pronoun
+// alone (needs the sentence's own verb slot -- see below), and
+// its/it's decided by what follows the blank (a noun immediately after
+// -> possessive "its"; anything else, including an adjective/verb ->
+// contraction "it's", matching both real E examples). Anything outside
+// this small evidenced pattern set returns null, never a guess.
+function verifyGrammarCloze(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+
+  // is/am/are/has/have: subject immediately before the blank decides it.
+  // Checked FIRST (more specific/safer) -- only falls through to the
+  // its/it's rule below when no recognized subject pronoun precedes the
+  // blank at all.
+  const subjMatch = printed.match(/\b(I|He|She|They|We|You|His\s+sister|Her\s+brother)\s+_{2,}/i);
+  if (subjMatch) {
+    const subj = subjMatch[1].toLowerCase();
+    const norm = answer.toLowerCase().replace(/[.\s]/g, "");
+    let expectedSet;
+    if (subj === "i") expectedSet = ["am"];
+    else if (subj === "they" || subj === "we" || subj === "you") expectedSet = ["are", "have"];
+    else expectedSet = ["is", "has"]; // he/she/his sister/her brother -- ambiguous between is/has without the rest of the sentence
+    if (expectedSet.length === 1) {
+      return { correct: norm === expectedSet[0], correctAnswer: norm === expectedSet[0] ? "" : expectedSet[0] };
+    }
+    // Genuinely ambiguous from the subject alone (he/she could need "is"
+    // or "has" depending on what follows) -- only accept if the answer
+    // is ONE of the plausible set; can't assert which one is "the"
+    // correct one without more of the sentence, so never claims false
+    // here, only a possible true or null.
+    if (expectedSet.includes(norm)) return { correct: true, correctAnswer: "" };
+    return { correct: null, correctAnswer: "" };
+  }
+
+  // its/it's: no subject pronoun matched above, so try this rule --
+  // decided by whether the word immediately after the blank is one of
+  // the real adjective/verb forms evidenced in section E ("it's
+  // beautiful"/"it's rolling ITS ball") vs. anything else, which is a
+  // noun ("its beak"/"its tongue") per the same real examples.
+  const itsMatch = printed.match(/_{2,}\s*([a-zA-Z']+)/);
+  if (itsMatch) {
+    const nextWord = itsMatch[1].toLowerCase();
+    const ADJECTIVES_VERBS = ["beautiful", "strong", "curved", "large", "red", "yellow"];
+    const expected = ADJECTIVES_VERBS.includes(nextWord) ? "it's" : "its";
+    const norm = answer.toLowerCase().replace(/[.\s]/g, "");
+    return { correct: norm === expected, correctAnswer: norm === expected ? "" : expected };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
+// Picture-match short answer from a small closed set of exact template
+// phrasings (real example: `backfill/batch3_missing_english_modals.jpg`
+// -- "Can you play football?" answered "Yes, I can." / "Can you play
+// table tennis?" answered "No, I can't."). This is a FORMAT check only,
+// same "MC-format validity" pattern as the parity/computation MC
+// functions above: it confirms the answer is one of the template's
+// accepted exact phrasings (tolerant of case/punctuation), it does NOT
+// determine which of the two is correct for a given item -- that
+// depends on a printed check/cross icon next to a picture, which is a
+// real Tier-V (must-look-at-the-photo) fact this function has no access
+// to and must not guess.
+function verifyPictureMatchFormat(studentAnswer, acceptedPhrasings) {
+  const answer = String(studentAnswer || "").trim().toLowerCase().replace(/[.\s]/g, "");
+  const accepted = (acceptedPhrasings || ["yes,ican", "no,ican't", "no,icant"]).map((p) => p.toLowerCase().replace(/[.\s]/g, ""));
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const isValidFormat = accepted.some((p) => p === answer);
+  // A format match doesn't prove correctness (that needs the icon); a
+  // format MISmatch is a certain, free catch -- same asymmetry as the
+  // pre-check patterns already logged in question-type-library.md.
+  return isValidFormat ? { correct: null, correctAnswer: "", formatOk: true } : { correct: false, correctAnswer: "", formatOk: false };
+}
+
+// Word-bank fill where each phrase is printed as usable "ONCE only"
+// (real example: SFA quiz section D -- "a cup of/a bar of/a bowl of/a
+// piece of/a basket of/a packet of", 4 blanks from a 6-phrase bank).
+// Checks ONLY the real code-checkable constraint: does the student's
+// full set of answers contain any phrase used more than once, or any
+// phrase not actually in the printed bank? This does NOT determine
+// which phrase belongs in which specific blank (that needs
+// understanding the surrounding sentence, out of scope here) -- a
+// pass here is a necessary-but-not-sufficient signal, never asserted as
+// "these are definitely the correct answers".
+function verifyWordBankOnceEach(bankPhrases, studentAnswers) {
+  const bank = (bankPhrases || []).map((p) => String(p).trim().toLowerCase());
+  const answers = (studentAnswers || []).map((a) => String(a).trim().toLowerCase());
+  if (!bank.length || !answers.length) return { correct: null, correctAnswer: "" };
+  const notInBank = answers.filter((a) => !bank.includes(a));
+  if (notInBank.length) return { correct: false, correctAnswer: "", reason: "not_in_bank" };
+  const counts = {};
+  for (const a of answers) counts[a] = (counts[a] || 0) + 1;
+  const reused = Object.entries(counts).filter(([, n]) => n > 1);
+  if (reused.length) return { correct: false, correctAnswer: "", reason: "reused_phrase" };
+  // All answers are real bank phrases, each used at most once -- passes
+  // the ONLY code-checkable constraint; genuinely null on whether each
+  // is in the RIGHT blank (needs judgment, not claimed here).
+  return { correct: null, correctAnswer: "", formatOk: true };
+}
+
+// Reading-passage MCQ, literal-keyword-overlap subset only (real
+// example: SFA quiz section J, the "Fun in the Sun" poem -- Q4 "They
+// are packing (___)." / d. "sweets, buns and cakes" is a near-verbatim
+// match of the poem's own line "Sweets, buns and cakes"; Q5 "What is in
+// the mug?" / d. "A bug" matches "There's a bug / In my mug" -- both
+// catchable by literal text overlap. Contrast Q1-3, which need real
+// inference ("The rain has stopped" -> NOT rainy) and are correctly left
+// unclaimed by this function.). Only claims a verdict when EXACTLY ONE
+// option's text is a near-verbatim substring/overlap of the passage;
+// multiple or zero matching options stay null, never guessed.
+function verifyLiteralKeywordMC(passageText, options, studentAnswer) {
+  const passage = String(passageText || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!passage || !Array.isArray(options) || options.length < 2) return { correct: null, correctAnswer: "" };
+  let correctLetter = null, matchCount = 0;
+  for (const opt of options) {
+    const text = String(opt.text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (text.length >= 4 && passage.includes(text)) { correctLetter = opt.letter; matchCount++; }
+  }
+  if (matchCount !== 1) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim().toUpperCase();
+  return { correct: answer === correctLetter, correctAnswer: answer === correctLetter ? "" : correctLetter };
+}
+
+// "Finish the sentences with 'but' or 'and'" linking-word fill (real
+// example: benchmark/photos/batch3/p2_english_but_and_dialogue.jpg --
+// the worksheet's own instruction box states the rule explicitly: "but"
+// links DIFFERENT/opposite ideas, "and" links SIMILAR ideas. Confirmed
+// against all 8 real scored blanks on that page (items 1-5, some with
+// 2-3 sub-blanks each) -- every one matches a simple POLARITY rule:
+// detect whether each clause is affirmative or negative (a negation
+// marker: not/n't/don't/doesn't/can't/won't/isn't/aren't/didn't/
+// wasn't/weren't); if the two clauses share the same polarity -> "and",
+// if they differ -> "but". A short clause with no verb of its own (e.g.
+// "one sister", "badminton", "soya milk") has no pronoun or negation
+// marker either, so it inherits clause A's polarity -- matches all 3
+// real elliptical examples on the page (items 3, 4a, 5a). Anything
+// neither clause's polarity can be read from returns null, never a
+// guess.
+function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
+  const answer = String(studentAnswer || "").trim().toLowerCase();
+  if (answer !== "but" && answer !== "and") return { correct: null, correctAnswer: "" };
+  const a = String(clauseA || "");
+  const b = String(clauseB || "");
+  if (!a.trim()) return { correct: null, correctAnswer: "" };
+  const NEGATION = /\b(not|n't|don't|doesn't|can't|won't|isn't|aren't|didn't|wasn't|weren't)\b/i;
+  const polarityOf = (clause, fallbackPositive) => {
+    const c = String(clause || "").trim();
+    if (!c) return fallbackPositive;
+    const hasOwnClauseShape = /\b(i|he|she|they|we|you|it)\b/i.test(c) || NEGATION.test(c);
+    if (!hasOwnClauseShape) return fallbackPositive;
+    return !NEGATION.test(c);
+  };
+  const polA = polarityOf(a, true);
+  const polB = polarityOf(b, polA);
+  const expected = polA === polB ? "and" : "but";
+  return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
+}
+
+// Word problem: two numbers given in Chinese prose, asking for their
+// TOTAL/SUM (real example: `b245b3f1-QuizGo-...maths_test_2.pdf` p2
+// Q12 -- "昨天文具店賣出鉛筆34支，今天再賣出鉛筆22支，這兩天共賣去鉛筆
+// 多少支？" -> 34+22=56). Deliberately narrow: only fires when the
+// question text contains an explicit "total" keyword (共/總共/一共/合共)
+// AND exactly two numbers -- does NOT attempt comparison-shaped word
+// problems ("比...多", a different pattern, out of scope here) or
+// problems with more/fewer than 2 numbers, which this simple
+// number-extraction can't safely disambiguate.
+function verifyWordProblemTotal(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const expected = nums[0] + nums[1];
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Price-table lookup + compute -- TWO real, narrow shapes only (real
+// examples: `b245b3f1-QuizGo-...maths_test_2.pdf` p2, price table
+// {機械人:48, 跑車:89, 洋娃娃:25}): (1) "買X和Y各一個共需付()元" -- sum
+// of two named items' listed prices ("機械人"+"洋娃娃"=73); (2) "X比Y貴
+// ()元" -- absolute difference between two named items' prices
+// ("跑車"比"機械人"貴 = 89-48=41). Deliberately does NOT attempt
+// quantity-multiplied totals ("各4碟"/"5盆") or change-from-payment
+// ("付$500可找回") -- both real shapes also seen in the source PDFs
+// (`6d28da08-...q_p1-34.pdf` p20) but genuinely need reliable free-text
+// quantity/payment extraction this function doesn't attempt, rather
+// than guess at a shape it can't confirm.
+function verifyPriceTableLookup(priceTable, printedQuestion, studentAnswer) {
+  const table = priceTable || {};
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(table).filter((n) => printed.includes(n));
+  if (names.length !== 2) return { correct: null, correctAnswer: "" };
+  const [nameA, nameB] = names;
+  const priceA = Number(table[nameA]);
+  const priceB = Number(table[nameB]);
+  if (!Number.isFinite(priceA) || !Number.isFinite(priceB)) return { correct: null, correctAnswer: "" };
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  // "各N碟"/"各5盆" (N>1) is the quantity-multiplied shape this function
+  // deliberately declines -- checked BEFORE the sum trigger below, since
+  // "共須付"/"共需付" can appear in THAT shape's text too (real trap:
+  // "他們吃了小點和大點各4碟，共須付多少？" contains "共須付" but is NOT
+  // the simple one-each-sum case) and must not be misread as one.
+  if (/各[2-9]/.test(printed) || /各\d{2,}/.test(printed)) return { correct: null, correctAnswer: "" };
+  const isDifference = /比.{0,6}(貴|平|多|少)/.test(printed);
+  const isSum = /(各一|共需付|共付|共須付)/.test(printed);
+  if (isDifference && !isSum) {
+    const expected = Math.abs(priceA - priceB);
+    return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  }
+  if (isSum && !isDifference) {
+    const expected = priceA + priceB;
+    return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
+// Word problem: total ÷ quantity = per-unit amount (real example:
+// `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
+// 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
+// verifyWordProblemTotal: needs a "每...(售|得|獲|分得)" per-unit
+// keyword shape AND exactly two numbers. Explicitly DECLINES (stays
+// null) when "另外" ("and N others") appears near a number -- a real
+// trap found in the same source PDF (Q21: "老師把24張手工紙平均分給
+// 卓賢和另外3個同學" -- the true group size is 3+1=4 people, not the
+// literal "3" in the text; naively dividing 24÷3 would produce a
+// confidently WRONG answer of 8 instead of the real 24÷4=6). Rather
+// than attempt that adjustment (a different, riskier extraction
+// problem), this function recognizes the shape and refuses to guess.
+function verifyWordProblemDivision(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (/另外/.test(printed)) return { correct: null, correctAnswer: "" };
+  if (!/每[^，,。？?]{0,6}(售|得|獲|分得|需)/.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2 || nums[1] === 0) return { correct: null, correctAnswer: "" };
+  const expected = nums[0] / nums[1];
+  if (!Number.isInteger(expected)) return { correct: null, correctAnswer: "" };
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Word problem: two numbers given, asking for their DIFFERENCE (real
+// example: `p2_math_test_2023_2024.pdf` p1 Q19 -- "子健在第一場獲得
+// 180分，第二場獲得166分。他在兩場比賽的得分相差多少分？" -> |180-166|=
+// 14). Triggered narrowly by the "相差" keyword, mirroring
+// verifyWordProblemTotal's "共" trigger and verifyPriceTableLookup's
+// "比...貴/平/多/少" trigger for the same difference shape in a
+// price-table context -- this is the plain-word-problem version.
+function verifyWordProblemDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/相差/.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const expected = Math.abs(nums[0] - nums[1]);
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// =======================================================================
+// Question-type registry (2026-09-22) -- built specifically so a future
+// question type is added by inserting ONE new entry, never by editing an
+// existing entry or the dispatch loop itself (the "growing if/else chain"
+// this whole design exists to avoid). NOT wired into the live pipeline
+// yet -- `verifyAnswer`/`handleMark` below still call `detectSubject` +
+// `verifyMath` exactly as before, unchanged. `classifyAndVerify(item)` is
+// a fully tested, drop-in-ready alternative dispatcher; swapping it in is
+// intentionally left as a separate, later decision (see this file's
+// accompanying report) since it changes live request behaviour, not just
+// adding new code.
+//
+// ORDERING RULE -- load-bearing, do not reorder without understanding why:
+// entries are tried TOP TO BOTTOM, first match wins. MOST-SPECIFIC shapes
+// must sit ABOVE more-generic ones that could also technically match a
+// subset of the same input. Concretely, two real overlaps this ordering
+// exists to resolve:
+//   1. A multi-blank item ("4×□=24,24÷□=4,...") also contains a comma and
+//      blank tokens that the single-blank/plain-equation math path could
+//      otherwise misparse one sub-piece of -- `multi_blank_math` is listed
+//      before the generic `math_equation` fallback.
+//   2. A blank token EMBEDDED inside a number ("3□5=") is a different real
+//      shape from a blank token standing ALONE as a whole operand
+//      ("54÷?=6") -- `missing_digit_in_number` (embedded) is listed before
+//      the generic `math_equation` fallback (which internally substitutes
+//      a STANDALONE blank via `trySubstituteBlank`), so an embedded digit
+//      is never treated as a standalone operand.
+// `math_equation` (wrapping the existing `detectSubject`+`verifyMath`) is
+// deliberately LAST among the math entries: it's the broadest net (any
+// parseable arithmetic shape) and would otherwise swallow narrower shapes
+// it can technically parse but shouldn't be trusted to verify (e.g. it has
+// no concept of "which MC option" or "is this really a sort/sequence").
+//
+// Each `detect` is a small, side-effect-free STRUCTURAL check mirroring
+// the corresponding `verify*` function's own opening guard clauses (never
+// a full call-and-discard of the real computation) -- kept deliberately
+// separate so detection stays cheap and each function's tested behaviour
+// is reused unmodified, not reimplemented.
+//
+// Only the ~14 types whose real, evidenced shape fits the pipeline's
+// current per-item {printedQuestion, studentAnswer} OCR output are
+// registered here. `verifySudoku4x4`, `verifySelectFromPassage`,
+// `verifyPictureMatchFormat`, `verifyWordBankOnceEach`,
+// `verifyLiteralKeywordMC`, `verifyConjunctionFill`, and
+// `verifyPriceTableLookup` each need STRUCTURED data the OCR step doesn't
+// currently extract as separate fields (a grid, a source passage, an
+// accepted-phrasing list, a word bank, MC option objects, two separate
+// clauses, or a price table) -- wiring those in needs an OCR-prompt/
+// pipeline change first, not just a registry entry, and is deliberately
+// left out rather than forced with guessed/absent data.
+const QUESTION_TYPE_HANDLERS = [
+  {
+    name: "multi_blank_math",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const parts = printed.split(",").map((s) => s.trim()).filter(Boolean);
+      if (parts.length < 2) return false;
+      const blankCount = BLANK_TOKENS.reduce((n, t) => n + (printed.split(t).length - 1), 0);
+      return blankCount >= 2;
+    },
+    verify: (item) => verifyMultiBlankMath(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "missing_digit_in_number",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      let token = null, count = 0;
+      for (const t of BLANK_TOKENS) {
+        const n = printed.split(t).length - 1;
+        if (n > 0) { count += n; if (!token) token = t; }
+      }
+      if (count !== 1) return false;
+      const idx = printed.indexOf(token);
+      return /\d/.test(printed[idx - 1] || "") || /\d/.test(printed[idx + token.length] || "");
+    },
+    verify: (item) => verifyMissingDigitInNumber(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // 2026-09-22, real example p1-p6.com P3 maths Q15. Generalizes the
+    // entry above to 2-4 blanks -- see verifyMissingDigitsInEquation's own
+    // comment for why this is a separate function/entry rather than an
+    // edit to missing_digit_in_number above (which a real future PR
+    // could retire in favour of this one, since this handles its N=1
+    // case too -- not done here, left as an explicit human decision).
+    name: "missing_digits_in_equation",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const positions = [];
+      for (let i = 0; i < printed.length; i++) {
+        if (BLANK_TOKENS.includes(printed[i])) positions.push(i);
+      }
+      if (positions.length < 2 || positions.length > 4) return false;
+      if (!printed.includes("=")) return false;
+      return positions.some((i) => /\d/.test(printed[i - 1] || "") || /\d/.test(printed[i + 1] || ""));
+    },
+    verify: (item) => verifyMissingDigitsInEquation(item.printedQuestion, item.studentAnswer),
+  },
+  // NOTE: verifyMultiBoxDigitAnswer (below/exported) is deliberately NOT
+  // registered as a handler here. Its detect() can only key off "a clean
+  // expression ending in bare `=`" + "a pure-digit answer" -- indistinguishable
+  // from plain math_equation without real OCR evidence of how a boxed-digit
+  // answer actually comes back (unlike every other entry in this registry,
+  // each keyed off a confirmed real signal). Tested directly (see
+  // test/new-question-types.test.js) and ready to register once that
+  // evidence exists -- registering it now would silently steal real
+  // math_equation items instead of adding real new coverage.
+  //
+  // 2026-09-23 CONFIRMED (not just theorized): temporarily registering it
+  // ahead of math_equation, with the narrowest plausible detect() ("=" at
+  // the end of the printed expression with nothing after it, plus a
+  // pure-digit student answer), broke exactly the 3 tests this ticket
+  // named -- because this codebase's own real math_equation examples
+  // ("10+4=" -> "14", "328-214=" -> "114") have EXACTLY that shape. A
+  // plain single-blank sum and a "digit written across separate OCR
+  // boxes" sum produce the identical (expression, digit-string) pair once
+  // OCR'd to text -- there is no code-only fix here, because there is no
+  // information-theoretic difference to key off. verifyMultiBoxDigitAnswer
+  // itself already discards the one signal that COULD have distinguished
+  // them (it strips spaces/commas from the student answer before
+  // checking, so even "1 2 6 8" boxed-style OCR output collapses to the
+  // same shape as bare "1268"). Registering this handler requires a real
+  // decision from the user: either (a) real OCR evidence that boxed
+  // answers come back in a literally different text shape than plain
+  // answers (e.g. the printed question itself contains box glyphs like
+  // "634x2=____" that verifyMultiBoxDigitAnswer would need to be taught to
+  // require), or (b) accepting that this question type is simply not
+  // distinguishable from plain math_equation and should be dropped/merged
+  // rather than kept as a separate unregistered function.
+  {
+    name: "sequence_fill",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const parts = printed.split(/[,，]/).map((s) => s.trim());
+      if (parts.length < 3) return false;
+      const tokenIdx = parts.findIndex((p) => BLANK_TOKENS.some((t) => p.includes(t)) || /^_+$/.test(p));
+      if (tokenIdx === -1) return false;
+      // Distinguishes from multi_blank_math: every non-blank part must be a
+      // BARE number, no operator characters -- a sequence is a plain list
+      // ("1,3,5,__,9"), not a list of equations ("4×□=24,24÷□=4").
+      return parts.every((p, i) => i === tokenIdx || /^-?\d+(\.\d+)?$/.test(p));
+    },
+    verify: (item) => verifySequenceFill(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "sort_numbers",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const wantAsc = /由小到大|ascending|smallest to largest/i.test(printed);
+      const wantDesc = /由大到小|descending|largest to smallest/i.test(printed);
+      if (wantAsc === wantDesc) return false;
+      return (printed.match(/-?\d+(\.\d+)?/g) || []).length >= 2;
+    },
+    verify: (item) => verifySortNumbers(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "comparison_symbol",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const answer = String(item.studentAnswer || "").trim();
+      const nums = printed.match(/-?\d+(\.\d+)?/g);
+      return !!nums && nums.length === 2 && (answer === ">" || answer === "<");
+    },
+    verify: (item) => verifyComparisonSymbol(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "parity_mc",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const wantEven = /\beven\b|偶數/i.test(printed);
+      const wantOdd = /\bodd\b|奇數/i.test(printed);
+      if (wantEven === wantOdd) return false;
+      return [...printed.matchAll(/([A-D])[.．]\s*([\d,\s]+?)(?=\s*[A-D][.．]|$)/g)].length >= 2;
+    },
+    verify: (item) => verifyParityMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "computation_mc",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const hasTarget = /[「"']([^」"']+)[」"']/.test(printed) || /(?:decomposition of|分解)\s*\d+/i.test(printed);
+      if (!hasTarget) return false;
+      return [...printed.matchAll(/([A-D])[.．]\s*([^A-D]+?)(?=\s*[A-D][.．]|$)/g)].length >= 2;
+    },
+    verify: (item) => verifyComputationMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "number_word_conversion",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "").trim();
+      const answer = String(item.studentAnswer || "").trim();
+      if (!printed || !answer) return false;
+      const quoted = /'([a-zA-Z\s-]+)'|"([a-zA-Z\s-]+)"|「([一二三四五六七八九十零]+)」/.test(printed);
+      if (quoted) return true;
+      // 2026-09-23 (challenge-all review finding): a bare small digit in the
+      // printed question plus ANY letter/CN-numeral character in the answer
+      // used to be enough to steal ANY word-problem item away from its real
+      // handler below (word_problem_total/difference/division) whenever OCR
+      // returned an answer with a stray unit suffix or a Chinese-numeral
+      // character -- a confident-wrong exposure, not just a missed match,
+      // since verifyNumberWordConversion would then compute a target from
+      // the WRONG number in the sentence. Word-problem trigger keywords are
+      // a much stronger, more specific signal than "any letter in the
+      // answer" -- when one is present, this is almost certainly NOT a bare
+      // number<->word conversion item, so this fallback (non-quoted) branch
+      // stays out of the way and lets the real word-problem handlers below
+      // it in the registry have first claim.
+      if (/(共|總共|一共|合共|相差|每[^，,。？?]{0,6}(售|得|獲|分得|需))/.test(printed)) return false;
+      const hasSmallDigit = /\b\d{1,2}\b/.test(printed);
+      const isWordAnswer = /[a-zA-Z]/.test(answer) || /[一二三四五六七八九十零]/.test(answer);
+      return hasSmallDigit && isWordAnswer;
+    },
+    verify: (item) => verifyNumberWordConversion(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "word_problem_total",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/(共|總共|一共|合共)/.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyWordProblemTotal(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "word_problem_difference",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/相差/.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyWordProblemDifference(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "word_problem_division",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (/另外/.test(printed)) return false;
+      if (!/每[^，,。？?]{0,6}(售|得|獲|分得|需)/.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyWordProblemDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "grammar_cloze",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!String(item.studentAnswer || "").trim()) return false;
+      if (/\b(I|He|She|They|We|You|His\s+sister|Her\s+brother)\s+_{2,}/i.test(printed)) return true;
+      return /_{2,}\s*[a-zA-Z']+/.test(printed);
+    },
+    verify: (item) => verifyGrammarCloze(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "math_equation",
+    detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
+    verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
+  },
+];
+
+// THE LIVE DISPATCHER as of 2026-09-22 -- wired into `handleMark` on
+// explicit user instruction ("全部判斷邏輯都要駁去真正用緊嗰一條路"),
+// replacing the `verifyAnswer`/`verifyMath`-only path below. Same
+// input/output shape (`{correct, correctAnswer, subject?}` plus which
+// handler matched, useful for logging/debugging). Walks
+// `QUESTION_TYPE_HANDLERS` in order (most-specific first, `math_equation`
+// last as the general fallback -- same behaviour `verifyMath` alone gave
+// for plain arithmetic, so existing correct items are unaffected), falls
+// through to `correct: null` (needs human review) when nothing matches --
+// never an AI judgment call. `verifyMultiBoxDigitAnswer` remains
+// deliberately unregistered (see the registry's own comment above).
+function classifyAndVerify(item) {
+  if (item.parseFailed) return { correct: null, correctAnswer: "", subject: "uncertain", handler: null };
+  for (const handler of QUESTION_TYPE_HANDLERS) {
+    if (handler.detect(item)) {
+      const result = handler.verify(item);
+      const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion"].includes(handler.name)
+        ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
+      return { ...result, subject, handler: handler.name };
+    }
+  }
+  return { correct: null, correctAnswer: "", subject: detectSubject(item.printedQuestion, item.studentAnswer), handler: null };
+}
+
+// Superseded by `classifyAndVerify` above as of 2026-09-22 -- no longer
+// called from `handleMark`. Kept (not deleted) because it's still
+// exercised directly by existing tests asserting `verifyMath`-only
+// behaviour, and as a minimal reference implementation. "chinese"/
+// "english"/"uncertain" still have no reference-answer or rules/AI-
+// checking lane; `classifyAndVerify` inherits the same honest null
+// (needs review) behaviour for those via `detectSubject`.
 function verifyAnswer(item) {
   // parseOcrLine flagged this item's answer as too long to trust (a likely
   // sign several items' content got merged) -- never let it reach a
@@ -2084,7 +3207,7 @@ async function handleMark(request, env) {
   // Module 2: subject-aware verification (deterministic, no I/O) -- one
   // failed page contributes an empty verdict list, nothing more.
   const tVerify = Date.now();
-  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => verifyAnswer(item))));
+  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => classifyAndVerify(item))));
   const verifyMs = Date.now() - tVerify;
 
   // Module 3: bbox, scoped to each item's OWN page's Vision words only --
@@ -2111,6 +3234,21 @@ async function handleMark(request, env) {
     pr.items.forEach((item, i) => {
       const verdict = verdictsByPage[pageIdx][i];
       const match = matchesByPage[pageIdx][i];
+      // Coverage-expansion feed (2026-09-22): every needs_review item logs its
+      // PRINTED question only -- never studentAnswer, never image data -- so a
+      // later batch review can catalog real unresolved question shapes without
+      // touching any child's personal work. Deliberately logs ALL needs_review
+      // items (not just non-math), since an unresolved math shape (e.g. a
+      // multi-blank item) is just as much a "new type to cover" as a
+      // chinese/english item with no verifier at all.
+      if (verdict.correct === null) {
+        console.log(JSON.stringify({
+          event: "mark_unresolved_question",
+          subject: verdict.subject,
+          printedQuestion: item.printedQuestion || item.label || "",
+          parseFailed: !!item.parseFailed,
+        }));
+      }
       results.push({
         question: item.label,
         studentAnswer: item.studentAnswer,
@@ -2230,6 +3368,17 @@ async function handleTelegramWebhook(request, env) {
     const filePath = await telegramGetFile(botToken, fileId);
     const photoBytes = await telegramDownloadFile(botToken, filePath, MAX_TELEGRAM_PHOTO_BYTES);
 
+    // Marking itself takes ~2-7s (OCR + AI + verification) with nothing
+    // sent back to the chat until the final photo -- long enough that a
+    // parent may wonder if the bot received the photo at all. Best-effort:
+    // a failure here must never abort marking itself, since the real
+    // result (or GENERIC_ERROR) still follows either way.
+    try {
+      await telegramSendMessage(botToken, chatId, "改緊功課，請稍等...");
+    } catch (e) {
+      console.log(JSON.stringify({ event: "telegram_progress_message_failed", error: String(e && e.message || e) }));
+    }
+
     const tMark = Date.now();
     const markRequest = new Request("https://internal.invalid/api/mark", {
       method: "POST",
@@ -2257,17 +3406,12 @@ async function handleTelegramWebhook(request, env) {
 
     const tSend = Date.now();
     // "Checked" means only "this photo was processed", NOT "every answer
-    // is correct" or "nothing needs review" -- it is not a correctness
-    // verdict and must not be read as one. v1's annotation has a real gap
-    // behind this caption: needs_review (correct === null) items get NO
-    // visual marker at all right now (see iconKindFor in annotate.js --
-    // no "?" asset exists yet, and the instruction was explicit not to
-    // reuse the cross for it), so an all-correct-looking marked-up photo
-    // may actually contain unreviewed items the parent can't see flagged.
-    // Revisit this caption (or add a "?" asset + marker) before this ever
-    // reaches real users -- kept as "Checked" for now only because this
-    // is still an internal MVP, not a decision that it's the right
-    // wording for production.
+    // is correct" -- it is not a correctness verdict and must not be read
+    // as one. needs_review (correct === null) items now get their own "?"
+    // mark (annotateImage's "review" icon kind, drawn via Photon's
+    // draw_text_with_color -- see annotate.js) distinct from the cross, so
+    // an all-correct-looking marked-up photo no longer hides unreviewed
+    // items from the parent.
     await telegramSendPhoto(botToken, chatId, annotated.data, annotated.mediaType, "Checked");
     const sendPhotoMs = Date.now() - tSend;
 
@@ -2425,3 +3569,38 @@ function json(obj, status) {
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
+
+// Named exports for the new (2026-09-22, not-yet-wired) question-type
+// verifiers above -- test-only surface, does not change the module's
+// default export or any existing behavior.
+export {
+  evalArithmetic,
+  parseNumericAnswer,
+  verifyMath,
+  parseChineseNumberWord,
+  numberToChineseWord,
+  parseEnglishNumberWord,
+  numberToEnglishWord,
+  verifyNumberWordConversion,
+  verifyComparisonSymbol,
+  verifyParityMC,
+  verifyComputationMC,
+  verifyMultiBlankMath,
+  verifyMissingDigitInNumber,
+  verifyMissingDigitsInEquation,
+  verifyMultiBoxDigitAnswer,
+  verifySequenceFill,
+  verifySortNumbers,
+  verifySudoku4x4,
+  verifySelectFromPassage,
+  verifyGrammarCloze,
+  verifyPictureMatchFormat,
+  verifyWordBankOnceEach,
+  verifyLiteralKeywordMC,
+  verifyConjunctionFill,
+  verifyWordProblemTotal,
+  verifyPriceTableLookup,
+  verifyWordProblemDivision,
+  verifyWordProblemDifference,
+  classifyAndVerify,
+};

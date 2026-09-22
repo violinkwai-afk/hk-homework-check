@@ -272,6 +272,60 @@ test("bare numeric answer against a clean printed expression: verified correct/w
   assert.equal(byLabel["9"].correctAnswer, "14");
 });
 
+test("2026-09-22: previously-unreachable verifiers (comparison_symbol, number_word_conversion, missing_digits_in_equation) are now actually reachable through the REAL /api/mark path, not just callable in isolation -- classifyAndVerify is now the live dispatcher (user instruction: 全部判斷邏輯都要駁去真正用緊嗰一條路)", async () => {
+  const items = [
+    { label: "1", printed: "7 ___ 17", answer: ">" },        // WRONG (7 < 17) -- comparison_symbol
+    { label: "2", printed: "3 ___ 1", answer: ">" },          // correct -- comparison_symbol
+    { label: "3", printed: "The number 'twenty-six' is", answer: "26" }, // number_word_conversion
+    { label: "4", printed: "2□9+32=□9□", answer: "2" },       // ambiguous shape for this harness (two blanks, one filled) -- exercised mainly to confirm the handler is REACHED, not necessarily solvable from a single-digit answer string
+    { label: "5", printed: "328-214=", answer: "114" },       // plain arithmetic -- must still verify exactly as before (no regression)
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+
+  assert.equal(byLabel["1"].correct, false, "comparison_symbol handler must be reached and correctly reject 7>17");
+  assert.equal(byLabel["2"].correct, true, "comparison_symbol handler must be reached and accept 3>1");
+  assert.equal(byLabel["3"].correct, true, "number_word_conversion handler must be reached: 'twenty-six' <-> 26");
+  // 2026-09-23 (challenge-all review finding): item 4 was in this test with
+  // NO assertion at all -- a regression in missing_digits_in_equation's
+  // dispatch (wrong handler picked, or a silent throw) would have passed
+  // silently. The public /api/mark response doesn't expose which handler
+  // fired (only `subject`), so this checks classifyAndVerify directly
+  // (exported for tests) instead of guessing a hand-solved expected value.
+  assert.equal(byLabel["5"].correct, true, "plain arithmetic must still verify correctly -- no regression from the dispatcher swap");
+});
+
+test("2026-09-23: item 4's shape ('2□9+32=□9□') is actually routed to missing_digits_in_equation, not silently swallowed by another handler", async () => {
+  const worker = await import(TMP);
+  const verdict = worker.classifyAndVerify({ printedQuestion: "2□9+32=□9□", studentAnswer: "2" });
+  assert.equal(verdict.handler, "missing_digits_in_equation");
+});
+
+test("SUBTRACTION regression (2026-09-22 real-paper find): '328-214=' with correct answer 114 verifies TRUE, not null", async () => {
+  // Before the fix, evalArithmetic's tokenizer greedily swallowed the "-"
+  // into the next number ("328","-214" -- 2 tokens) instead of splitting it
+  // out as the operator ("328","-","214" -- 3 tokens), so EVERY plain
+  // two-number subtraction silently returned null (needs_review) even when
+  // the student's answer was exactly correct. No prior test in this file
+  // happened to cover plain subtraction through this path (all existing
+  // arithmetic tests use addition or division) -- found only by running a
+  // real, un-cherry-picked exam paper through the real code.
+  const items = [
+    { label: "3", printed: "328-214=", answer: "114" },  // correct
+    { label: "4", printed: "927-594=", answer: "333" },  // correct
+    { label: "5", printed: "845-288=", answer: "999" },  // WRONG, must not be silently accepted either
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+  assert.equal(byLabel["3"].correct, true);
+  assert.equal(byLabel["3"].status, "ok");
+  assert.equal(byLabel["4"].correct, true);
+  assert.equal(byLabel["5"].correct, false);
+  assert.equal(byLabel["5"].correctAnswer, "557");
+});
+
 test("leading '=' echoed into the answer (2026-09-21 real failure) is stripped and verifies correctly", async () => {
   // Real failure: on a worksheet where the printed "=" sits right before
   // the answer box, OCR returned "=5" as the answer instead of "5" for
@@ -316,6 +370,42 @@ test("Chinese-subject item: always null/needs_review, never a fake reliable verd
   assert.equal(r.subject, "chinese");
   assert.equal(r.correct, null);
   assert.equal(r.status, "needs_review");
+});
+
+test("needs_review item logs mark_unresolved_question with the PRINTED question only, never the student's answer", async () => {
+  const items = [{ label: "7", printed: "男仔叫咩名？", answer: "阿明" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  try {
+    await callMark(images, { PAGE0: qwenLineFor(items) });
+  } finally {
+    console.log = originalLog;
+  }
+  const events = logs.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const unresolved = events.filter((e) => e.event === "mark_unresolved_question");
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0].subject, "chinese");
+  assert.equal(unresolved[0].printedQuestion, "男仔叫咩名？");
+  assert.ok(!("studentAnswer" in unresolved[0]), "must never log the student's own answer");
+  assert.ok(!JSON.stringify(unresolved[0]).includes("阿明"), "the student's answer text must not leak in anywhere");
+});
+
+test("a resolved (non-needs_review) item does NOT log mark_unresolved_question", async () => {
+  const items = [{ label: "1", printed: "4+6=", answer: "10" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  try {
+    const { json } = await callMark(images, { PAGE0: qwenLineFor(items) });
+    assert.equal(json.results[0].correct, true);
+  } finally {
+    console.log = originalLog;
+  }
+  const events = logs.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  assert.equal(events.filter((e) => e.event === "mark_unresolved_question").length, 0);
 });
 
 test("no bbox match: returns null, not {x:0,y:0,w:0,h:0}", async () => {
@@ -598,4 +688,131 @@ test("Tier 1 does not touch the original CANARY false-positive shape (no blank t
   const { json } = await callMark(images, { PAGE0: raw });
   const r = json.results[0];
   assert.equal(r.correct, true, "known limitation, unchanged by Tier 1 -- see the CANARY test for the full explanation");
+});
+
+test("GET /health returns ok:true with a version marker (no CF_VERSION_METADATA binding in this harness -- falls back to 'unknown', never throws)", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/health", { method: "GET" });
+  const res = await worker.default.fetch(req, {});
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.version, "object");
+  assert.equal(body.version.id, "unknown");
+  assert.equal(typeof body.time, "string");
+});
+
+test("GET /health reflects a real CF_VERSION_METADATA binding when present", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/health", { method: "GET" });
+  const res = await worker.default.fetch(req, {
+    CF_VERSION_METADATA: { id: "abc-123", tag: "v1", timestamp: "2026-09-23T00:00:00Z" },
+  });
+  const body = await res.json();
+  assert.equal(body.version.id, "abc-123");
+  assert.equal(body.version.tag, "v1");
+  assert.equal(body.version.timestamp, "2026-09-23T00:00:00Z");
+});
+
+test("POST /api/report-wrong logs a real report event, flags true->false as isAiWrongReport", async () => {
+  const worker = await import(TMP);
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  let res;
+  try {
+    const req = new Request("https://example.com/api/report-wrong", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        question: "3",
+        studentAnswer: "9",
+        correctAnswer: "8",
+        subject: "math",
+        previousCorrect: true,
+        newCorrect: false,
+      }),
+    });
+    res = await worker.default.fetch(req, {});
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  const events = logs.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const reports = events.filter((e) => e.event === "report_mark_disputed");
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].question, "3");
+  assert.equal(reports[0].isAiWrongReport, true, "true->false must be flagged as a real AI-wrong report");
+});
+
+test("POST /api/report-wrong: false->true (parent overriding to correct) is logged but NOT flagged as isAiWrongReport", async () => {
+  const worker = await import(TMP);
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  try {
+    const req = new Request("https://example.com/api/report-wrong", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: "5", previousCorrect: false, newCorrect: true }),
+    });
+    await worker.default.fetch(req, {});
+  } finally {
+    console.log = originalLog;
+  }
+  const events = logs.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const reports = events.filter((e) => e.event === "report_mark_disputed");
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].isAiWrongReport, false);
+});
+
+test("POST /api/report-wrong: missing question or newCorrect is a 400, not a silent 200", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/api/report-wrong", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ previousCorrect: true }),
+  });
+  const res = await worker.default.fetch(req, {});
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/report-wrong: malformed JSON body is a 400, not a thrown error", async () => {
+  const worker = await import(TMP);
+  const req = new Request("https://example.com/api/report-wrong", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "not json",
+  });
+  const res = await worker.default.fetch(req, {});
+  assert.equal(res.status, 400);
+});
+
+test("2026-09-23 (challenge-all review finding): a real word-problem item is NOT hijacked by number_word_conversion just because its OCR'd answer contains a stray unit character", async () => {
+  const worker = await import(TMP);
+  // Real shape from TICKETS.md's own example: "...這兩天共賣去鉛筆多少支？"
+  // -> 34+22=56. Printed text contains a bare 2-digit number ("22"), and
+  // the student's answer is given WITH a stray unit suffix ("支", as real
+  // OCR sometimes returns) -- before the fix, isWordAnswer's letter/CN-
+  // numeral check would still be false for "支" alone (not in CN_DIGIT_
+  // WORDS), so this specific case wouldn't have misfired; the fix instead
+  // guards on any of the word-problem trigger keywords being present, so
+  // this test asserts on the trigger-keyword condition itself, which is
+  // the actual thing that must route correctly regardless of which
+  // specific OCR noise pattern might otherwise cause isWordAnswer to fire.
+  const total = worker.classifyAndVerify({
+    printedQuestion: "昨天文具店賣出鉛筆34支，今天再賣出鉛筆22支，這兩天共賣去鉛筆多少支？",
+    studentAnswer: "56",
+  });
+  assert.equal(total.handler, "word_problem_total", "must route to the real word-problem handler, not number_word_conversion");
+  assert.equal(total.correct, true);
+
+  const difference = worker.classifyAndVerify({
+    printedQuestion: "子健在第一場獲得180分，第二場獲得166分。他在兩場比賽的得分相差多少分？",
+    studentAnswer: "14",
+  });
+  assert.equal(difference.handler, "word_problem_difference");
+  assert.equal(difference.correct, true);
 });
