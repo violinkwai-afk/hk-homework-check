@@ -1052,3 +1052,75 @@ test("classifyAndVerify: real multi-blank sequence routes to sequence_fill, not 
   assert.equal(verdict.handler, "sequence_fill");
   assert.equal(verdict.correct, true);
 });
+
+// --- verifyElapsedTimeForward (2026-09-23) -------------------------------
+
+test("elapsed time forward: real example, 10:32am to 1:32pm -> 3 hours", () => {
+  const r = mod.verifyElapsedTimeForward("手術由10:32am開始,到1:32pm完成,一共進行咗___小時。", "3");
+  assert.equal(r.correct, true);
+});
+
+test("elapsed time forward: wrong answer is caught", () => {
+  const r = mod.verifyElapsedTimeForward("手術由10:32am開始,到1:32pm完成,一共進行咗___小時。", "2");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "3");
+});
+
+test("elapsed time forward: no hours/小時 keyword stays null", () => {
+  const r = mod.verifyElapsedTimeForward("10:32am, 1:32pm", "3");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyReverseDivisorFromRemainder (2026-09-23) ----------------------
+
+test("reverse divisor from remainder: real example, 750÷※=16...14 -> 46", () => {
+  const r = mod.verifyReverseDivisorFromRemainder("如果750÷※=16…14,那麼※=?", "46");
+  assert.equal(r.correct, true);
+});
+
+test("reverse divisor from remainder: wrong answer is caught", () => {
+  const r = mod.verifyReverseDivisorFromRemainder("如果750÷※=16…14,那麼※=?", "47");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "46");
+});
+
+test("reverse divisor from remainder: remainder >= quotient (impossible) stays null", () => {
+  const r = mod.verifyReverseDivisorFromRemainder("如果100÷※=5…8,那麼※=?", "20");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyMultipleDifference (2026-09-23) -------------------------------
+
+test("multiple difference: real example, 17's 11th vs 17th multiple -> 102", () => {
+  const r = mod.verifyMultipleDifference("17嘅第十一個同第十七個倍數相差多少?", "102");
+  assert.equal(r.correct, true);
+});
+
+test("multiple difference: wrong answer is caught", () => {
+  const r = mod.verifyMultipleDifference("17嘅第十一個同第十七個倍數相差多少?", "100");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "102");
+});
+
+// --- verifyRoundToNearestHundred (2026-09-23) ----------------------------
+
+test("round to nearest hundred: real example, 1584 -> 1600", () => {
+  const r = mod.verifyRoundToNearestHundred("用四捨五入法把1584湊整至百位。", "1600");
+  assert.equal(r.correct, true);
+});
+
+test("round to nearest hundred: rounds down correctly, 1733 -> 1700", () => {
+  const r = mod.verifyRoundToNearestHundred("用四捨五入法把1733湊整至百位。", "1700");
+  assert.equal(r.correct, true);
+});
+
+test("round to nearest hundred: wrong answer is caught", () => {
+  const r = mod.verifyRoundToNearestHundred("用四捨五入法把1584湊整至百位。", "1500");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "1600");
+});
+
+test("round to nearest hundred: no 四捨五入/百位 keyword stays null", () => {
+  const r = mod.verifyRoundToNearestHundred("1584係咩數?", "1600");
+  assert.equal(r.correct, null);
+});

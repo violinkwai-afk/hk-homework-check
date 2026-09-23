@@ -3088,6 +3088,103 @@ function verifyCountPrimesBelow(printedQuestion, studentAnswer) {
   return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
 }
 
+// Elapsed time (forward): two 12h clock times, "start to end", duration in
+// hours (real example, 2026-09-23 PDF reading: "10:32am to 1:32pm, surgery
+// lasts ___ hours" -> 3). Narrowly triggered on exactly two "H:MM am/pm"
+// tokens plus an hours/小時 keyword nearby.
+function parseTime12h(str) {
+  const m = /(\d{1,2}):(\d{2})\s*([ap])\.?m\.?/i.exec(str);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h < 1 || h > 12 || min < 0 || min > 59) return null;
+  const isPM = m[3].toLowerCase() === "p";
+  if (h === 12) h = 0;
+  if (isPM) h += 12;
+  return h * 60 + min;
+}
+
+function verifyElapsedTimeForward(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/(hours?|小時)/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const times = printed.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi);
+  if (!times || times.length !== 2) return { correct: null, correctAnswer: "" };
+  const t1 = parseTime12h(times[0]);
+  const t2 = parseTime12h(times[1]);
+  if (t1 === null || t2 === null) return { correct: null, correctAnswer: "" };
+  let diffMin = t2 - t1;
+  if (diffMin < 0) diffMin += 24 * 60;
+  const expected = diffMin / 60;
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const closeEnough = Math.abs(studentNum - expected) < 1e-9;
+  const expectedStr = Number.isInteger(expected) ? String(expected) : String(expected);
+  return { correct: closeEnough, correctAnswer: closeEnough ? "" : expectedStr };
+}
+
+// Reverse-solve the divisor from a quotient+remainder equation (real
+// example, 2026-09-23 PDF reading: "如果750÷※=16…14,那麼※=?" -> (750-14)/16=46).
+// The unknown-divisor placeholder varies by paper (?, □, ※ all seen) --
+// matched directly rather than via BLANK_TOKENS since this is a narrow,
+// self-contained equation shape, not a general blank-substitution case.
+function verifyReverseDivisorFromRemainder(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*[÷\/]\s*[?□※]\s*=\s*(\d+)\s*[…\.]{1,3}\s*(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const dividend = Number(m[1]);
+  const quotient = Number(m[2]);
+  const remainder = Number(m[3]);
+  if (!quotient || remainder >= quotient) return { correct: null, correctAnswer: "" };
+  const numerator = dividend - remainder;
+  if (numerator <= 0 || numerator % quotient !== 0) return { correct: null, correctAnswer: "" };
+  const expected = numerator / quotient;
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Difference between the Nth and Mth multiples of a given number (real
+// example, 2026-09-23 PDF reading: "17嘅第十一個同第十七個倍數相差多少?"
+// -> 17×(17-11)=102). Chinese ordinal words parsed via the existing
+// parseChineseNumberWord (already scoped 0-99, matches real evidence).
+function verifyMultipleDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)嘅第([一二三四五六七八九十]+)個同第([一二三四五六七八九十]+)個倍數相差/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1]);
+  const a = parseChineseNumberWord(m[2]);
+  const b = parseChineseNumberWord(m[3]);
+  if (a === null || b === null) return { correct: null, correctAnswer: "" };
+  const expected = Math.abs(n * (b - a));
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Round a single printed number to the nearest hundred (real example,
+// 2026-09-23 PDF reading: "用四捨五入法把銷量湊整至百位" table, e.g.
+// 1584->1600). Narrowly triggered on both the method keyword (四捨五入)
+// and the target place-value keyword (百位) together with exactly one
+// number, to avoid misfiring on an unrelated rounding-adjacent sentence.
+function verifyRoundToNearestHundred(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/四捨五入/.test(printed) || !/百位/.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 1) return { correct: null, correctAnswer: "" };
+  const expected = Math.round(nums[0] / 100) * 100;
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // =======================================================================
 // Question-type registry (2026-09-22) -- built specifically so a future
 // question type is added by inserting ONE new entry, never by editing an
@@ -3397,6 +3494,34 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyCountPrimesBelow(item.printedQuestion, item.studentAnswer),
   },
   {
+    name: "elapsed_time_forward",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/(hours?|小時)/i.test(printed)) return false;
+      return (printed.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi) || []).length === 2;
+    },
+    verify: (item) => verifyElapsedTimeForward(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "reverse_divisor_from_remainder",
+    detect: (item) => /\d+\s*[÷\/]\s*[?□※]\s*=\s*\d+\s*[…\.]{1,3}\s*\d+/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyReverseDivisorFromRemainder(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "multiple_difference",
+    detect: (item) => /\d+嘅第[一二三四五六七八九十]+個同第[一二三四五六七八九十]+個倍數相差/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyMultipleDifference(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "round_to_nearest_hundred",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/四捨五入/.test(printed) || !/百位/.test(printed)) return false;
+      return (printed.match(/\d+/g) || []).length === 1;
+    },
+    verify: (item) => verifyRoundToNearestHundred(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "grammar_cloze",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -3430,7 +3555,7 @@ function classifyAndVerify(item) {
     if (handler.detect(item)) {
       const result = handler.verify(item);
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
-        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below"].includes(handler.name)
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
       return { ...result, subject, handler: handler.name };
     }
@@ -4050,5 +4175,9 @@ export {
   verifySelectTwoNumbersSumTarget,
   verifyListFactors,
   verifyCountPrimesBelow,
+  verifyElapsedTimeForward,
+  verifyReverseDivisorFromRemainder,
+  verifyMultipleDifference,
+  verifyRoundToNearestHundred,
   classifyAndVerify,
 };
