@@ -1014,3 +1014,41 @@ test("count primes below: no matching phrase stays null", () => {
   const r = mod.verifyCountPrimesBelow("100以內有幾多個雙數？", "50");
   assert.equal(r.correct, null);
 });
+
+// --- verifySequenceFill: multiple blanks in one item (2026-09-23) ------
+// Real production evidence: a real user's bot photo of "Count in 2s.
+// Fill in the gaps" (2,[4],6,[8],10,[12],[14],16,[18],20) came back from
+// OCR as ONE item with studentAnswer "4;8;12;14;18" -- 5 blanks joined
+// by semicolons, not 5 separate items.
+
+test("sequence fill: real multi-blank example, all correct", () => {
+  const r = mod.verifySequenceFill("2,?,6,?,10,?,?,16,?,20", "4;8;12;14;18");
+  assert.equal(r.correct, true);
+});
+
+test("sequence fill: real multi-blank example, one wrong value is caught with the full expected list", () => {
+  const r = mod.verifySequenceFill("2,?,6,?,10,?,?,16,?,20", "4;8;12;15;18");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "4, 8, 12, 14, 18");
+});
+
+test("sequence fill: multi-blank, comma-joined student answer also works", () => {
+  const r = mod.verifySequenceFill("2,?,6,?,10,?,?,16,?,20", "4,8,12,14,18");
+  assert.equal(r.correct, true);
+});
+
+test("sequence fill: multi-blank, wrong count of answers is caught, not silently truncated", () => {
+  const r = mod.verifySequenceFill("2,?,6,?,10,?,?,16,?,20", "4;8;12");
+  assert.equal(r.correct, false);
+});
+
+test("sequence fill: descending multi-blank real-shaped example", () => {
+  const r = mod.verifySequenceFill("12,22,32,?,?,62,72", "42;52");
+  assert.equal(r.correct, true);
+});
+
+test("classifyAndVerify: real multi-blank sequence routes to sequence_fill, not declined", () => {
+  const verdict = mod.classifyAndVerify({ printedQuestion: "2,?,6,?,10,?,?,16,?,20", studentAnswer: "4;8;12;14;18" });
+  assert.equal(verdict.handler, "sequence_fill");
+  assert.equal(verdict.correct, true);
+});

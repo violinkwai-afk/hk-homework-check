@@ -2379,27 +2379,56 @@ function verifyMultiBoxDigitAnswer(printedQuestion, studentAnswer) {
 // Only claims a verdict when the non-blank numbers agree on a single
 // constant step -- an inconsistent or too-short sequence returns null
 // rather than guessing a rule.
+// 2026-09-23: generalized from exactly-ONE blank to ANY NUMBER of blanks
+// in one sequence, after a real production test on a real user's bot
+// submission ("Count in 2s. Fill in the gaps: 2,[4],6,[8],10,[12],[14],
+// 16,[18],20") showed Qwen's OCR joins multiple blanks' answers into ONE
+// semicolon-separated `studentAnswer` string ("4;8;12;14;18") rather than
+// one item per blank -- the old single-blank version could only ever
+// `parseFloat` the first value and silently ignore the rest. Each blank
+// is filled by walking to its nearest known neighbor and applying the
+// same constant step used everywhere else in this function.
 function verifySequenceFill(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
-  const tokenIdx = printed.split(/[,，]/).findIndex((part) => BLANK_TOKENS.some((t) => part.includes(t)) || /^_+$/.test(part.trim()));
   const parts = printed.split(/[,，]/).map((s) => s.trim());
-  if (tokenIdx === -1 || parts.length < 3) return { correct: null, correctAnswer: "" };
-  const nums = parts.map((p, i) => (i === tokenIdx ? null : parseFloat(p)));
-  if (nums.some((n, i) => i !== tokenIdx && Number.isNaN(n))) return { correct: null, correctAnswer: "" };
+  if (parts.length < 3) return { correct: null, correctAnswer: "" };
+  const isBlank = (p) => BLANK_TOKENS.some((t) => p.includes(t)) || /^_+$/.test(p);
+  const blankIndices = parts.map((p, i) => (isBlank(p) ? i : -1)).filter((i) => i !== -1);
+  if (!blankIndices.length) return { correct: null, correctAnswer: "" };
+  const nums = parts.map((p, i) => (blankIndices.includes(i) ? null : parseFloat(p)));
+  if (nums.some((n, i) => !blankIndices.includes(i) && Number.isNaN(n))) return { correct: null, correctAnswer: "" };
+  // Step inferred from EVERY pair of known (non-blank) values, not just
+  // adjacent ones -- real fix, 2026-09-23: a dense real example (blanks
+  // at every other position, including two blanks back-to-back) has NO
+  // pair of adjacent KNOWN values at all, so the old adjacent-only check
+  // always found zero usable steps and declined a perfectly solvable
+  // sequence. Dividing by the index distance handles any gap size.
+  const knownIndices = nums.map((n, i) => (n !== null ? i : -1)).filter((i) => i !== -1);
+  if (knownIndices.length < 2) return { correct: null, correctAnswer: "" };
   const steps = [];
-  for (let i = 1; i < nums.length; i++) {
-    if (nums[i] === null || nums[i - 1] === null) continue;
-    steps.push(nums[i] - nums[i - 1]);
+  for (let a = 0; a < knownIndices.length - 1; a++) {
+    for (let b = a + 1; b < knownIndices.length; b++) {
+      const i = knownIndices[a], j = knownIndices[b];
+      steps.push((nums[j] - nums[i]) / (j - i));
+    }
   }
-  if (!steps.length || steps.some((s) => s !== steps[0])) return { correct: null, correctAnswer: "" };
+  if (steps.some((s) => Math.abs(s - steps[0]) > 1e-9)) return { correct: null, correctAnswer: "" };
   const step = steps[0];
-  const expected = tokenIdx > 0 && nums[tokenIdx - 1] !== null
-    ? nums[tokenIdx - 1] + step
-    : (tokenIdx < nums.length - 1 && nums[tokenIdx + 1] !== null ? nums[tokenIdx + 1] - step : null);
-  if (expected === null) return { correct: null, correctAnswer: "" };
-  const studentVal = parseFloat(studentAnswer);
-  if (Number.isNaN(studentVal)) return { correct: null, correctAnswer: "" };
-  return { correct: Math.abs(studentVal - expected) < 1e-9, correctAnswer: studentVal === expected ? "" : String(expected) };
+  const filled = [...nums];
+  for (const idx of blankIndices) {
+    let expected = null;
+    for (let j = idx - 1; j >= 0 && expected === null; j--) if (filled[j] !== null) expected = filled[j] + step * (idx - j);
+    if (expected === null) for (let j = idx + 1; j < filled.length && expected === null; j++) if (filled[j] !== null) expected = filled[j] - step * (j - idx);
+    if (expected === null) return { correct: null, correctAnswer: "" };
+    filled[idx] = expected;
+  }
+  const expectedValues = blankIndices.map((i) => filled[i]);
+  const studentVals = String(studentAnswer || "").split(/[;,，\s]+/).map((s) => s.trim()).filter(Boolean).map(Number);
+  if (studentVals.length !== expectedValues.length || studentVals.some(Number.isNaN)) {
+    return { correct: false, correctAnswer: expectedValues.join(", ") };
+  }
+  const allCorrect = studentVals.every((v, i) => Math.abs(v - expectedValues[i]) < 1e-9);
+  return { correct: allCorrect, correctAnswer: allCorrect ? "" : expectedValues.join(", ") };
 }
 
 // "Sort these numbers ascending/descending" -- printedQuestion carries
@@ -3117,7 +3146,16 @@ const QUESTION_TYPE_HANDLERS = [
       const parts = printed.split(",").map((s) => s.trim()).filter(Boolean);
       if (parts.length < 2) return false;
       const blankCount = BLANK_TOKENS.reduce((n, t) => n + (printed.split(t).length - 1), 0);
-      return blankCount >= 2;
+      if (blankCount < 2) return false;
+      // 2026-09-23 real overlap found: without this check, a plain bare-
+      // number sequence with 2+ blanks ("2,?,6,?,10,?,?,16,?,20", a real
+      // production example) matched here too and stole it from
+      // sequence_fill (a MORE specific detector, registered later) --
+      // this is a list of EQUATIONS (each part has an operator), not a
+      // plain number list, so require at least one part to actually
+      // contain an operator character.
+      const isBareOrBlank = (p) => /^-?\d+(\.\d+)?$/.test(p) || BLANK_TOKENS.includes(p) || /^_+$/.test(p);
+      return !parts.every(isBareOrBlank);
     },
     verify: (item) => verifyMultiBlankMath(item.printedQuestion, item.studentAnswer),
   },
@@ -3188,17 +3226,21 @@ const QUESTION_TYPE_HANDLERS = [
   // distinguishable from plain math_equation and should be dropped/merged
   // rather than kept as a separate unregistered function.
   {
+    // Detect() generalized 2026-09-23 to any NUMBER of blanks (was:
+    // exactly one) -- see verifySequenceFill's own comment for the real
+    // production evidence (a real 10-number "count in 2s" row with 5
+    // separate blanks came back as one item).
     name: "sequence_fill",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
       const parts = printed.split(/[,，]/).map((s) => s.trim());
       if (parts.length < 3) return false;
-      const tokenIdx = parts.findIndex((p) => BLANK_TOKENS.some((t) => p.includes(t)) || /^_+$/.test(p));
-      if (tokenIdx === -1) return false;
+      const isBlank = (p) => BLANK_TOKENS.some((t) => p.includes(t)) || /^_+$/.test(p);
+      if (!parts.some(isBlank)) return false;
       // Distinguishes from multi_blank_math: every non-blank part must be a
       // BARE number, no operator characters -- a sequence is a plain list
       // ("1,3,5,__,9"), not a list of equations ("4×□=24,24÷□=4").
-      return parts.every((p, i) => i === tokenIdx || /^-?\d+(\.\d+)?$/.test(p));
+      return parts.every((p) => isBlank(p) || /^-?\d+(\.\d+)?$/.test(p));
     },
     verify: (item) => verifySequenceFill(item.printedQuestion, item.studentAnswer),
   },
