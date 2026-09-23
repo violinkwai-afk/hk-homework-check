@@ -3185,6 +3185,25 @@ function verifyRoundToNearestHundred(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Reverse-solve a number from the sum of its smallest and largest factors
+// (real example, 2026-09-23 PDF reading: "如果★嘅最小和最大嘅因數之和係
+// 37,★=?" -> 36). Mathematically closed-form, not a search: the smallest
+// factor of any integer > 1 is always 1, and the largest factor is always
+// the number itself, so number = sum - 1.
+function verifyReverseFactorSum(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/最小和最大嘅因數之和係(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const sum = Number(m[1]);
+  const expected = sum - 1;
+  if (expected < 2) return { correct: null, correctAnswer: "" };
+  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // =======================================================================
 // Question-type registry (2026-09-22) -- built specifically so a future
 // question type is added by inserting ONE new entry, never by editing an
@@ -3522,6 +3541,11 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyRoundToNearestHundred(item.printedQuestion, item.studentAnswer),
   },
   {
+    name: "reverse_factor_sum",
+    detect: (item) => /最小和最大嘅因數之和係\d+/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyReverseFactorSum(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "grammar_cloze",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -3555,7 +3579,7 @@ function classifyAndVerify(item) {
     if (handler.detect(item)) {
       const result = handler.verify(item);
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
-        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred"].includes(handler.name)
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
       return { ...result, subject, handler: handler.name };
     }
@@ -4179,5 +4203,6 @@ export {
   verifyReverseDivisorFromRemainder,
   verifyMultipleDifference,
   verifyRoundToNearestHundred,
+  verifyReverseFactorSum,
   classifyAndVerify,
 };

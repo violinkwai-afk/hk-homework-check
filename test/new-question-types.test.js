@@ -1124,3 +1124,21 @@ test("round to nearest hundred: no 四捨五入/百位 keyword stays null", () =
   const r = mod.verifyRoundToNearestHundred("1584係咩數?", "1600");
   assert.equal(r.correct, null);
 });
+
+// --- verifyReverseFactorSum (2026-09-23) ---------------------------------
+
+test("reverse factor sum: real example, min+max factors sum to 37 -> 36", () => {
+  const r = mod.verifyReverseFactorSum("如果★嘅最小和最大嘅因數之和係37,★=?", "36");
+  assert.equal(r.correct, true);
+});
+
+test("reverse factor sum: wrong answer is caught", () => {
+  const r = mod.verifyReverseFactorSum("如果★嘅最小和最大嘅因數之和係37,★=?", "37");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "36");
+});
+
+test("reverse factor sum: no matching phrase stays null", () => {
+  const r = mod.verifyReverseFactorSum("37係咪質數?", "36");
+  assert.equal(r.correct, null);
+});
