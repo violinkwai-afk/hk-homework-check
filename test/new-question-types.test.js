@@ -871,6 +871,22 @@ test("digit count of N+1: no next/after keyword stays null", () => {
   assert.equal(r.correct, null);
 });
 
+// 2026-09-23, code-review-2axis regression test: "後面" and "位" both
+// appear in this text, but far apart and unrelated to each other (a
+// simulated OCR-concatenation of two different questions) -- before the
+// fix, the two independent substring checks would have both passed and
+// this got graded against a nonsense interpretation. Now correctly
+// declines since the anchored pattern requires them to sit together.
+test("digit count of N+1: unrelated 後面/位 occurring far apart does NOT misfire", () => {
+  const r = mod.verifyDigitCountOfNPlusOne("呢幅圖後面畫緊乜嘢？ 寫低個位嘅數字係幾多？", "4");
+  assert.equal(r.correct, null);
+});
+
+test("digit count of N+1: registry detect() shares the same anchored regex as verify()", () => {
+  assert.equal(mod.DIGIT_COUNT_OF_N_PLUS_ONE_RE.test("9999後面嗰個數，有幾多個位？"), true);
+  assert.equal(mod.DIGIT_COUNT_OF_N_PLUS_ONE_RE.test("呢幅圖後面畫緊乜嘢？ 寫低個位嘅數字係幾多？"), false);
+});
+
 // --- verifyCompoundUnitConversion (2026-09-23) --------------------------
 
 test("compound unit conversion: real example, 8m 11cm -> 811cm", () => {
@@ -1141,4 +1157,34 @@ test("reverse factor sum: wrong answer is caught", () => {
 test("reverse factor sum: no matching phrase stays null", () => {
   const r = mod.verifyReverseFactorSum("37係咪質數?", "36");
   assert.equal(r.correct, null);
+});
+
+// --- parseSignedStudentNumber: sign-stripping bug fix (2026-09-23) -------
+// Real bug found in code-review-2axis: the pattern used everywhere before
+// this helper, `parseFloat(answer.replace(/[^\d.]/g, ""))`, discarded a
+// genuine leading minus sign along with every other non-digit character,
+// so a wrong-signed student answer ("-5" when correct is "5") was
+// silently graded correct.
+
+test("parseSignedStudentNumber: preserves a genuine leading minus sign", () => {
+  assert.equal(mod.parseSignedStudentNumber("-5"), -5);
+});
+
+test("parseSignedStudentNumber: plain positive number still works", () => {
+  assert.equal(mod.parseSignedStudentNumber("42"), 42);
+});
+
+test("parseSignedStudentNumber: decimal answer still works", () => {
+  assert.equal(mod.parseSignedStudentNumber("3.5"), 3.5);
+});
+
+test("parseSignedStudentNumber: no digits at all returns NaN", () => {
+  assert.ok(Number.isNaN(mod.parseSignedStudentNumber("abc")));
+});
+
+test("regression: a wrong-signed answer is no longer silently graded correct", () => {
+  // Before the fix, "-36" would have its "-" stripped and be graded
+  // correct against an expected answer of 36.
+  const r = mod.verifyReverseFactorSum("如果★嘅最小和最大嘅因數之和係37,★=?", "-36");
+  assert.equal(r.correct, false);
 });

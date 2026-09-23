@@ -2725,6 +2725,19 @@ function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
   return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
 }
 
+// Extracts a numeric student answer while PRESERVING a genuine leading
+// minus sign. 2026-09-23 real bug: the pattern used throughout this file
+// before this helper existed, `parseFloat(answer.replace(/[^\d.]/g,
+// ""))`, strips "-" along with every other non-digit character --
+// reproduced directly: `"-5".replace(/[^\d.]/g,"")` -> `"5"`. A student
+// who writes a wrong-signed answer ("-5" when the correct answer is "5")
+// was silently graded CORRECT. Matching a signed number token instead of
+// stripping characters keeps a real minus sign attached to its digits.
+function parseSignedStudentNumber(answer) {
+  const m = String(answer || "").match(/-?\d+(\.\d+)?/);
+  return m ? parseFloat(m[0]) : NaN;
+}
+
 // Word problem: two numbers given in Chinese prose, asking for their
 // TOTAL/SUM (real example: `b245b3f1-QuizGo-...maths_test_2.pdf` p2
 // Q12 -- "昨天文具店賣出鉛筆34支，今天再賣出鉛筆22支，這兩天共賣去鉛筆
@@ -2756,7 +2769,7 @@ function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
   if (nums.length < 2) return { correct: null, correctAnswer: "" };
   const expected = nums.reduce((a, b) => a + b, 0);
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -2783,7 +2796,7 @@ function verifyPriceTableLookup(priceTable, printedQuestion, studentAnswer) {
   const priceA = Number(table[nameA]);
   const priceB = Number(table[nameB]);
   if (!Number.isFinite(priceA) || !Number.isFinite(priceB)) return { correct: null, correctAnswer: "" };
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   // "各N碟"/"各5盆" (N>1) is the quantity-multiplied shape this function
   // deliberately declines -- checked BEFORE the sum trigger below, since
@@ -2826,7 +2839,7 @@ function verifyWordProblemDivision(printedQuestion, studentAnswer) {
   if (nums.length !== 2 || nums[1] === 0) return { correct: null, correctAnswer: "" };
   const expected = nums[0] / nums[1];
   if (!Number.isInteger(expected)) return { correct: null, correctAnswer: "" };
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -2845,7 +2858,7 @@ function verifyWordProblemDifference(printedQuestion, studentAnswer) {
   const nums = (printed.match(/\d+/g) || []).map(Number);
   if (nums.length !== 2) return { correct: null, correctAnswer: "" };
   const expected = Math.abs(nums[0] - nums[1]);
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -2874,7 +2887,7 @@ function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
   const dividend = allNums.find((n) => n !== divisor);
   if (dividend === undefined) return { correct: null, correctAnswer: "" };
   const expected = Math.ceil(dividend / divisor);
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -2882,19 +2895,36 @@ function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
 // "The number right after N -- how many digits does it have?" (real
 // example, p1-p6.com P3 maths: "9999後面嗰個數,有幾多個位?" -> 5). Pure
 // place-value-boundary logic, zero visual/OCR risk once the one number
-// is read -- narrowly triggered on an explicit "next/after" + "digit
-// count" phrasing so it can't misfire on an ordinary digit-count-of-N
-// question (a different, simpler fact this function does NOT attempt).
+// is read.
+//
+// 2026-09-23, code-review-2axis finding: this used to check "後面/之後/
+// next/after" and "位/digit" as two INDEPENDENT substring tests anywhere
+// in the whole printedQuestion text. Both are extremely common, generic
+// Chinese math vocabulary ("位" alone means ones/tens/hundreds place,
+// used constantly outside this question type) -- an unrelated question
+// concatenated into the same OCR'd string (an already-documented real
+// risk elsewhere in this file, e.g. the "第1組" ordinal-label bug) could
+// satisfy both checks independently and get CONFIDENTLY marked wrong
+// against a nonsense interpretation, the one failure mode this whole
+// file is built to avoid. Anchored into ONE contiguous pattern instead,
+// so the number, the "next/after" phrase, and "位"/"digit" must actually
+// sit together -- the number is now read directly from the matched
+// phrase, not from "however many numbers happen to be in the whole
+// text", which also makes this safe against extra unrelated numbers
+// elsewhere in a concatenated string.
+const DIGIT_COUNT_OF_N_PLUS_ONE_RE =
+  /(\d+)\s*(?:後面|之後|後嗰個)[^。？?！\n]{0,15}(?:位|digit)|(?:next|after)\s*(\d+)[^.?!\n]{0,20}digit/i;
+
 function verifyDigitCountOfNPlusOne(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  if (!/(後面|之後|後嗰個|next|after)/i.test(printed)) return { correct: null, correctAnswer: "" };
-  if (!/(位|digit)/i.test(printed)) return { correct: null, correctAnswer: "" };
-  const nums = (printed.match(/\d+/g) || []).map(Number);
-  if (nums.length !== 1) return { correct: null, correctAnswer: "" };
-  const expected = String(nums[0] + 1).length;
-  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  const m = printed.match(DIGIT_COUNT_OF_N_PLUS_ONE_RE);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1] || m[2]);
+  if (!Number.isInteger(n)) return { correct: null, correctAnswer: "" };
+  const expected = String(n + 1).length;
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -2915,7 +2945,7 @@ function verifyCompoundUnitConversion(printedQuestion, studentAnswer) {
   const u1n = u1.toLowerCase(), u2n = u2.toLowerCase(), u3n = u3.toLowerCase();
   const totalMm = Number(v1) * TO_MM[u1n] + Number(v2) * TO_MM[u2n];
   const expected = totalMm / TO_MM[u3n];
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   const closeEnough = Math.abs(studentNum - expected) < 1e-9;
   const expectedStr = Number.isInteger(expected) ? String(expected) : expected.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
@@ -2996,7 +3026,7 @@ function verifyConstructExtremeNumberFromText(printedQuestion, studentAnswer) {
   if (statedWidth !== null && statedWidth !== digits.length) return { correct: null, correctAnswer: "" };
   const expected = verifyConstructExtremeNumber(digits, { largest, parity });
   if (expected === null) return { correct: null, correctAnswer: "" };
-  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -3083,7 +3113,7 @@ function verifyCountPrimesBelow(printedQuestion, studentAnswer) {
       for (let j = i * i; j < limit; j += i) isComposite[j] = true;
     }
   }
-  const studentNum = parseInt(answer.replace(/[^\d]/g, ""), 10);
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
 }
@@ -3117,7 +3147,7 @@ function verifyElapsedTimeForward(printedQuestion, studentAnswer) {
   let diffMin = t2 - t1;
   if (diffMin < 0) diffMin += 24 * 60;
   const expected = diffMin / 60;
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   const closeEnough = Math.abs(studentNum - expected) < 1e-9;
   const expectedStr = Number.isInteger(expected) ? String(expected) : String(expected);
@@ -3142,7 +3172,7 @@ function verifyReverseDivisorFromRemainder(printedQuestion, studentAnswer) {
   const numerator = dividend - remainder;
   if (numerator <= 0 || numerator % quotient !== 0) return { correct: null, correctAnswer: "" };
   const expected = numerator / quotient;
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -3162,7 +3192,7 @@ function verifyMultipleDifference(printedQuestion, studentAnswer) {
   const b = parseChineseNumberWord(m[3]);
   if (a === null || b === null) return { correct: null, correctAnswer: "" };
   const expected = Math.abs(n * (b - a));
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -3180,7 +3210,7 @@ function verifyRoundToNearestHundred(printedQuestion, studentAnswer) {
   const nums = (printed.match(/\d+/g) || []).map(Number);
   if (nums.length !== 1) return { correct: null, correctAnswer: "" };
   const expected = Math.round(nums[0] / 100) * 100;
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -3199,7 +3229,7 @@ function verifyReverseFactorSum(printedQuestion, studentAnswer) {
   const sum = Number(m[1]);
   const expected = sum - 1;
   if (expected < 2) return { correct: null, correctAnswer: "" };
-  const studentNum = parseFloat(answer.replace(/[^\d.]/g, ""));
+  const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
@@ -3476,12 +3506,10 @@ const QUESTION_TYPE_HANDLERS = [
   },
   {
     name: "digit_count_of_n_plus_one",
-    detect: (item) => {
-      const printed = String(item.printedQuestion || "");
-      if (!/(後面|之後|後嗰個|next|after)/i.test(printed)) return false;
-      if (!/(位|digit)/i.test(printed)) return false;
-      return (printed.match(/\d+/g) || []).length === 1;
-    },
+    // Shares DIGIT_COUNT_OF_N_PLUS_ONE_RE with the verify function below
+    // (2026-09-23 fix) so detect() and verify() can never disagree about
+    // what counts as a match.
+    detect: (item) => DIGIT_COUNT_OF_N_PLUS_ONE_RE.test(String(item.printedQuestion || "")),
     verify: (item) => verifyDigitCountOfNPlusOne(item.printedQuestion, item.studentAnswer),
   },
   {
@@ -4204,5 +4232,7 @@ export {
   verifyMultipleDifference,
   verifyRoundToNearestHundred,
   verifyReverseFactorSum,
+  parseSignedStudentNumber,
+  DIGIT_COUNT_OF_N_PLUS_ONE_RE,
   classifyAndVerify,
 };
