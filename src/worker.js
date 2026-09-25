@@ -1723,6 +1723,48 @@ async function callQwenOcrText(images, openrouterKey) {
 // as the earlier model-comparison route (a caller-supplied image still
 // spends real, if tiny, OpenRouter money). Remove once this comparison
 // is done.
+// Extended 2026-09-25 (same session, real user follow-up): now accepts
+// an optional `model` field so the SAME raw-OCR prompt/parsing path can
+// be pointed at a candidate model, not just the production baseline --
+// scoped to an explicit allowlist (production model + the one real
+// candidate found today, GLM-4.6V) for the same reason the earlier
+// model-comparison route was allowlisted, not open to any caller-named
+// model.
+const RAW_OCR_TEST_ALLOWED_MODELS = [PRODUCTION_OCR_MODEL, "z-ai/glm-4.6v"];
+async function callOcrTextWithModelForTest(images, openrouterKey, model) {
+  const prompt = OCR_ONLY_PROMPT(images.length);
+  const body = {
+    model,
+    max_tokens: 2000,
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...images.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+  };
+  const controller = new AbortController();
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => { controller.abort(); reject({ kind: "upstream_error", detail: "raw_ocr_test_timeout", status: 502 }); }, 25000);
+  });
+  let res;
+  try {
+    res = await Promise.race([
+      fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-raw-ocr-test" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+  } catch (e) {
+    throw { kind: "upstream_error", detail: (e && e.detail) || String((e && e.message) || e) };
+  }
+  if (!res.ok) throw { kind: "upstream_error", detail: `http_${res.status}: ${(await res.text()).slice(0, 300)}` };
+  const data = await res.json();
+  const choice = data.choices && data.choices[0];
+  if (!choice || choice.finish_reason !== "stop") throw { kind: "upstream_error", detail: `incomplete: ${choice && choice.finish_reason}` };
+  const text = (choice.message && choice.message.content) || "";
+  const items = parseOcrLine(text);
+  return { items, usage: data.usage || null };
+}
+
 async function handleTestRawOcr(request, env) {
   const token = request.headers.get("x-compare-token");
   if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
@@ -1730,14 +1772,16 @@ async function handleTestRawOcr(request, env) {
     : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
     : await env.OPENROUTER_API_KEY.get();
   if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
+  const { images, model } = await request.json();
   if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const useModel = model || PRODUCTION_OCR_MODEL;
+  if (!RAW_OCR_TEST_ALLOWED_MODELS.includes(useModel)) return json({ error: "model_not_allowed", allowed: RAW_OCR_TEST_ALLOWED_MODELS }, 400);
   const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
   try {
-    const r = await callQwenOcrText(downscaled, openrouterKey);
-    return json({ ok: true, items: r.items, usage: r.usage });
+    const r = await callOcrTextWithModelForTest(downscaled, openrouterKey, useModel);
+    return json({ ok: true, model: useModel, items: r.items, usage: r.usage });
   } catch (e) {
-    return json({ ok: false, error: (e && (e.detail || e.uiMessage)) || String(e) });
+    return json({ ok: false, model: useModel, error: (e && (e.detail || e.uiMessage)) || String(e) });
   }
 }
 
