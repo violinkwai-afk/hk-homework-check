@@ -149,6 +149,11 @@ export default {
     if (url.pathname === "/api/mark" && request.method === "POST") {
       return handleMark(request, env);
     }
+    // TEMPORARY, real-money route -- 2026-09-25 raw-OCR verbatim check,
+    // token-gated, see handleTestRawOcr's own comment. Remove once done.
+    if (url.pathname === "/api/test-raw-ocr" && request.method === "POST") {
+      return handleTestRawOcr(request, env);
+    }
     if (url.pathname === "/telegram-webhook" && request.method === "POST") {
       return handleTelegramWebhook(request, env);
     }
@@ -1707,6 +1712,33 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
   return { items, usage: data.usage || null };
+}
+
+// TEMPORARY diagnostic route (2026-09-25, real user request): returns
+// the RAW OCR output (printedQuestion/studentAnswer pairs, exactly what
+// production /api/mark's OCR step produces, via the same
+// callQwenOcrText/downscaleForCheapTier/PRODUCTION_OCR_MODEL path) for
+// one image -- unlike /api/mark's own response, which drops
+// printedQuestion once judging is done. Token-gated for the same reason
+// as the earlier model-comparison route (a caller-supplied image still
+// spends real, if tiny, OpenRouter money). Remove once this comparison
+// is done.
+async function handleTestRawOcr(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  try {
+    const r = await callQwenOcrText(downscaled, openrouterKey);
+    return json({ ok: true, items: r.items, usage: r.usage });
+  } catch (e) {
+    return json({ ok: false, error: (e && (e.detail || e.uiMessage)) || String(e) });
+  }
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
@@ -4203,18 +4235,20 @@ function crossCheckPrintedNumbers(item, visionWords, pageWidth, pageHeight) {
 // number matching the shape mid-equation (e.g. "5." right before "×2=")
 // does not. This is a purely local, per-token check, so it still works
 // on a page whose layout is irregular.
+const CIRCLED_DIGITS = "①②③④⑤⑥⑦⑧⑨⑩";
+function candidateQuestionLabelNumber(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  const arabic = t.match(/^(\d{1,2})[.)）]$/);
+  if (arabic) return Number(arabic[1]);
+  const circledIdx = CIRCLED_DIGITS.indexOf(t);
+  if (t.length === 1 && circledIdx !== -1) return circledIdx + 1;
+  return null;
+}
+
 function countLikelyQuestionNumbers(visionWords, pageWidth, pageHeight) {
   if (!Array.isArray(visionWords) || !visionWords.length || !pageWidth) return null;
-  const CIRCLED_DIGITS = "①②③④⑤⑥⑦⑧⑨⑩";
-  function candidateNumber(text) {
-    const t = String(text || "").trim();
-    if (!t) return null;
-    const arabic = t.match(/^(\d{1,2})[.)）]$/);
-    if (arabic) return Number(arabic[1]);
-    const circledIdx = CIRCLED_DIGITS.indexOf(t);
-    if (t.length === 1 && circledIdx !== -1) return circledIdx + 1;
-    return null;
-  }
+  const candidateNumber = candidateQuestionLabelNumber;
   const candidates = [];
   for (let i = 0; i < visionWords.length; i++) {
     const num = candidateNumber(visionWords[i].text);
@@ -4251,6 +4285,30 @@ function countLikelyQuestionNumbers(visionWords, pageWidth, pageHeight) {
     if (!next || (next.x || 0) - ((c.word.x || 0) + charWidth) > charWidth * 1.5) gapCount++;
   }
   return gapCount || null;
+}
+
+// Groups Vision's flat word list into per-question chunks, for a human
+// to read Vision's raw output grouped by which question it belongs to
+// (2026-09-25, real user request during the Ticket 4 validation pass).
+// A new chunk starts at every candidate label token (reusing the same
+// shape-matching as countLikelyQuestionNumbers); everything before the
+// first label lands in a leading "(unlabeled)" chunk. Deliberately
+// simple -- no X-position/sequential filtering here, this is a human-
+// readable diagnostic view, not the production safety-net logic.
+function groupWordsByQuestionLabel(visionWords) {
+  const chunks = [];
+  let current = { label: "(unlabeled)", words: [] };
+  for (const w of visionWords || []) {
+    const num = candidateQuestionLabelNumber(w.text);
+    if (num !== null) {
+      if (current.words.length) chunks.push(current);
+      current = { label: String(w.text), words: [] };
+    } else {
+      current.words.push(w.text);
+    }
+  }
+  if (current.words.length) chunks.push(current);
+  return chunks.map((c) => ({ label: c.label, text: c.words.join("") }));
 }
 
 // Bounded-concurrency map -- runs at most `concurrency` calls to `fn` at
