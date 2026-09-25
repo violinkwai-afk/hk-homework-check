@@ -4178,6 +4178,81 @@ function crossCheckPrintedNumbers(item, visionWords, pageWidth, pageHeight) {
   return { agree: false, aiNumbers, visionNumbers, mismatches };
 }
 
+// Ticket 5 (2026-09-25 rigor check): counts how many question-number
+// LABELS (not just any digit) genuinely seem to be printed on the page,
+// from Google Vision's word list, as a cheap safety net against AI
+// silently dropping whole items (a real confirmed bug: 3 items' worth
+// of content vanished from a 6-line exercise).
+//
+// Primary signal (strongest, tried first): a candidate label shape
+// ("1." "2)" "一、" a circled digit) whose X position lines up with
+// OTHER candidates AND whose numbers form a run of 3+ consecutive
+// integers. Sequential-increment is what tells a real question-number
+// column apart from a coincidentally-aligned table data column (a data
+// column like 5,8,12,20 is never a clean run) -- this single check
+// doubles as the fix for the table false-positive trap, no separate
+// table-detection logic needed. X-alignment on its own is NOT required
+// -- a worksheet whose own numbering isn't neatly aligned (a teacher-
+// made sheet, mixed section formats) would wrongly lose real labels if
+// alignment were a hard filter, so it's folded into "which candidates
+// count toward the run", not a standalone gate.
+//
+// Fallback signal (only when no 3+ run is found): a label-shaped token
+// followed by a clear horizontal gap before the next word -- a real
+// label has visual breathing room before the question text; a stray
+// number matching the shape mid-equation (e.g. "5." right before "×2=")
+// does not. This is a purely local, per-token check, so it still works
+// on a page whose layout is irregular.
+function countLikelyQuestionNumbers(visionWords, pageWidth, pageHeight) {
+  if (!Array.isArray(visionWords) || !visionWords.length || !pageWidth) return null;
+  const CIRCLED_DIGITS = "①②③④⑤⑥⑦⑧⑨⑩";
+  function candidateNumber(text) {
+    const t = String(text || "").trim();
+    if (!t) return null;
+    const arabic = t.match(/^(\d{1,2})[.)）]$/);
+    if (arabic) return Number(arabic[1]);
+    const circledIdx = CIRCLED_DIGITS.indexOf(t);
+    if (t.length === 1 && circledIdx !== -1) return circledIdx + 1;
+    return null;
+  }
+  const candidates = [];
+  for (let i = 0; i < visionWords.length; i++) {
+    const num = candidateNumber(visionWords[i].text);
+    if (num !== null) candidates.push({ idx: i, word: visionWords[i], num });
+  }
+  if (!candidates.length) return null;
+
+  // Primary: bucket by X position (~3% of page width tolerance), look
+  // for the longest run of consecutive integers within any one bucket.
+  const xBucketSize = Math.max(pageWidth * 0.03, 1);
+  const buckets = new Map();
+  for (const c of candidates) {
+    const bucket = Math.round((c.word.x || 0) / xBucketSize);
+    if (!buckets.has(bucket)) buckets.set(bucket, []);
+    buckets.get(bucket).push(c.num);
+  }
+  let bestRun = 0;
+  for (const nums of buckets.values()) {
+    const sorted = [...new Set(nums)].sort((a, b) => a - b);
+    let run = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      run = sorted[i] === sorted[i - 1] + 1 ? run + 1 : 1;
+      bestRun = Math.max(bestRun, run);
+    }
+    bestRun = Math.max(bestRun, sorted.length ? 1 : 0);
+  }
+  if (bestRun >= 3) return bestRun;
+
+  // Fallback: label-shaped token followed by a clear gap.
+  let gapCount = 0;
+  for (const c of candidates) {
+    const next = visionWords[c.idx + 1];
+    const charWidth = c.word.w || 10;
+    if (!next || (next.x || 0) - ((c.word.x || 0) + charWidth) > charWidth * 1.5) gapCount++;
+  }
+  return gapCount || null;
+}
+
 // Bounded-concurrency map -- runs at most `concurrency` calls to `fn` at
 // once, in index order, collecting all results (success or thrown) into an
 // array matching `items`' order regardless of completion order.
@@ -4412,6 +4487,27 @@ async function handleMark(request, env) {
     totalMs, pagesMs, verifyMs, mapMs,
     perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
   }));
+
+  // Ticket 5 (2026-09-25): dropped-content safety net. Logging only for
+  // now, not yet a user-facing flag -- see countLikelyQuestionNumbers's
+  // own comment for the detection method. Only fires on a MEANINGFUL
+  // margin (Vision counted 2+ more likely labels than AI returned
+  // items), not any mismatch at all, to tolerate this heuristic's own
+  // imperfection (real worksheets don't always number cleanly).
+  pageResults.forEach((pr, pageIdx) => {
+    if (pr.failed || !pr.vision) return;
+    const visionCount = countLikelyQuestionNumbers(pr.vision.words, pr.vision.width, pr.vision.height);
+    if (visionCount === null) return;
+    const aiCount = pr.items.length;
+    if (visionCount - aiCount >= 2) {
+      console.log(JSON.stringify({
+        event: "mark_possible_dropped_content",
+        page: pageIdx,
+        visionLikelyQuestionCount: visionCount,
+        aiReturnedItemCount: aiCount,
+      }));
+    }
+  });
 
   // Every page failed -- genuinely nothing to return, unlike a partial
   // multi-page failure (handled below via pageErrors on an otherwise
@@ -4733,6 +4829,7 @@ function json(obj, status) {
 // default export or any existing behavior.
 export {
   crossCheckPrintedNumbers,
+  countLikelyQuestionNumbers,
   evalArithmetic,
   parseNumericAnswer,
   verifyMath,
