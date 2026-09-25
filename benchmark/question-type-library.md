@@ -718,6 +718,31 @@ gap-filling for the library's coverage.
 | 同音字/易混字辨析 (circle the correct of 2 given similar characters) | not yet assessed, plausibly A | found 2026-09-22, n/a | "(藍/籃)色的天空中有幾朵白雲" (circle 藍, not 籃) | real: p1-p6.com P1 Chinese 2021-2022, part (四). Unlike 不供詞填充 (fully open) this gives exactly 2 candidates, which bounds the problem — plausibly closed-form (check which of the 2 real words grammatically/semantically fits) but real correctness judgment is still needed per item, not assumed automatic |
 | 閱讀理解：從文章中填空作答 (reading comprehension, extract answer phrase from a passage into boxes) | A, PARTIAL (same caveat as 選詞填充) | found 2026-09-22, real example | "姐姐把餅乾做成[][]的形狀" (fill in 動物, matching a phrase from the passage above) | real: same source, part (六). Same underlying check as the already-built `verifySelectFromPassage` (passage-membership, reject-only — a real passage word could still be right-word-wrong-blank) — this is comprehension-extraction rather than vocabulary fill, but the safe automatable check is identical; worth confirming whether the existing function already generalizes to this or needs a comprehension-specific variant |
 
+## 2026-09-25 — p1-p6.com "數學 Maths" label page, real paper 1 of a
+10-paper batch (user request: "至少要睇10份，每一份每一題都要睇吓可唔可以
+寫Code解決" — read at least 10 papers, check every single question in
+each for code-solvability)
+
+**Paper 1: `2023-2024-p2-maths-2nd-term-examination` (P2, 44 questions,
+9 pages, downloaded direct from the post's Google Drive link and read in
+full).** Two NEW verifiers built and tested from this paper (both real,
+both wired below); one stale library entry corrected; everything else on
+this paper was either already-covered (basic arithmetic, blank
+substitution, division-with-remainder, word-problem division/difference,
+ceiling-division taxi problem) or a real, already-documented V-type
+(compass/spatial reasoning from a floor-plan diagram, shape-from-picture
+identification, pictogram reading, geo-strip/dot-grid construction, all
+matching rows already in this file, no new ground).
+
+| Type | Tier | Status | Example (real) | Notes |
+|---|---|---|---|---|
+| Division-with-remainder, blank is the REMAINDER (dividend/divisor/quotient all given) | A | **built** (`verifyDivisionRemainderBlank`) | "在49÷5=9…●的除式中，●代表的數是___" (=4) | Q13. Distinct from `verifyReverseDivisorFromRemainder` (which solves for the divisor) — here it's remainder = dividend - divisor×quotient. Blank marker in the real PDF was a filled circle "●", not yet added to the shared `BLANK_TOKENS` (that list is specifically OCR-output-confirmed, not just visually-printed-confirmed) — handled locally in this one function instead |
+| "Largest/smallest N-digit number" (optionally odd/even) difference | A | **built** (`verifyExtremeNumberDifference`) | "最大的三位數和最小的三位奇數相差是___" (999−101=898) | Q11. Pure place-value general knowledge, no given digit set (distinct from `verifyConstructExtremeNumber`, which builds from GIVEN digits) |
+| Column addition/subtraction with multiple missing digits + carrying | A | **library entry corrected, not a new build** | "8□2 − □65 = 60□" | Q14/15. This file previously said "NOT yet built" (2026-09-22 entry) — but `verifyMissingDigitsInEquation` (added since that entry was written, handles up to 4 blank positions via brute-force + real arithmetic check) already covers this AS LONG AS OCR linearizes the column layout into a plain left-to-right equation string. Not independently re-tested against a real OCR transcript of a column-format image this session — the real remaining unknown is the OCR linearization step, not the solving logic |
+| MC: which option has the SAME quotient as a stated division | A, easy but not built | found, NOT built | "以下哪道除式的商與21÷3的相同？" (A.15÷3 B.42÷7 C.63÷9 D.48÷6) | Q17. Same shape as the already-built `verifyComputationMC` (which matches by equal SUM/value) — likely just needs generalizing to "equal quotient" or reusing as-is if `evalArithmetic` already evaluates "42÷7" to a number comparable to the target; not attempted this pass, flagged for next batch |
+| Solve a division equation for an unknown divisor symbol (★, no remainder) | A | **built** (`verifyReverseDivisorFromRemainder`, extended) | "16÷★=4，★代表的數是多少?" | Q18. `verifyReverseDivisorFromRemainder` extended to accept no remainder term at all (treated as remainder=0) and "★" as an accepted blank/variable marker — a strict superset of its original behavior, existing with-remainder cases still pass |
+| Best-estimate-by-rounding MC | A, convention-dependent | found, NOT built | "以下哪道算式最適合用來估算791-496的結果？" (A.700-300 B.700-500 C.800-400 D.800-500) | Q16. Code-solvable IF "round each operand to the nearest hundred" is accepted as the one correct convention — flagged rather than built, since a wrong convention assumption would confidently mis-grade a real pedagogical judgment call, not just fail safely |
+
 ## English
 
 | Type | Tier | Status | Example (real) | Notes |

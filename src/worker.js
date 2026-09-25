@@ -3159,15 +3159,26 @@ function verifyElapsedTimeForward(printedQuestion, studentAnswer) {
 // The unknown-divisor placeholder varies by paper (?, □, ※ all seen) --
 // matched directly rather than via BLANK_TOKENS since this is a narrow,
 // self-contained equation shape, not a general blank-substitution case.
+// 2026-09-25: extended to also accept NO remainder term at all (treated
+// as remainder=0), on a real example -- p1-p6.com P2 2023-2024 Q18:
+// "16÷★=4，★代表的數是多少?" (find the divisor, exact division, no
+// remainder shown). Same underlying algebra (dividend = divisor×quotient
+// + remainder, solve for divisor) just with remainder forced to 0 rather
+// than parsed -- a strict superset of the original with-remainder shape,
+// not a behavior change to it. "★" also added to the accepted blank/
+// variable marker set: already an evidenced real marker in this codebase
+// (see verifyReverseFactorSum's own real example, same "★...★=?" shape).
 function verifyReverseDivisorFromRemainder(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*[÷\/]\s*[?□※]\s*=\s*(\d+)\s*[…\.]{1,3}\s*(\d+)/);
+  const withRemainder = printed.match(/(\d+)\s*[÷\/]\s*[?□※★]\s*=\s*(\d+)\s*[…\.]{1,3}\s*(\d+)/);
+  const noRemainder = withRemainder ? null : printed.match(/(\d+)\s*[÷\/]\s*[?□※★]\s*=\s*(\d+)(?!\s*[…\.])/);
+  const m = withRemainder || noRemainder;
   if (!m) return { correct: null, correctAnswer: "" };
   const dividend = Number(m[1]);
   const quotient = Number(m[2]);
-  const remainder = Number(m[3]);
+  const remainder = withRemainder ? Number(m[3]) : 0;
   if (!quotient || remainder >= quotient) return { correct: null, correctAnswer: "" };
   const numerator = dividend - remainder;
   if (numerator <= 0 || numerator % quotient !== 0) return { correct: null, correctAnswer: "" };
@@ -3220,6 +3231,88 @@ function verifyRoundToNearestHundred(printedQuestion, studentAnswer) {
 // 37,★=?" -> 36). Mathematically closed-form, not a search: the smallest
 // factor of any integer > 1 is always 1, and the largest factor is always
 // the number itself, so number = sum - 1.
+// Real example found 2026-09-25 (p1-p6.com P2 2023-2024, Q13):
+// "在 49 ÷ 5 = 9 … ● 的除式中，● 代表的數是___" -- a fully-worked
+// division statement (dividend, divisor, AND quotient all given) where
+// the blank is the REMAINDER, not any of the three usual unknowns
+// (unlike verifyReverseDivisorFromRemainder, which solves for the
+// divisor). Pure arithmetic once parsed: remainder = dividend - divisor
+// * quotient. The blank marker itself was a filled circle "●" in the
+// real PDF text -- NOT yet added to the shared BLANK_TOKENS constant
+// above, since that list is specifically confirmed against real OCR
+// (Qwen3-VL) OUTPUT, not just what's visually printed on the page, and
+// "●" hasn't been seen in an actual OCR transcript yet. This function
+// accepts "●" alongside the already-OCR-confirmed "?"/"□" tokens on its
+// own, narrower evidence (the real PDF text), without changing the
+// shared constant other detectors rely on.
+function verifyDivisionRemainderBlank(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const m = printed.match(/(\d+)\s*[÷/]\s*(\d+)\s*=\s*(\d+)\s*(?:[…⋯]|\.{2,3})\s*[●?□]/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, dividendStr, divisorStr, quotientStr] = m;
+  const dividend = Number(dividendStr);
+  const divisor = Number(divisorStr);
+  const quotient = Number(quotientStr);
+  if (divisor === 0) return { correct: null, correctAnswer: "" };
+  const expectedRemainder = dividend - divisor * quotient;
+  // A malformed/inconsistent printed statement (e.g. OCR error) would
+  // give a negative or out-of-range remainder -- refuse rather than
+  // report a "correct" answer against a broken premise.
+  if (expectedRemainder < 0 || expectedRemainder >= divisor) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(studentAnswer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = studentNum === expectedRemainder;
+  return { correct, correctAnswer: correct ? "" : String(expectedRemainder) };
+}
+
+// Real example found 2026-09-25 (same source, Q11): "最大的三位數和
+// 最小的三位奇數相差是___" (the difference between the largest 3-digit
+// number and the smallest 3-digit ODD number = 999 - 101 = 898). Unlike
+// verifyConstructExtremeNumber (which builds a number from a GIVEN digit
+// set), this is pure general-knowledge about place value -- "the
+// largest/smallest N-digit number" is a fixed value determined only by N
+// and an optional odd/even/no constraint, no digits are given in the
+// question at all. Narrow, deliberately: only fires on the exact
+// largest/smallest-N-digit-number phrasing this real example uses, not
+// a general number-theory solver.
+function extremeNDigitNumber(digitCount, { largest, parity } = {}) {
+  if (!Number.isInteger(digitCount) || digitCount < 1) return null;
+  const allSame = (d) => Number(String(d).repeat(digitCount));
+  let base = largest ? allSame(9) : Number(`1${"0".repeat(digitCount - 1)}`);
+  if (!parity) return base;
+  const isOdd = (n) => n % 2 === 1;
+  const step = largest ? -1 : 1;
+  // At most 2 steps are ever needed (consecutive integers alternate
+  // parity), but loop defensively rather than hardcode that.
+  for (let i = 0; i < 20; i++) {
+    if ((parity === "odd") === isOdd(base)) return base;
+    base += step;
+  }
+  return null;
+}
+
+function verifyExtremeNumberDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const parityOf = (s) => (s.includes("奇") ? "odd" : s.includes("偶") ? "even" : null);
+  const DIGIT_COUNT_WORDS = { 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+  const parseTerm = (text) => {
+    const m = text.match(/(最大|最小)的?([一二兩三四五六]|\d+)位(奇|偶)?數/);
+    if (!m) return null;
+    const digitCount = DIGIT_COUNT_WORDS[m[2]] ?? Number(m[2]);
+    return extremeNDigitNumber(digitCount, { largest: m[1] === "最大", parity: parityOf(m[3] || "") });
+  };
+  const m = printed.match(/(.+?)(?:和|與)(.+?)相差是?/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const a = parseTerm(m[1]);
+  const b = parseTerm(m[2]);
+  if (a === null || b === null) return { correct: null, correctAnswer: "" };
+  const expected = Math.abs(a - b);
+  const studentNum = parseSignedStudentNumber(studentAnswer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = studentNum === expected;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 function verifyReverseFactorSum(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -4232,6 +4325,8 @@ export {
   verifyMultipleDifference,
   verifyRoundToNearestHundred,
   verifyReverseFactorSum,
+  verifyDivisionRemainderBlank,
+  verifyExtremeNumberDifference,
   parseSignedStudentNumber,
   DIGIT_COUNT_OF_N_PLUS_ONE_RE,
   classifyAndVerify,

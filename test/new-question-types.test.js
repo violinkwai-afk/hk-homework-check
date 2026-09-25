@@ -1105,6 +1105,28 @@ test("reverse divisor from remainder: remainder >= quotient (impossible) stays n
   assert.equal(r.correct, null);
 });
 
+// 2026-09-25: real example, p1-p6.com P2 2023-2024 Q18 -- no remainder
+// term at all (exact division), and "★" as the blank marker instead of
+// "※"/"?"/"□".
+test("reverse divisor from remainder: real example with NO remainder term, 16÷★=4 -> 4", () => {
+  const r = mod.verifyReverseDivisorFromRemainder("如果16÷★=4，★代表的數是多少?", "4");
+  assert.equal(r.correct, true);
+});
+
+test("reverse divisor, no remainder: wrong answer is caught", () => {
+  const r = mod.verifyReverseDivisorFromRemainder("如果16÷★=4，★代表的數是多少?", "8");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "4");
+});
+
+test("reverse divisor, no remainder: a WITH-remainder statement is never mistaken for the no-remainder case", () => {
+  // 750/46 has remainder 14, not 0 -- must still solve via the
+  // with-remainder branch, not silently drop the remainder to 0.
+  const r = mod.verifyReverseDivisorFromRemainder("如果750÷※=16…14,那麼※=?", "48");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "46");
+});
+
 // --- verifyMultipleDifference (2026-09-23) -------------------------------
 
 test("multiple difference: real example, 17's 11th vs 17th multiple -> 102", () => {
@@ -1187,4 +1209,73 @@ test("regression: a wrong-signed answer is no longer silently graded correct", (
   // correct against an expected answer of 36.
   const r = mod.verifyReverseFactorSum("如果★嘅最小和最大嘅因數之和係37,★=?", "-36");
   assert.equal(r.correct, false);
+});
+
+// --- verifyDivisionRemainderBlank (2026-09-25) ----------------------------
+// Real example: p1-p6.com P2 2023-2024 exam (downloaded and read directly),
+// Q13: "在49÷5=9…●的除式中，●代表的數是___" -- the blank is the
+// remainder of a fully-stated division equation.
+
+test("division remainder blank: real example, 49÷5=9...● -> 4", () => {
+  const r = mod.verifyDivisionRemainderBlank("在49÷5=9…●的除式中，●代表的數是___", "4");
+  assert.equal(r.correct, true);
+});
+
+test("division remainder blank: wrong answer is caught, shows correct one", () => {
+  const r = mod.verifyDivisionRemainderBlank("在49÷5=9…●的除式中，●代表的數是___", "5");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "4");
+});
+
+test("division remainder blank: also accepts ? and □ as the blank marker", () => {
+  assert.equal(mod.verifyDivisionRemainderBlank("22÷6=3…?", "4").correct, true);
+  assert.equal(mod.verifyDivisionRemainderBlank("22÷6=3…□", "4").correct, true);
+});
+
+test("division remainder blank: no matching phrase stays null", () => {
+  const r = mod.verifyDivisionRemainderBlank("34-12=", "22");
+  assert.equal(r.correct, null);
+});
+
+test("division remainder blank: an inconsistent printed statement (broken premise) stays null, not a wrong 'correct' claim", () => {
+  // 49 = 5*9 + r has no valid r in [0,5) here if the printed quotient is wrong.
+  const r = mod.verifyDivisionRemainderBlank("在49÷5=8…●的除式中，●代表的數是___", "9");
+  assert.equal(r.correct, null);
+});
+
+test("division remainder blank: divisor of zero refuses rather than dividing by zero", () => {
+  const r = mod.verifyDivisionRemainderBlank("在49÷0=9…●的除式中，●代表的數是___", "4");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyExtremeNumberDifference (2026-09-25) ---------------------------
+// Real example: same source, Q11: "最大的三位數和最小的三位奇數相差是___"
+// (999 - 101 = 898).
+
+test("extreme number difference: real example, largest 3-digit vs smallest 3-digit odd", () => {
+  const r = mod.verifyExtremeNumberDifference("最大的三位數和最小的三位奇數相差是___", "898");
+  assert.equal(r.correct, true);
+});
+
+test("extreme number difference: wrong answer is caught, shows correct one", () => {
+  const r = mod.verifyExtremeNumberDifference("最大的三位數和最小的三位奇數相差是___", "899");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "898");
+});
+
+test("extreme number difference: no parity constraint (plain largest/smallest)", () => {
+  // 最大的兩位數(99) 和 最小的兩位數(10) 相差是 89
+  const r = mod.verifyExtremeNumberDifference("最大的兩位數和最小的兩位數相差是___", "89");
+  assert.equal(r.correct, true);
+});
+
+test("extreme number difference: even constraint", () => {
+  // 最大的三位偶數(998) - 最小的三位偶數(100) = 898
+  const r = mod.verifyExtremeNumberDifference("最大的三位偶數和最小的三位偶數相差是___", "898");
+  assert.equal(r.correct, true);
+});
+
+test("extreme number difference: no matching phrase stays null", () => {
+  const r = mod.verifyExtremeNumberDifference("34+12=", "46");
+  assert.equal(r.correct, null);
 });
