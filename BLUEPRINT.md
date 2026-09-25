@@ -1,184 +1,191 @@
 # hk-homework-check — Blueprint
 
-Generated 2026-09-22, verified against the actual repo (git log, git
-status, git diff, `node --test`, live Worker probe, `wrangler
-deployments list`) rather than recalled from memory alone. Where this
-corrects something a saved memory said, that's called out explicitly —
-memories decay fast on this project.
+**This is the ONE file for this project's current settled state and
+design decisions.** Per explicit 2026-09-25 instruction: every new
+conclusion updates THIS file, and any work on this project should be
+checked against what's written here first — not re-derived from
+conversational memory. Superseded content is deleted, not left stale
+alongside the update.
+
+Rewritten 2026-09-25 (previous version generated 2026-09-22), verified
+against the actual repo (`git log`, `git status`, `node --test`) — not
+recalled from memory alone.
 
 ## 1. What this is
 
 A parent photographs a completed homework page; the AI marks each
 question ✓/✗ directly on the photo and hands it back. Two live-code
-entry points share one backend philosophy but are **not yet unified**
-(see §4):
+entry points, meant to share one backend, currently don't:
 
-- **Website** (`/api/check` + `/api/verify`) — Sonnet-based real
-  judgment, phase-split (fast pass returns immediately, a second pass
-  resolves anything still ambiguous). This is the older, more expensive
-  path.
-- **Telegram bot** (`/api/mark`) — OCR (Qwen3-VL-235B) → deterministic
-  code verification → fallback to `needs_review`, never a guessed
-  verdict. This is the newer, cheaper path and the one all future work
-  is converging on (**confirmed standing direction**: "理解啱，全部嘅
-  工作都要考慮返呢一個原則嚟做" — every future change should be judged
-  against this one-shared-backend vision).
+- **Website** (`/api/check` + `/api/verify`) — AI (Qwen/DeepSeek, Sonnet
+  as a last-resort fallback) reads the photo AND judges correctness in
+  one call, no code-verification layer at all. This is the OLDER, more
+  expensive, less testable path — **scheduled for retirement**, see §4.
+- **Telegram bot** (`/api/mark`) — AI reads only (OCR), code judges
+  deterministically, unresolved items fall back to `needs_review`. This
+  is the path all future work converges on.
 
-**No real users yet** on either path — this is still the owner's own
-testing. Treat any "production impact" framing as hypothetical until
-told otherwise.
+No confirmed real production users on either path as of this writing —
+some field-testing has happened against real user-submitted photos (see
+`~/.claude/channels/telegram/inbox`, ~260 real photos), but this hasn't
+been independently confirmed as live production traffic vs. the owner's
+own testing. Don't assert "real users" without checking current state.
 
-## 2. Architecture, as it actually stands
+## 2. Architecture
+
+### 2a. Current, as actually deployed
 
 ```
-Photo in ──▶ /api/check (website, Sonnet)         [older path]
-         ──▶ /api/mark  (Telegram, Qwen OCR)       [newer path, converging point]
-                 │
-                 ├─ downscaleForCheapTier (640px, before OCR only)
-                 ├─ callQwenOcrText → parseOcrLine (label=printed|answer)
-                 ├─ verifyMath (arithmetic, remainder notation,
-                 │    blank-token substitution for "?"/"□")
-                 ├─ NEW, uncommitted: verifyNumberWordConversion,
-                 │    verifyComparisonSymbol, + more (see §3)
-                 ├─ findBboxForItem (Vision OCR bbox lookup)
-                 └─ annotateImage (Photon, stamps ✓/✗ on the photo)
+/api/check (website)  ── AI reads + judges in ONE call, no code check   [retiring]
+/api/mark  (Telegram)  ── detectAndCorrectRotation (both paths now, since 2026-09-25)
+                        ── callQwenOcrText (OCR only, model = PRODUCTION_OCR_MODEL constant)
+                        ── parseOcrLine (label=printed|answer)
+                        ── classifyAndVerify / QUESTION_TYPE_HANDLERS (code, ~30+ Tier-A verifiers)
+                        ── findBboxForItem (Vision word-position lookup, cached across the
+                             rotation-check call when a page didn't need rotating)
+                        ── annotateImage (Photon, stamps ✓/✗ on the corrected photo)
 ```
 
-**Repos:**
-- `/home/claude_user/hk-homework-check` — the real product. Cloudflare
-  Worker, `git push origin main` auto-deploys (Workers Builds/GitHub
-  integration), any other branch → preview URL only.
-- `/home/claude_user/hk-homework-grader-node` — **a real, load-bearing
-  infrastructure piece, not a toy/abandoned rewrite** (this was NOT in
-  any saved memory — found only by reading the repo). A large (~300-
-  400KB) homework photo sent to OpenRouter reliably hung/timed out when
-  called *from the Cloudflare Worker runtime specifically*; the exact
-  same call from a plain Node process didn't. Rather than keep fighting
-  a Workers-runtime networking issue, the model call itself was moved
-  here — a thin, stateless Node proxy on Railway (`POST /grade`, Qwen-
-  first/DeepSeek-fallback). The Worker still owns all grading logic
-  (prompts, verification, rotation, annotation); this is purely "run
-  the model call somewhere that doesn't hang." **Confirmed NOT wired in
-  yet**: `grep -n "railway\|grader-node" src/worker.js` returns nothing
-  — `/api/mark` still calls the model directly from the Worker. The
-  proxy exists, is scaffolded, and is presumably deployed to Railway,
-  but the Worker isn't calling it, so the original large-photo hang risk
-  this was built to fix is still live in the current code path.
-- Sibling project `/home/claude_user/hk-maths` — same domain (HK
-  primary maths, photo grading) but a deliberately different product
-  and a deliberately different philosophy: hk-maths uses worksheet-
-  bank/answer-key matching; hk-homework-check has an explicit, resolved
-  **hard rule against ever doing that** ("冇一個題型係要靠已知嘅答案
-  Key" — no question type may rely on a pre-known key, because this
-  product is FOR people who don't have one). Don't cross-pollinate that
-  pattern between the two projects.
+`PRODUCTION_OCR_MODEL` (src/worker.js, currently
+`"qwen/qwen3-vl-235b-a22b-instruct"`) is the single source of truth for
+which model both `callQwen` (`/api/check`) and `callQwenOcrText`
+(`/api/mark`) use — extracted 2026-09-25 specifically so a future model
+swap is a one-line change. **Do not re-test this model choice without
+new evidence** — see §3's rigor-check summary for why.
 
-## 3. Current real state (verified, not recalled)
+### 2b. Target design (settled, NOT yet built — see Tickets 1-8)
 
-**Correction to a stale memory**: `project_hk_homework_check_current_state.md`
-says local `main` (`fabb0af`, "Telegram MVP") was NOT pushed and
-`origin/main` was still at `0774b2c`. As of right now, `git status`
-shows local `main` **is** "up to date with origin/main" — the push has
-since happened. Whether the Telegram *webhook* has actually been
-registered with the real bot (a separate manual step from deploying
-code) is still unconfirmed in this pass.
+One shared pipeline behind both entry points:
+**AI reads → code judges → (not yet built) AI judges only what code
+can't.**
 
-**Uncommitted work sitting in the working tree right now** (not in any
-memory file — found only by reading `git diff`/`git status`):
-1. `src/worker.js` — a real, previously-undocumented **subtraction bug
-   fix**: `evalArithmetic`'s tokenizer greedily swallowed the "-" in
-   e.g. "328-214" as a unary sign on the next number instead of a binary
-   operator, meaning **plain two-number subtraction silently evaluated
-   to `null`** (never actually verified) until today's fix (a lookbehind
-   regex). No existing test happened to cover this path before. This is
-   a significant correctness fix sitting unmerged.
-2. `src/worker.js` — ~850 new lines: a library of **new question-type
-   verifiers** (number-word conversion 一/two ↔ digit, `>`/`<` comparison
-   symbols, and more per the diff) built from 5 real published HK
-   workbooks the user sent in over 2026-09-11 to 09-18. Explicitly **not
-   wired into the dispatcher yet** — standalone, tested functions,
-   pending an integration decision (how OCR would represent "which MC
-   option did the student pick", and a real per-type detector so these
-   don't misfire on an ordinary math item).
-3. `test/new-question-types.test.js` (untracked, 34KB) — tests for the
-   above.
-4. `DEPLOYMENT.md` (untracked) — a rollback/deploy runbook draft,
-   content-complete, marked "not yet reviewed/approved."
-5. `benchmark/` (untracked, real scaffolding, not meant to be committed
-   per its own README) — `question-type-library.md` (34KB "single
-   source of truth" running catalog of every question type found, its
-   solvability tier, and code status — actively updated today, most
-   recent edit 17:09), `speed-log.md`, `log.md`, real photo sets under
-   `photos/` and `external_pdfs/`.
+Within "AI reads," the settled (2026-09-25, corrected once already —
+see TICKETS.md Ticket 4's own note) division of labour:
+- **AI owns**: page structure (how many questions, which text belongs to
+  which item) and handwritten-answer reading. Vision cannot do either —
+  it has no semantic understanding of item boundaries, and is worse than
+  a vision-LLM at messy handwriting.
+- **Google Vision is PRIMARY for printed question text**, not a
+  cross-check. AI and Vision read the same image in parallel (no timing
+  dependency between them). Once AI has identified which region belongs
+  to an item, the existing position-matching mechanism
+  (`findBboxForItem`'s string-search logic, generalized) locates that
+  region in Vision's own word list and Vision's transcription of it
+  becomes the `printedQuestion` value directly — not "compared against
+  AI's reading, override only on disagreement." AI's own reading of that
+  region is the fallback ONLY when no Vision match is found. This
+  matters because Vision cannot hallucinate/compute answers the way an
+  LLM can (it has no world knowledge to draw from) — making it primary
+  structurally closes that failure mode wherever a match succeeds,
+  rather than merely catching it after the fact.
+- **Dropped-content safety net**: separately, pattern-match
+  question-number-shaped tokens in Vision's word list, keep only
+  candidates that are BOTH X-position-aligned with other candidates AND
+  part of a sequential run (1,2,3,4… no gaps) — sequential-increment is
+  what distinguishes a real question-number column from a coincidentally
+  X-aligned table data column. Falls back to "label followed by a clear
+  spacing gap" for pages where numbering isn't aligned. Compare the
+  resulting count against how many items AI actually returned; only flag
+  "possibly dropped content" on a meaningful margin (2+), not any
+  mismatch, to tolerate the method's own imperfection.
+- **Homework-vs-not classification**: a page counts as homework only if
+  it shows NO website/app UI chrome (browser bars, buttons, hyperlinks,
+  cursors) AND its layout resembles an educational worksheet/textbook
+  page. Deliberately does NOT require photographic imperfection (glare,
+  shadow, paper curl) as a signal — a clean scan legitimately lacks those
+  and must not be misclassified as a screenshot.
+- **Per-item answered-or-blank**: judged separately, by genuine
+  handwriting stroke characteristics (irregular width, imprecise
+  letterforms) vs. uniform printed/digital marks — never by whether the
+  page overall shows handwriting anywhere (a fully blank submission is
+  still valid homework).
+- **Teacher-mark vs. student-mark**: when a correction is visible (red
+  pen, strikethrough), report the student's ORIGINAL answer (even if
+  wrong), never the teacher's correction.
 
-**Full local test suite: 154/154 passing** (`node --test test/*.test.js`
-— note the glob matters, `node --test test/` alone fails with
-`MODULE_NOT_FOUND`, that's a shell/CLI quirk not a real failure).
+PDF upload is currently NOT handled by either entry point at all (image
+mediaTypes only) — a real gap, not yet designed, see Ticket 6.
 
-**A genuine, diagnosed technical limit found today** (in
-`benchmark/question-type-library.md`, not memory): porting the
-Python/OpenCV visual-derivation prototypes to this repo's actual JS/
-Photon toolchain is a real yes-for-some/no-for-others split, not a
-blanket answer —
-- Fish-length/size comparison (connected-component measurement) ports
-  cleanly to Photon: 112px/257px vs Python's 121px/253px, same
-  conclusion.
-- Clock-hand reading does **not** port cleanly: Photon has no Hough-
-  line-transform equivalent, only 4 fixed-angle line detectors. Two
-  independent JS approaches were tried and both failed the "0
-  confidently wrong" bar the Python version cleared. Root cause is
-  structural (working from scattered edge pixels instead of Python's
-  connected line segments loses the rim-circle-vs-hand distinction), not
-  a tuning problem — this is real signal for scoping future
-  diagram/visual-comprehension work, not a temporary gap.
+## 3. Current real state (2026-09-25 night)
 
-## 4. Standing product principles (apply to every future decision)
+**Git**: `main` is 3 commits ahead of `origin/main`, NOT pushed pending
+the user's go-ahead:
+- `b66cdf4` — rotation correction added to `/api/mark` (mirrors what
+  `/api/check` already had).
+- `eb10783` — tonight's 8 findings logged as tickets.
+- `d02d139` — Ticket 4 corrected (Vision-primary, not AI-primary).
 
-1. **One shared backend eventually** — website, Telegram, and any
-   future interface (WhatsApp/Signal) are thin interfaces over one OCR
-   → code → AI-fallback pipeline. Currently `/api/check` and `/api/mark`
-   are still genuinely different pipelines; migrating the website onto
-   `/api/mark`-style logic is a real, not-yet-started task.
-2. **No answer-key/worksheet-bank lookup, ever** — resolved hard rule,
-   the opposite of hk-maths' approach. A question type that seems to
-   need a fixed key instead needs real-time AI visual derivation
-   (genuinely read the ruler, genuinely count the objects) or an honest
-   `needs_review`.
-3. **`needs_review` is a correct output, never a failure to eliminate.**
-   Same discipline across math, the new question-type verifiers, and
-   the (unbuilt) Chinese/English judgment layer.
-4. **Teacher-parity is the real north star, with no fixed finish date**:
-   "老師改到嘅功課，呢個app都要改到" — whatever a real teacher could
-   mark without an answer key, this app should eventually handle too.
-   Explicitly NOT "cover the N benchmark photos" — new question types
-   keep appearing forever, so no "100% coverage" date should ever be
-   stated as achievable.
-5. **Sonnet is being shelved for cost, not quality** — don't reintroduce
-   "Sonnet is worse" as a reason for anything; it isn't the reason.
-6. **Never ask the user to verify a fix on the real production URL** —
-   use `?demoId=`/`/api/test-noai-check` or local mocked tests. (This
-   was broken once, justifiably, during a live incident — not a general
-   exception.)
-7. **Real model-swap testing costs real money** — confirm with the user
-   before each new candidate, per their explicit "don't give up after
-   one failure" instruction: keep working the list, don't stop after a
-   single rejection, but don't spend without asking either.
+Earlier in the same session, already pushed to `origin/main`:
+mixed-number fraction support, 4 new Tier-A verifiers from a real P5
+exam, the `PRODUCTION_OCR_MODEL` extraction, and the model-comparison
+route add+removal.
+
+**Tests**: 301/301 passing (`node --test test/*.test.js`).
+
+**Real-data rigor check completed tonight** (40 real photos: 16 curated
++ 24 from the real inbox, verified by direct human-equivalent read, not
+just automated comparison): of the 28 photos that were genuinely
+homework content, only **7/28 (25%) were clean, 17/28 (61%) had a
+confirmed real transcription error**, 4/28 were too ambiguous to call.
+Concrete failure modes found (see TICKETS.md Tickets 1-3 for the fixes):
+computing an answer for a blank/unanswered item, reporting a teacher's
+correction as the student's own answer, misreading printed digits,
+dropping whole lines of content, fabricating content on hard-to-read
+photos, and inconsistently declining non-homework screenshots.
+
+**Model comparison, same rigor pass**: tested Claude Haiku 4.5, Gemini
+3.7 Flash, and Qwen3.6-flash against the current baseline
+(`PRODUCTION_OCR_MODEL`) on the same 40 photos — all 3 were both less
+accurate AND more expensive; Qwen3.6-flash was ~unusable (a reasoning
+model burning its whole completion budget before producing OCR output,
+8% success rate). **Conclusion: keep the baseline model** — but note
+this says nothing about the baseline's OWN absolute accuracy (see the
+rigor-check numbers above for that; they're the real, separate finding).
+
+**Open tickets** (see TICKETS.md "2026年9月25號" section for full detail,
+1-8): prompt fixes for blank-handling/teacher-marks/homework-detection
+(1-3), the Vision-primary printed-text mechanism from §2b (4), the
+dropped-content safety net (5), PDF upload handling (6), cross-page
+question stitching for Telegram — `/api/check` already has this via
+`stitchPages`, `/api/mark` has no equivalent (7), and the website
+migration onto the shared pipeline (8, blocked on 1-6 being done AND
+re-verified with the same rigor method before cutting over).
+
+## 4. Standing product principles
+
+1. **Accuracy is the floor, never traded for cost/speed/cleanliness/
+   shipping timeline** — explicit cross-project hard rule, reaffirmed
+   2026-09-25 directly in this project's context.
+2. **A comparison test's baseline/reference must be independently
+   verified correct BEFORE the comparison is meaningful** — hard rule,
+   arising directly from tonight's model-comparison methodology gap
+   (see §3).
+3. **One shared backend eventually** — website and Telegram (and any
+   future interface) are thin windows over one pipeline. `/api/check`'s
+   internals are the thing being replaced; `/api/mark`'s pipeline SHAPE
+   is the target, not the other way round.
+4. **No answer-key/worksheet-bank lookup, ever** — resolved hard rule,
+   the opposite of sibling project hk-maths' approach.
+5. **`needs_review` is a correct output, never a failure to eliminate.**
+6. **Teacher-parity is the north star, no fixed finish date**: whatever
+   a real teacher could mark without an answer key, this app should
+   eventually handle too.
+7. **Sonnet is shelved for cost, not quality** — don't reintroduce
+   "Sonnet is worse" as a reason for anything.
+8. **Real model-swap testing costs real money** — confirm with the user
+   before each new candidate, with a real priced cost range up front.
+9. **No AI call can be guaranteed 100% correct** — layered, independent
+   defenses (prompt rules, Vision cross-checks, human review as the
+   final backstop) reduce risk; nothing eliminates it outright. Don't
+   promise a stronger guarantee than that.
 
 ## 5. Where to look for more detail
 
-- Full technical/decision history (every model tried, every real A/B/C/D
-  benchmark result): `project_hk_homework_check_architecture.md` memory
-  — long, chronological, worth skimming for the specific incident you
-  care about rather than reading start to end.
-- Roadmap with explicit 1-week/1-month/6-month framing:
-  `project_hk_homework_check_roadmap.md` memory (see TICKETS.md in this
-  repo for the same content turned into concrete tickets).
-- Chinese/English verification design (not built):
-  `project_hk_homework_check_chinese_english_verifier_design.md` memory.
-- Small known code issues + UX notes, nothing acted on yet:
-  `project_hk_homework_check_code_notes.md` memory.
-- This project's own running question-type catalog:
-  `benchmark/question-type-library.md` (in-repo, most current source for
-  "what question types exist and what's their status").
-
-See `TICKETS.md` (same repo) for the triage + ticket breakdown.
+- `TICKETS.md` (this repo) — the actual task list, triaged, including
+  tonight's 8 new items.
+- `benchmark/question-type-library.md` (this repo) — running catalog of
+  every question type found, its solvability tier, code status.
+- `project_hk_homework_check_architecture.md` (Claude memory) — long
+  chronological history of every model tried, every A/B/C/D benchmark.
+- `project_ai_model_watch.md` (Claude memory) — the cross-project vision
+  model tracking initiative this project's model choice feeds from.
