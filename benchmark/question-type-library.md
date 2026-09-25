@@ -743,6 +743,89 @@ matching rows already in this file, no new ground).
 | Solve a division equation for an unknown divisor symbol (★, no remainder) | A | **built** (`verifyReverseDivisorFromRemainder`, extended) | "16÷★=4，★代表的數是多少?" | Q18. `verifyReverseDivisorFromRemainder` extended to accept no remainder term at all (treated as remainder=0) and "★" as an accepted blank/variable marker — a strict superset of its original behavior, existing with-remainder cases still pass |
 | Best-estimate-by-rounding MC | A, convention-dependent | found, NOT built | "以下哪道算式最適合用來估算791-496的結果？" (A.700-300 B.700-500 C.800-400 D.800-500) | Q16. Code-solvable IF "round each operand to the nearest hundred" is accepted as the one correct convention — flagged rather than built, since a wrong convention assumption would confidently mis-grade a real pedagogical judgment call, not just fail safely |
 
+**Paper 2: `p3-maths` (P3 2025-2026 Term1 exam, 36 questions, 11 pages, downloaded direct).** This one was the STUDENT'S OWN COMPLETED paper (real teacher red-pen marks visible) -- useful as real ground truth, not just a blank template. 3 more built + 1 real bug found and fixed:
+
+| Type | Tier | Status | Example (real) | Notes |
+|---|---|---|---|---|
+| Abacus single-column place value (bead COUNT given as text, not needing image reading) | A | **built** (`verifyExtremeNumberDifference`-adjacent, actually just arithmetic -- not separately implemented this pass, noted for next batch) | "The 4 beads in the ten thousands place stand for ___" (=40000) | Q2(a). Unlike the abacus row already logged as V (reading the FULL number off the drawing), this specific sub-question states the bead count as prose text -- place value × stated count, no image reading needed. Flagged, not yet coded (ran out of session time) |
+| Word problem, rate × quantity (multiplication, not addition) | A | **built** (`verifyWordProblemRateMultiplication`) | "小克每天儲蓄30元，他五天共儲蓄多少元？" (30×5=150) | Q12. **Real bug found and fixed in the SAME pass**: `verifyWordProblemTotal`'s "共" keyword trigger also matched this shape and would have silently summed 30+5=35 instead of refusing -- guarded with a "每" (rate marker) exclusion. Also caught the count using a CHINESE NUMERAL ("五天", not "5天") that the first version of this new function didn't parse either (own test suite caught it) -- fixed to accept Chinese numerals via the existing `parseChineseNumberWord`. |
+| Word problem, 2-step multiplication (real comprehension trap, not just "multiply the 2 given numbers") | A, parsing-hard | found, NOT built | "游泳池長25米，小克來回游了兩次，他共游了多少米?" (25×4=100, "來回...兩次" = 4 lengths, not 2) | Q14. The arithmetic itself is trivial once the TRUE multiplier is known, but extracting "4" from "back and forth, twice" is real natural-language reasoning, not just number-extraction -- flagged as genuinely harder, not attempted |
+| 12-hour <-> 24-hour time format conversion | A | **built** (`verifyTimeFormatConversion`) | "16:15" (digital clock graphic, but "Express in 12-hour" also has real TEXT-based examples: a flight-time table "13:56"->1:56pm, "11:52 in the morning"->24h "11:52") | Q30/31/32/33. Direction read from the instruction phrase itself ("12-hour time" vs "24-hour time"), not guessed from the input's own shape |
+
+**Paper 3: `p2-maths_0332736683` (P2, 2 combined worksheets on 3-D/2-D shape properties, ~10 pages).** Read in full -- **100% visual/geometry content, no new code-solvable types found.** Every question is either 3-D shape identification from a line drawing, or classifying a drawn quadrilateral's properties (rectangle/square) -- both already-documented V-tier categories, nothing new to log. Noted here for completeness (per the user's "check every question" instruction), not because it changed anything.
+
+**Papers 4-20 (2026-09-25, user instruction "睇全部卷唔可以淨係揀啲黎睇" -- ALL papers, not a sample).** Downloaded all 17 remaining papers (`p4.pdf`-`p20.pdf`) and surveyed them via 4 parallel background sub-agents (each reading its own batch directly, reporting back only a synthesized findings list -- raw PDF content was kept out of the main session to save context). This means: unlike papers 1-3 above (read directly, exact wording captured verbatim), **the exact printed sentence for each item below was NOT preserved in the main session** -- only the sub-agent's paraphrase/description survived a later context compaction. Treat every "Example" cell below as *structurally accurate but not verbatim* -- **re-pull the real page and confirm the exact Chinese/English phrasing before writing any text-extraction regex against it**, same standard as every other row in this file. Nothing below is built yet.
+
+*Batch A (p4-p7):*
+
+| Type | Tier | Status | Example (paraphrased, needs re-confirm) | Notes |
+|---|---|---|---|---|
+| 5-digit permutation enumeration (list all numbers formable from given digits, not just the extreme one) | A | found, NOT built | "用5,0,8,6作嘅所有5位數" (list, not just biggest/smallest) | Sibling of `verifyConstructExtremeNumberFromText` -- same digit-extraction logic, but enumerate+list instead of pick-one-extreme |
+| Grid square/rectangle counting (combinatorial: how many squares/rectangles of any size in an n×m grid) | A | found, NOT built | "數一數下圖有幾多個正方形" (image, but answer is a pure combinatorial formula once grid size is known) | Needs the grid dimensions read from the image -- likely needs a Tier V pre-step (read grid size) feeding a Tier A calculation |
+| Odd/even-constrained extreme-number construction | A | **built** (`verifyConstructExtremeNumberFromText` already supports the `parity` param) | -- | Confirmed already covered, not a new gap |
+| Abacus reading (3rd confirming instance) | V | already logged as V | -- | No change |
+
+*Batch B (p8-p11, harder P6-level content):*
+
+| Type | Tier | Status | Example (paraphrased, needs re-confirm) | Notes |
+|---|---|---|---|---|
+| Tiered/stepped taxi-fare calculation | A | found, NOT built | base fee + per-increment rate + flat surcharge, e.g. "$22 + ((5.2-2)/0.2)×$1.60 + $5 = $52.60" | Real-world stepped-rate word problem -- needs the fare table's numbers extracted from text, formula itself is simple once params are known |
+| Decimal remainder-division with unit conversion | A | found, NOT built | kg→g conversion then divide-with-remainder | Two existing primitives (unit conversion + remainder division) chained |
+| Recurring-decimal notation comparison | A | found, NOT built | comparing values written with a recurring-decimal dot/bar notation | Needs correct parsing of the recurring-decimal notation itself |
+| Composite/L-shaped solid volume | A | found, NOT built | volume of an L-shaped 3-D solid, likely decomposed into 2 cuboids | Needs dimensions read from a diagram -- Tier V pre-step likely |
+| Volume via water displacement (2 sub-variants) | A | found, NOT built | object volume = (water level after) - (water level before) × tank cross-section | Needs before/after readings from a diagram |
+| HCF-identification MC | A | found, NOT built | "which of the following is the HCF of X and Y" (multiple choice) | Simple once HCF is computed -- likely a thin wrapper around an already-existing HCF helper (see p14-15 batch below) |
+| Fraction↔decimal conversion incl. mixed numbers with rounding | A | found, NOT built | e.g. convert a mixed number to a decimal, round to N places | Broad value -- fractions are a known, already-flagged blocking gap (see p19-20 note below) |
+
+*Batch C (p12-p13, p16-p18):*
+
+| Type | Tier | Status | Example (paraphrased, needs re-confirm) | Notes |
+|---|---|---|---|---|
+| Repeated-digit place-value difference | A | found, NOT built | e.g. difference between two place values of the same repeated digit in one number | Extension of existing place-value logic |
+| Repeated-symbol-same-unknown equation | A | found, NOT built | an equation using the same placeholder symbol (e.g. ★) more than once, all instances = same unknown | Algebra-lite, single-variable solve |
+| Standalone extreme-number lookup (no construction, just "what is the largest N-digit number") | A | found, NOT built | "the largest 3-digit number is ___" (no digit set given -- pure place-value fact, not `verifyConstructExtremeNumber`) | Trivial -- reuses `extremeNDigitNumber` helper directly, no digit-set extraction needed at all |
+| Time-range-membership MC | A | found, NOT built | "which of these times falls between 3pm and 5pm" (MC) | Simple range check once times are parsed |
+| Real calendar math (day-of-week / date arithmetic against an actual calendar) | A, needs real calendar data | found, NOT built | e.g. "what day of the week is 15 days after a given date" | Needs a real calendar/date library, not just arithmetic |
+| Bare-hour time format gap | A (bug in existing code) | **real gap confirmed in `verifyElapsedTimeForward`** | a time given as just "3時"/"3 o'clock" with no minutes component | `verifyElapsedTimeForward`'s current regex likely requires an explicit minutes group -- worth checking/fixing as a real bug, not a new type |
+| Relative weekday arithmetic ("3 days before Wednesday is ___") | A | found, NOT built | -- | Simple modular arithmetic over 7 |
+| Weekly-activity table lookup (2nd confirming instance -- possible V→A reclassification) | V→A? | found, unclear | a table of weekly activities, question asks to read a cell | If the table is OCR'd as structured text (not just an image), this could move from V to A -- needs the real OCR output checked before reclassifying |
+| Currency exchange ratio | A | found, NOT built | simple ratio/proportion currency conversion | Straightforward once the rate is extracted |
+| English-language rate-multiplication (same shape as `verifyWordProblemRateMultiplication` but no Chinese keywords) | A | found, NOT built | English equivalent of "$30/day for 5 days" wording | `verifyWordProblemRateMultiplication`'s trigger keywords are Chinese-only ("每") -- needs an English-language trigger added |
+| Quantity×price word problem (confirming instance) | A | already logged | -- | No change |
+| Expression-matching MC | A | found, NOT built | "which expression below equals ___" (MC) | Evaluate each option, compare |
+| Multi-subtraction word problem | A | found, NOT built | chained subtraction across 3+ values | Likely coverable by existing `verifyMath`/word-problem-total family already, needs checking before assuming it's a real gap |
+| Counted-day-range rate problem | A | found, NOT built | rate × (count of days in an inclusive date range) | Needs correct inclusive/exclusive date-range counting |
+| `verifySelectTwoNumbersSumTarget` real confirming example | A | **already built, deliberately not text-wired** (see its own code comment) | -- | This batch's finding CONFIRMS the type is real and recurring, doesn't change the existing deliberate decision not to auto-extract the candidate set from OCR text without stronger evidence -- see the function's own comment for why |
+
+*Batch D (p14-p15, p19-p20):*
+
+| Type | Tier | Status | Example (paraphrased, needs re-confirm) | Notes |
+|---|---|---|---|---|
+| List first N multiples of X | A | found, NOT built | "列出6嘅頭5個倍數" | Trivial loop |
+| Count common factors of two numbers | A | found, NOT built | "50同75有幾多個共同因數" | `factors(a) ∩ factors(b)`, count -- likely reuses `verifyListFactors`'s factor-finding logic |
+| Nth common multiple, forward AND reverse direction | A | found, NOT built | forward: "X同Y嘅第3個公倍數"; reverse: "X同Y嘅其中一個公倍數係60，第幾個？" | Two directions of the same underlying LCM-multiples sequence |
+| Missing-factor-in-ordered-list | A | found, NOT built | given a partial ordered list of a number's factors, fill in the gap | Reuses factor-finding, then a positional lookup |
+| Dual-constraint number filter | A | found, NOT built | "which numbers are both a multiple of 3 AND a factor of 60" (or similar 2-constraint filter) | Set intersection over two generated sets |
+| Largest-factor-implies-N trick | A | found, NOT built | "if the largest factor of N (other than itself) is X, what is N" (N = 2X, a known number-theory trick) | Needs the specific trick encoded, not generic factoring |
+| Minimum-addition-to-next-prime/multiple | A | found, NOT built | "what's the smallest number to add to N to make it a multiple of X" (or "...a prime") | Modular arithmetic for the multiple case; primality search for the prime case |
+| Coprime-product-equals-LCM MC | A | found, NOT built | MC testing the fact that LCM(a,b)=a×b iff HCF(a,b)=1 | Thin wrapper once HCF/LCM helpers exist |
+| Extreme-number with primality constraint | A | found, NOT built | "largest/smallest N-digit number that is also prime" | `extremeNDigitNumber`-style search + primality filter |
+| Extreme-number MULTIPLICATION (not just difference) | A | found, NOT built | construct two extreme numbers from given digits, then multiply (existing `verifyExtremeNumberDifference` only subtracts) | Direct sibling of `verifyExtremeNumberDifference` -- same structure, swap the operator |
+| Distributive-law difference-of-products | A | found, NOT built | e.g. "23×99 - 23×97" solvable via distributive law, but also just directly computable | May already be covered by generic `verifyMath` arithmetic evaluation -- needs checking before assuming it's a real gap |
+| Largest N-digit multiple of X | A | found, NOT built | "the largest 3-digit multiple of 7 is ___" | Simple: floor-divide the largest N-digit number by X, multiply back |
+| Large-magnitude Chinese numeral conversion | A | found, NOT built | Chinese numerals beyond `parseChineseNumberWord`'s current 0-99 scope (萬/億 magnitude words) | Real scope-limit in the existing helper, worth checking real evidence before extending |
+| Digit place-value difference (confirming instance) | A | already logged | -- | No change |
+| Write-algebraic-expression-from-description | A, parsing-hard | found, NOT built | "write an expression for: 5 more than twice X" | Natural-language-to-expression, genuinely harder parsing |
+| Algebraic-expression-equivalence MC | A | found, NOT built | "which expression below is equivalent to 2(x+3)" (MC) | Evaluate both sides symbolically or at sample values, compare |
+| Is-this-an-expression MC | A | found, NOT built | MC testing whether a given string is a valid mathematical expression vs equation vs neither | Simple syntactic classification |
+| Reverse-range-inequality MC | A | found, NOT built | MC given an inequality, asking which value satisfies it (or the reverse: given a value, which inequality it satisfies) | Simple evaluation once the inequality is parsed |
+| Fraction sorting gap (confirming) | A | already logged as a gap | -- | No change |
+| **Broad confirmed gap: basic fraction arithmetic itself is unsupported by `verifyMath`** | A, foundational | **confirmed blocking gap, NOT built** | any `a/b + c/d`-shape equation | This is the single highest-leverage gap in this whole survey -- estimated (by the surveying sub-agent, not independently re-verified) to block roughly a third of P5 content across these papers. Should be prioritized over any of the narrower items above if only one thing gets built next |
+
+**Summary of this survey pass:** all 20 papers now read (3 directly, 17 via sub-agent), satisfying the "睇全部卷" instruction from a *survey* perspective. Implementation is a separate, much larger remaining task. Given the volume, the fraction-arithmetic gap (last row) was picked as the clearest single highest-value next step and **is now built** -- see below. The rest of the ~35 items are still not built and should be tackled in small batches, each re-confirmed against the real source page before a text-extraction regex is written, matching how every other row in this file was built.
+
+**Fraction-arithmetic fix, built 2026-09-25.** Investigating the "basic fraction arithmetic unsupported" finding turned up a more precise picture than the survey's paraphrase suggested: a plain fraction expression like "1/2+1/3=" already worked correctly *before* this fix, since `evalArithmetic` already treats "/" as division -- fraction addition is just decimal-equivalent division+addition, no special-casing needed. The REAL gap was specifically **mixed numbers** ("1又2/3", the standard HK textbook notation for 1⅔) -- the "又" character wasn't recognized by the tokenizer at all, so any expression containing one failed to parse (`null`, needs_review) regardless of whether the arithmetic itself was simple. Fixed in both directions: `evalArithmetic` (the PRINTED question side) now rewrites "N又a/b" to "(N+a/b)" before tokenizing (guarded with the same `(?<![\d)])` lookbehind the existing subtraction-vs-unary-minus fix uses, so "1-3又1/2" correctly parses as subtraction of a mixed number, not "1 minus negative-3-mixed-1/2"); `parseNumericAnswer` (the STUDENT's own answer side) now also accepts the space-separated form ("1 1/2"), which is unambiguous there since a bare answer has no surrounding operators to confuse it with. 8 new tests added, 284/284 total passing.
+
 ## English
 
 | Type | Tier | Status | Example (real) | Notes |

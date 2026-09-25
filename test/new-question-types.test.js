@@ -1346,3 +1346,48 @@ test("time format conversion: 12h source with no am/pm word stays null (ambiguou
   const r = mod.verifyTimeFormatConversion("Express the time in '24-hour time'. 11:52", "11:52");
   assert.equal(r.correct, null);
 });
+
+// --- Mixed-number fraction arithmetic (2026-09-25, real gap found in a
+// P8-11 worksheet survey: "1/2+1/3" already worked via the existing
+// division operator, but "1又2/3" style mixed numbers made the whole
+// expression unparseable) ---------------------------------------------
+
+test("verifyMath: plain fraction addition already worked before this fix (sanity check)", () => {
+  const r = mod.verifyMath("1/2+1/3=", "5/6");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: mixed-number addition, printed expression side (1又1/2+2又1/3=)", () => {
+  const r = mod.verifyMath("1又1/2+2又1/3=", "23/6");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: mixed-number printed expression, wrong student answer", () => {
+  const r = mod.verifyMath("1又1/2+2又1/3=", "4");
+  assert.equal(r.correct, false);
+});
+
+test("verifyMath: student answer given as a mixed number (Chinese 又 form)", () => {
+  const r = mod.verifyMath("1/2+1=", "1又1/2");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: student answer given as a mixed number (space form)", () => {
+  const r = mod.verifyMath("1/2+1=", "1 1/2");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: negative mixed-number student answer", () => {
+  const r = mod.verifyMath("1-3又1/2=", "-2又1/2");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: bare fraction as both printed expression and answer (3/4 = 3÷4, already handled via the division operator)", () => {
+  const r = mod.verifyMath("3/4", "3/4");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: mixed number on both sides of a subtraction", () => {
+  const r = mod.verifyMath("3又1/2-1又1/4=", "2又1/4");
+  assert.equal(r.correct, true);
+});

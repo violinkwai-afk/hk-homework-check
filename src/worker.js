@@ -1772,6 +1772,23 @@ function parseOcrLine(text) {
 // lookbehind, same "at least 2 number tokens required" rule below).
 function evalArithmetic(str) {
   const cleaned = String(str)
+    // Mixed number ("1又2/3", the standard HK textbook notation for 1⅔)
+    // -> an equivalent parenthesised sum, so the EXISTING +/÷ operators
+    // below handle it exactly (no lossy pre-rounding to a decimal).
+    // 2026-09-25: real evidenced gap from a P8-11 worksheet survey --
+    // "basic fraction arithmetic unsupported" turned out to mostly
+    // already work (a plain "1/2+1/3" already evaluates fine via the
+    // existing division operator), the real gap was specifically the
+    // MIXED-number form, which "又" doesn't tokenize as anything and
+    // previously made the whole expression unparseable (null). Only the
+    // "又"-separated form is handled HERE (in the printed-expression
+    // side) -- a bare-space form ("1 1/2") is deliberately NOT handled
+    // here, since whitespace is stripped a few lines below and a
+    // space-separated mixed number would become indistinguishable from
+    // a plain fraction ("11/2") once spaces are gone. parseNumericAnswer
+    // below (the student's OWN answer, never mixed with other operators)
+    // has no such ambiguity and does accept the space form.
+    .replace(/(?<![\d)])(-?\d+)又(\d+\/\d+)/g, "($1+$2)")
     .replace(/[×x]/gi, "*")
     .replace(/÷/g, "/")
     .replace(/[（]/g, "(")
@@ -1846,6 +1863,22 @@ function evalArithmetic(str) {
 // plain parseFloat, same as before this fix.
 function parseNumericAnswer(str) {
   const s = String(str).trim();
+  // Mixed number: a whole part plus a fraction part, joined either by
+  // the Chinese "又" ("1又2/3") or a plain space ("1 2/3") -- both real
+  // HK worksheet conventions (2026-09-25, P8-11 survey). Checked before
+  // the plain-fraction case below so "1又2/3"/"1 2/3" don't fall through
+  // to it; unlike evalArithmetic above, there's no ambiguity here since
+  // this parses ONE standalone student answer, not part of a larger
+  // expression that gets whitespace-stripped.
+  const mixedMatch = /^(-?\d+)(?:又|\s+)(\d+)\/(\d+)$/.exec(s);
+  if (mixedMatch) {
+    const whole = parseFloat(mixedMatch[1]);
+    const num = parseFloat(mixedMatch[2]);
+    const den = parseFloat(mixedMatch[3]);
+    if (den === 0) return NaN;
+    const frac = num / den;
+    return whole < 0 ? whole - frac : whole + frac;
+  }
   const fractionMatch = /^(-?\d+)\/(\d+)$/.exec(s);
   if (fractionMatch) {
     const num = parseFloat(fractionMatch[1]);

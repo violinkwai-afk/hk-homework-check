@@ -2,6 +2,35 @@
 
 2026年9月22號整理，2026年9月23號夜晚再更新（一輪真相測試、push咗兩批嘢之後嘅最新狀態)。同BLUEPRINT.md（總覽果份）一齊睇。每一樣都真係查返個project嘅實際狀態,唔係靠記憶估嘅。
 
+## 🗺️ Wayfinder地圖（用返呢個file做輕量tracker，2026-09-23）
+
+用嚟追蹤「呢個project幾時先算完成」呢個大問題入面，逐條仲未決定嘅細問題。淨係一個人做，所以冇用正式GitHub Issues，靠呢個部分做index。
+
+### 終點（Destination）
+
+*（未定——第一round grilling問緊緊你）*
+
+### Notes
+
+- 用中文（唔好jargon）同用戶（你）溝通，技術細節留喺code comment/呢個file
+- 每次搵到新題型，記錄落benchmark/question-type-library.md，盡量寫code解決
+- 淨係喺真係structural blocker（例如冇OCR field、畫畫答案）先擺低唔做，唔可以純粹因為「麻煩」就唔做
+- 用AI判斷有真銀錢成本——呢個係lever（諗辦法慳錢），唔係擋你唔做嘅理由
+
+### 已經決定咗（Decisions so far）
+
+*（未有——等第一條ticket解決咗先開始記錄）*
+
+### 仲未夠sharp,未做到ticket（Not yet specified）
+
+- 「答晒所有題」究竟包唔包AI判斷嘅題（作文、開放式問題）？
+- 邊啲類型係真係structural做唔到（例如畫畫答案），要點樣正式記錄低「呢個真係out of scope」？
+- Tier V/J（要用AI睇相/判斷）幾時開始起，定係淨係停留喺Tier A（code直接計）？
+
+### Out of scope（暫時未有，定咗終點先知）
+
+---
+
 ## 邊啲問題要處理，分咗類
 
 ### 🔴 急、要盡快決定
