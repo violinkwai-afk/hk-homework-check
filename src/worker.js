@@ -4116,6 +4116,68 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
   };
 }
 
+// Ticket 4 (2026-09-25 rigor check): cross-checks NUMBERS in an item's
+// printed question against Google Vision's own independent reading of
+// the matched region on the page. Vision structurally cannot
+// hallucinate or compute a number -- it has no world knowledge to draw
+// from, it only recognises pixel shapes as characters -- so when AI's
+// reported number and Vision's independently-read number for the SAME
+// position disagree, Vision is treated as correct. Real confirmed bugs
+// this targets: baseline misread a printed "40" as "30" (also
+// internally inconsistent with the printed "5×8" on the same line) and
+// a printed "11" as "14".
+//
+// Deliberately narrower than fully substituting Vision's transcription
+// for the whole printedQuestion string (see TICKETS.md Ticket 4's own
+// note: that fuller design is the eventual target, not yet built here)
+// -- Chinese/English prose content stays AI's own reading, since
+// Vision's own transcription of CJK text can have its own spacing/
+// segmentation quirks that aren't necessarily more reliable for
+// non-numeric content. Only NUMBER tokens get cross-checked, since
+// that's the specific, confirmed failure mode.
+//
+// Reuses the same short alphanumeric-prefix matching approach as
+// findBboxForItem to locate the item's start in Vision's word list,
+// then walks forward through a bounded window of subsequent words
+// (stopping early on a large vertical jump -- a real signal the window
+// ran past this item's own row into the next one) to reconstruct
+// enough of Vision's own reading to pull out its numbers.
+function crossCheckPrintedNumbers(item, visionWords, pageWidth, pageHeight) {
+  if (!item || !item.printedQuestion || !Array.isArray(visionWords) || !visionWords.length) return null;
+  const needle = String(item.printedQuestion).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6);
+  if (!needle || needle.length < 2) return null;
+  const MAX_SPAN = 5;
+  let matchStartIdx = -1;
+  for (let i = 0; i < visionWords.length && matchStartIdx === -1; i++) {
+    let acc = "";
+    for (let j = i; j < Math.min(i + MAX_SPAN, visionWords.length); j++) {
+      const hay = String(visionWords[j].text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!hay) continue;
+      const nextAcc = acc + hay;
+      if (!needle.startsWith(nextAcc)) break;
+      acc = nextAcc;
+      if (acc.length >= 2) { matchStartIdx = i; break; }
+    }
+  }
+  if (matchStartIdx === -1) return null;
+
+  const WINDOW_WORDS = 20;
+  const startWord = visionWords[matchStartIdx];
+  const windowText = [];
+  for (let k = matchStartIdx; k < Math.min(matchStartIdx + WINDOW_WORDS, visionWords.length); k++) {
+    const w = visionWords[k];
+    if (windowText.length > 0 && Math.abs((w.y || 0) - (startWord.y || 0)) > (startWord.h || 20) * 2.5) break;
+    windowText.push(w.text || "");
+  }
+  const visionNumbers = (windowText.join(" ").match(/\d+/g) || []).map(Number);
+  const aiNumbers = (String(item.printedQuestion).match(/\d+/g) || []).map(Number);
+  if (!visionNumbers.length || !aiNumbers.length) return null;
+
+  const mismatches = aiNumbers.filter((n) => !visionNumbers.includes(n));
+  if (!mismatches.length) return { agree: true };
+  return { agree: false, aiNumbers, visionNumbers, mismatches };
+}
+
 // Bounded-concurrency map -- runs at most `concurrency` calls to `fn` at
 // once, in index order, collecting all results (success or thrown) into an
 // array matching `items`' order regardless of completion order.
@@ -4259,6 +4321,16 @@ async function handleMark(request, env) {
   );
   const mapMs = Date.now() - tMap;
 
+  // Module 3b, Ticket 4 (2026-09-25): cross-check printed NUMBERS
+  // against Vision's independent reading, per item -- see
+  // crossCheckPrintedNumbers's own comment for why this is narrower
+  // than a full printed-text substitution. `null` (not run / no
+  // Vision / no numbers to check) is treated as "nothing to flag",
+  // same fail-open-to-trusting-AI behaviour as before this existed.
+  const numberChecksByPage = pageResults.map((pr) =>
+    pr.failed ? [] : pr.items.map((item) => (pr.vision ? crossCheckPrintedNumbers(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
+  );
+
   // Deterministic merge: a failed page is recorded in `pageErrors` and
   // simply contributes no items -- every OTHER page's results are
   // unaffected, unlike the old single-combined-call design where one
@@ -4274,6 +4346,17 @@ async function handleMark(request, env) {
     pr.items.forEach((item, i) => {
       const verdict = verdictsByPage[pageIdx][i];
       const match = matchesByPage[pageIdx][i];
+      // Ticket 4: a confirmed printed-number disagreement with Vision's
+      // own independent reading overrides whatever classifyAndVerify
+      // decided -- a wrong printed number makes any computed
+      // correctAnswer suspect too, so this forces needs_review rather
+      // than risking a confidently-wrong "correct"/"wrong" verdict built
+      // on a misread digit. Never *invents* a corrected verdict from
+      // Vision's numbers -- still fails safe to human review, per this
+      // project's existing "never guess" discipline.
+      const numberCheck = numberChecksByPage[pageIdx][i];
+      const printedNumberMismatch = numberCheck && numberCheck.agree === false;
+      const effectiveCorrect = printedNumberMismatch ? null : verdict.correct;
       // Coverage-expansion feed (2026-09-22): every needs_review item logs its
       // PRINTED question only -- never studentAnswer, never image data -- so a
       // later batch review can catalog real unresolved question shapes without
@@ -4281,25 +4364,26 @@ async function handleMark(request, env) {
       // items (not just non-math), since an unresolved math shape (e.g. a
       // multi-blank item) is just as much a "new type to cover" as a
       // chinese/english item with no verifier at all.
-      if (verdict.correct === null) {
+      if (effectiveCorrect === null) {
         console.log(JSON.stringify({
           event: "mark_unresolved_question",
           subject: verdict.subject,
           printedQuestion: item.printedQuestion || item.label || "",
           parseFailed: !!item.parseFailed,
+          printedNumberMismatch: printedNumberMismatch || undefined,
         }));
       }
       results.push({
         question: item.label,
         studentAnswer: item.studentAnswer,
-        correct: verdict.correct,
-        correctAnswer: verdict.correctAnswer,
+        correct: effectiveCorrect,
+        correctAnswer: printedNumberMismatch ? "" : verdict.correctAnswer,
         subject: verdict.subject,
         // Explicit status alongside `correct` per 2026-09-21 review: null
         // must read unambiguously as "not resolved", never silently coerced
         // to a falsy/"wrong" UI state.
-        status: verdict.correct === null ? "needs_review" : "ok",
-        note: verdict.correct === null ? "需要人手複核" : "",
+        status: effectiveCorrect === null ? "needs_review" : "ok",
+        note: printedNumberMismatch ? "印刷數字唔肯定" : effectiveCorrect === null ? "需要人手複核" : "",
         // Real page index (which call produced this item), not a guess.
         page: pageIdx,
         // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
@@ -4648,6 +4732,7 @@ function json(obj, status) {
 // verifiers above -- test-only surface, does not change the module's
 // default export or any existing behavior.
 export {
+  crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,
   verifyMath,

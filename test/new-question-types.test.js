@@ -1392,6 +1392,63 @@ test("verifyMath: mixed number on both sides of a subtraction", () => {
   assert.equal(r.correct, true);
 });
 
+// --- crossCheckPrintedNumbers (2026-09-25, Ticket 4: printed-number
+// cross-check against Google Vision, targeting the confirmed rigor-
+// check bugs "40"->"30" and "11"->"14" misreads) --------------------
+
+function visionWord(text, x, y, w, h) {
+  return { text, x, y, w: w || 10, h: h || 20 };
+}
+
+test("crossCheckPrintedNumbers: agreement when AI's number matches Vision's", () => {
+  const item = { printedQuestion: "5×8=", label: "1" };
+  const visionWords = [visionWord("5", 10, 10), visionWord("×", 20, 10), visionWord("8", 30, 10), visionWord("=", 40, 10), visionWord("40", 50, 10)];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 200);
+  assert.equal(r.agree, true);
+});
+
+test("crossCheckPrintedNumbers: real bug -- AI read 40 as 30, Vision's own reading says 40", () => {
+  const item = { printedQuestion: "5×8=30", label: "1" };
+  const visionWords = [visionWord("5", 10, 10), visionWord("×", 20, 10), visionWord("8", 30, 10), visionWord("=", 40, 10), visionWord("40", 50, 10)];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 200);
+  assert.equal(r.agree, false);
+  assert.deepEqual(r.mismatches, [30]);
+});
+
+test("crossCheckPrintedNumbers: real bug -- AI read 11 as 14, Vision's own reading says 11", () => {
+  const item = { printedQuestion: "Pack 14 cans", label: "2" };
+  const visionWords = [visionWord("Pack", 10, 10, 30), visionWord("11", 45, 10), visionWord("cans", 60, 10, 30)];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 200);
+  assert.equal(r.agree, false);
+  assert.deepEqual(r.mismatches, [14]);
+});
+
+test("crossCheckPrintedNumbers: no Vision match found (e.g. Vision missed the region) stays null, doesn't false-flag", () => {
+  const item = { printedQuestion: "9+9=18", label: "1" };
+  const visionWords = [visionWord("totally", 10, 10), visionWord("unrelated", 40, 10), visionWord("text", 70, 10)];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 200);
+  assert.equal(r, null);
+});
+
+test("crossCheckPrintedNumbers: window stops at a new row, doesn't pull in the next item's numbers", () => {
+  // Same X-ish start, but the next item's row is far below (a real new
+  // question), so its "99" must not leak into this item's number set.
+  const item = { printedQuestion: "3+3=6", label: "1" };
+  const visionWords = [
+    visionWord("3", 10, 10), visionWord("+", 20, 10), visionWord("3", 30, 10), visionWord("=", 40, 10), visionWord("6", 50, 10),
+    visionWord("99", 10, 200), // a different item, far below
+  ];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 300);
+  assert.equal(r.agree, true);
+});
+
+test("crossCheckPrintedNumbers: printed question with no numbers at all stays null", () => {
+  const item = { printedQuestion: "What is your name?", label: "1" };
+  const visionWords = [visionWord("What", 10, 10, 30), visionWord("is", 45, 10)];
+  const r = mod.crossCheckPrintedNumbers(item, visionWords, 200, 200);
+  assert.equal(r, null);
+});
+
 // --- 2026-09-25 batch: real P5 1st-term exam (p1-p6.com, downloaded and
 // read directly) --------------------------------------------------------
 
