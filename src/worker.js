@@ -141,13 +141,6 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
-    // TEMPORARY, real-money route -- 2026-09-25 vision-model cost/accuracy
-    // comparison (3 candidates vs the current baseline), token-gated, see
-    // handleTestOcrModelCompare's own comment. Remove once the comparison
-    // is done and a model decision is made.
-    if (url.pathname === "/api/test-ocr-model-compare" && request.method === "POST") {
-      return handleTestOcrModelCompare(request, env);
-    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -1571,11 +1564,13 @@ function downscaleForCheapTier(img, maxDim) {
 // used to hardcode this string independently (flagged 2026-09-22 in
 // [[project_hk_homework_check_code_notes]], never acted on until now,
 // per the user's 2026-09-25 request that a future model swap be easy).
-// A swap now only means changing this one line -- see also
-// OCR_COMPARE_ALLOWED_MODELS below for the separate, explicit allowlist
-// used by the temporary model-comparison test route, which intentionally
-// does NOT reuse this constant since it needs to call OTHER candidate
-// models too, not just the production one.
+// A swap now only means changing this one line. (2026-09-25 real-data
+// comparison against 3 candidates -- Claude Haiku 4.5, Gemini 3.7 Flash,
+// Qwen3.6-flash -- concluded this baseline stays: all 3 candidates were
+// both less accurate on real worksheet photos AND more expensive, one
+// (Qwen3.6-flash) was effectively unusable, a reasoning model that burns
+// its token budget "thinking" before ever producing OCR output. See
+// benchmark/ or ask for the numbers if this needs re-litigating later.)
 const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 
 async function callQwen(images, prompt, openrouterKey) {
@@ -1706,104 +1701,6 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
   return { items, usage: data.usage || null };
-}
-
-// TEMPORARY, model-parameterized twin of callQwenOcrText above (2026-09-25
-// vision-model cost/accuracy comparison, docs in memory's AI model watch
-// note) -- SAME prompt, SAME 640px downscale, SAME parseOcrLine parsing,
-// so results are directly comparable to real /api/mark production
-// behaviour. Only the model ID varies. Remove once the comparison is done
-// and a decision is made (keep baseline, or switch).
-const OCR_COMPARE_ALLOWED_MODELS = [
-  PRODUCTION_OCR_MODEL, // current baseline, for a same-batch reference point
-  "anthropic/claude-haiku-4.5",
-  "google/gemini-3.7-flash",
-  "qwen/qwen3.6-flash",
-];
-async function callOcrTextWithModel(images, openrouterKey, model) {
-  const prompt = OCR_ONLY_PROMPT(images.length);
-  const body = {
-    model,
-    max_tokens: 2000,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          ...images.map((img) => ({
-            type: "image_url",
-            image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` },
-          })),
-        ],
-      },
-    ],
-  };
-  const controller = new AbortController();
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => {
-      controller.abort();
-      reject({ kind: "upstream_error", detail: "ocr_compare_timeout", status: 502 });
-    }, 25000); // generous vs the 15s production timeout -- an unfamiliar candidate model's real latency isn't known yet, and a timeout here should read as a genuine data point, not get masked as a false "worked fine"
-  });
-  let res;
-  try {
-    res = await Promise.race([
-      fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${openrouterKey}`,
-          "http-referer": "https://hk-homework-check.violin-kwai.workers.dev",
-          "x-title": "hk-homework-check-ocr-compare",
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      }),
-      timeoutPromise,
-    ]);
-  } catch (e) {
-    return { ok: false, error: (e && e.detail) || String((e && e.message) || e) };
-  }
-  if (!res.ok) {
-    const errText = await res.text();
-    return { ok: false, error: `http_${res.status}: ${errText.slice(0, 300)}` };
-  }
-  const data = await res.json();
-  const choice = data.choices && data.choices[0];
-  if (!choice || choice.finish_reason !== "stop") {
-    return { ok: false, error: `incomplete: ${choice && choice.finish_reason}`, usage: data.usage || null };
-  }
-  const text = (choice.message && choice.message.content) || "";
-  const items = parseOcrLine(text);
-  return { ok: true, items, rawText: text.slice(0, 2000), usage: data.usage || null };
-}
-
-async function handleTestOcrModelCompare(request, env) {
-  // Shared-secret gate: this route spends real money on a caller-chosen
-  // model, unlike this file's other TEMPORARY debug routes (which only
-  // ever call the one already-paid-for production model) -- an
-  // unauthenticated version of THIS one would let anyone run up real
-  // OpenRouter spend against any of the 4 allowed models. Not a KV-backed
-  // system, just a fixed string only shared with the user out-of-band
-  // (Telegram), matching this route's own "temporary, removed after the
-  // comparison" lifetime.
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-
-  const { images, model } = await request.json();
-  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
-  if (!OCR_COMPARE_ALLOWED_MODELS.includes(model)) return json({ error: "model_not_allowed", allowed: OCR_COMPARE_ALLOWED_MODELS }, 400);
-
-  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
-  const t0 = Date.now();
-  const result = await callOcrTextWithModel(downscaled, openrouterKey, model);
-  const elapsedMs = Date.now() - t0;
-  return json({ model, elapsedMs, ...result });
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
