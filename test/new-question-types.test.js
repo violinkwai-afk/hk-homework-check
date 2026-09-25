@@ -1391,3 +1391,94 @@ test("verifyMath: mixed number on both sides of a subtraction", () => {
   const r = mod.verifyMath("3又1/2-1又1/4=", "2又1/4");
   assert.equal(r.correct, true);
 });
+
+// --- 2026-09-25 batch: real P5 1st-term exam (p1-p6.com, downloaded and
+// read directly) --------------------------------------------------------
+
+test("large Chinese numeral -> Arabic: real example, 五億零八百萬零二十 -> 508000020", () => {
+  const r = mod.verifyChineseLargeNumeralToArabic("以阿拉伯數字寫出「五億零八百萬零二十」。", "508000020");
+  assert.equal(r.correct, true);
+});
+
+test("large Chinese numeral -> Arabic: wrong student answer", () => {
+  const r = mod.verifyChineseLargeNumeralToArabic("以阿拉伯數字寫出「五億零八百萬零二十」。", "500080020");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "508000020");
+});
+
+test("large Chinese numeral -> Arabic: student answer with thousands commas still parses", () => {
+  const r = mod.verifyChineseLargeNumeralToArabic("以阿拉伯數字寫出「五億零八百萬零二十」。", "508,000,020");
+  assert.equal(r.correct, true);
+});
+
+test("parseChineseLargeNumber: simple 萬-only case", () => {
+  assert.equal(mod.parseChineseLargeNumber("八百萬"), 8000000);
+});
+
+test("parseChineseLargeNumber: no 萬/億 at all, plain small number", () => {
+  assert.equal(mod.parseChineseLargeNumber("三百五十六"), 356);
+});
+
+test("parseChineseLargeNumber: unrecognized input returns null, not a guess", () => {
+  assert.equal(mod.parseChineseLargeNumber("hello"), null);
+});
+
+test("verifyChineseLargeNumeralToArabic: not this question type, stays null", () => {
+  const r = mod.verifyChineseLargeNumeralToArabic("五億零八百萬零二十", "508000020");
+  assert.equal(r.correct, null);
+});
+
+test("repeated-digit place-value difference: real example, 71460864 two 6s -> 59940", () => {
+  const r = mod.verifyRepeatedDigitPlaceValueDifference("在71460864這個數中，兩個「6」的數值相差多少？", "59940");
+  assert.equal(r.correct, true);
+});
+
+test("repeated-digit place-value difference: wrong student answer", () => {
+  const r = mod.verifyRepeatedDigitPlaceValueDifference("在71460864這個數中，兩個「6」的數值相差多少？", "60");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "59940");
+});
+
+test("repeated-digit place-value difference: digit occurs only once, declines (null)", () => {
+  const r = mod.verifyRepeatedDigitPlaceValueDifference("在71460864這個數中，兩個「7」的數值相差多少？", "0");
+  assert.equal(r.correct, null);
+});
+
+test("substitute and evaluate: real example, T=8, 10+T-6 -> 12", () => {
+  const r = mod.verifySubstituteAndEvaluate("如果T=8，那麼10+T-6的值是______。", "12");
+  assert.equal(r.correct, true);
+});
+
+test("substitute and evaluate: real example with implicit multiplication, F=4, 3F÷2 -> 6", () => {
+  const r = mod.verifySubstituteAndEvaluate("如果F=4，那麼3F÷2的值是______。", "6");
+  assert.equal(r.correct, true);
+});
+
+test("substitute and evaluate: wrong student answer", () => {
+  const r = mod.verifySubstituteAndEvaluate("如果F=4，那麼3F÷2的值是______。", "12");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "6");
+});
+
+test("substitute and evaluate: not this shape, stays null", () => {
+  const r = mod.verifySubstituteAndEvaluate("10+8-6=", "12");
+  assert.equal(r.correct, null);
+});
+
+test("sort fractions ascending: real example, 37/5, 7又7/9, 7又2/3 -- correct ascending order is 37/5 < 7又2/3 < 7又7/9", () => {
+  const candidates = [37 / 5, 7 + 7 / 9, 7 + 2 / 3];
+  const r = mod.verifySortFractionsAscending(candidates, "37/5 < 7又2/3 < 7又7/9");
+  assert.equal(r.correct, true);
+});
+
+test("sort fractions ascending: wrong order", () => {
+  const candidates = [37 / 5, 7 + 7 / 9, 7 + 2 / 3];
+  const r = mod.verifySortFractionsAscending(candidates, "7又2/3 < 7又7/9 < 37/5");
+  assert.equal(r.correct, false);
+});
+
+test("sort fractions ascending: student answer missing one value, declines (null)", () => {
+  const candidates = [37 / 5, 7 + 7 / 9, 7 + 2 / 3];
+  const r = mod.verifySortFractionsAscending(candidates, "7又2/3 < 7又7/9");
+  assert.equal(r.correct, null);
+});

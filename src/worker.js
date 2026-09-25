@@ -3344,6 +3344,164 @@ function verifyMultipleDifference(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// --- 2026-09-25 batch, from a real P5 1st-term exam (p1-p6.com,
+// downloaded+read directly, "二零二五至二零二六年度上學期 五年級 數學科
+// 考試") -- this single exam confirmed several of the ~35 findings
+// logged in benchmark/question-type-library.md's survey section with
+// real evidence, so those are the ones built here first. ----------------
+
+// Large-magnitude Chinese numeral -> Arabic numeral, up to 億 (10^8) --
+// the magnitude actually evidenced (real example: Q8, "以阿拉伯數字寫出
+// 「五億零八百萬零二十」" -> 508000020). Deliberately a SEPARATE parser
+// from parseChineseNumberWord above, not an extension of it -- that
+// function is a flat 0-99 lookup used by several other callers that
+// rely on its narrow scope (e.g. returning null past 99 as a safety
+// guard); this is a different, section-based algorithm for numbers that
+// use 千/百/十/萬/億 place words.
+const CN_UNIT_DIGIT = { 零: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+const CN_SMALL_PLACE = { 十: 10, 百: 100, 千: 1000 };
+const CN_SECTION_PLACE = { 萬: 10000, 億: 100000000 };
+
+// Parses a run of Chinese numeral characters with no 萬/億 in it (a
+// value 0-9999), e.g. "八百" -> 800, "五十六" -> 56, "八" -> 8, "零" -> 0.
+function parseChineseSmallNumber(str) {
+  if (!str) return 0;
+  if (str === "十") return 10; // bare "十" means 10, not "0 tens"
+  let total = 0;
+  let current = 0;
+  for (const ch of str) {
+    if (ch === "零") continue; // filler, carries no value of its own
+    if (CN_SMALL_PLACE[ch] !== undefined) {
+      total += (current === 0 ? 1 : current) * CN_SMALL_PLACE[ch];
+      current = 0;
+    } else if (CN_UNIT_DIGIT[ch] !== undefined) {
+      current = CN_UNIT_DIGIT[ch];
+    } else {
+      return null; // unrecognized character -- fail safe, never guess
+    }
+  }
+  return total + current;
+}
+
+// Full large Chinese numeral, splitting on 億/萬 section markers (each
+// section itself parsed by parseChineseSmallNumber above, then scaled).
+// Returns null on anything not confidently parseable, same fail-safe
+// discipline as every other verifier in this file.
+function parseChineseLargeNumber(str) {
+  const s = String(str || "").trim();
+  if (!s || !/[億萬千百十零一二三四五六七八九兩]/.test(s)) return null;
+  let remaining = s;
+  let total = 0;
+  for (const marker of ["億", "萬"]) {
+    const idx = remaining.indexOf(marker);
+    if (idx === -1) continue;
+    const sectionValue = parseChineseSmallNumber(remaining.slice(0, idx));
+    if (sectionValue === null) return null;
+    total += sectionValue * CN_SECTION_PLACE[marker];
+    remaining = remaining.slice(idx + 1);
+  }
+  if (remaining) {
+    const tailValue = parseChineseSmallNumber(remaining);
+    if (tailValue === null) return null;
+    total += tailValue;
+  }
+  return total;
+}
+
+// "以阿拉伯數字寫出「...」" -- convert a large Chinese numeral phrase
+// (quoted in Chinese corner brackets 「」) to its Arabic-numeral value.
+function verifyChineseLargeNumeralToArabic(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  if (!/阿拉伯數字/.test(printed)) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/「([^」]+)」/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const expected = parseChineseLargeNumber(m[1]);
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(String(studentAnswer || "").replace(/,/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "在NNNN這個數中，兩個「D」的數值相差多少？" -- difference in PLACE
+// VALUE between the two occurrences of the same repeated digit in a
+// number (real example, same exam, Q9: "在71460864這個數中，兩個「6」
+// 的數值相差多少？" -- the two 6s sit at the ten-thousands (60,000) and
+// tens (60) places, difference 59,940). Only fires when the digit
+// appears in the number EXACTLY twice -- 0, 1, or 3+ occurrences means
+// the question (which always says "兩個", "the two") doesn't match what
+// was actually extracted, so this declines rather than guessing which
+// two.
+function verifyRepeatedDigitPlaceValueDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const m = printed.match(/在\s*(\d+)\s*這個數中.*?兩個「(\d)」的數值相差多少/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const numStr = m[1];
+  const digit = m[2];
+  const positions = [];
+  for (let i = 0; i < numStr.length; i++) if (numStr[i] === digit) positions.push(i);
+  if (positions.length !== 2) return { correct: null, correctAnswer: "" };
+  const placeValues = positions.map((i) => Number(digit) * 10 ** (numStr.length - 1 - i));
+  const expected = Math.max(...placeValues) - Math.min(...placeValues);
+  const studentNum = parseSignedStudentNumber(String(studentAnswer || "").replace(/,/g, ""));
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "如果[VAR]=[N]，那麼[EXPR]的值是___" -- substitute a given value for a
+// single-letter variable into an algebraic expression, then evaluate.
+// Real examples (same exam, algebra section): "如果T=8，那麼10+T-6的值
+// 是___" (=12); "如果F=4，那麼3F÷2的值是___" (=6 -- "3F" is IMPLICIT
+// multiplication, a digit immediately followed by the variable letter
+// with no operator between them, handled the same way evalArithmetic
+// itself normalises ×/÷ before tokenizing).
+function verifySubstituteAndEvaluate(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const m = printed.match(/如果\s*([A-Za-z])\s*=\s*(-?\d+(?:\.\d+)?)\s*[，,]\s*那麼\s*(.+?)\s*的值是/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const varName = m[1];
+  const varValue = m[2];
+  const expr = m[3].replace(new RegExp(`(\\d)(${varName})`, "g"), "$1*$2").replace(new RegExp(varName, "g"), varValue);
+  const expected = evalArithmetic(expr);
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const studentNum = parseNumericAnswer(String(studentAnswer || "").trim());
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: Math.abs(studentNum - expected) < 1e-9, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "把以下各分數由小至大排列出來" -- sort a list of fraction/mixed-number
+// VALUES ascending, compare against the student's own ordering. Takes
+// the candidate values as an already-parsed array of numbers, same
+// "structured input, not raw OCR text extraction" design as
+// verifySelectTwoNumbersSumTarget above and for the same reason: the
+// printed values in the real source (same exam, Q10: "37/5, 7又7/9,
+// 7又2/3") are STACKED visual fractions in the PDF image, and reliably
+// extracting THOSE (as opposed to the student's own typed-out answer,
+// which IS free text) from OCR isn't yet confirmed real evidence -- a
+// caller that already has the parsed candidate values can use this
+// directly. The student's own answer, by contrast, IS parsed from free
+// text here (split on the "<"/"，" separators the printed answer
+// template itself uses), since that's the OCR'd HANDWRITING, not a
+// stacked-image value.
+function verifySortFractionsAscending(candidateValues, studentAnswer) {
+  const values = (candidateValues || []).map(Number);
+  if (values.length < 2 || values.some((v) => Number.isNaN(v))) return { correct: null, correctAnswer: "" };
+  const parts = String(studentAnswer || "").split(/[<，,]/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length !== values.length) return { correct: null, correctAnswer: "" };
+  const studentValues = parts.map((p) => parseNumericAnswer(p));
+  if (studentValues.some((v) => Number.isNaN(v))) return { correct: null, correctAnswer: "" };
+  const isAscending = studentValues.every((v, i) => i === 0 || v >= studentValues[i - 1]);
+  const remaining = [...values];
+  const sameMultiset = studentValues.every((v) => {
+    const idx = remaining.findIndex((r) => Math.abs(r - v) < 1e-9);
+    if (idx === -1) return false;
+    remaining.splice(idx, 1);
+    return true;
+  });
+  const correct = isAscending && sameMultiset;
+  const sortedLabel = [...values].sort((a, b) => a - b).map((v) => String(v)).join(" < ");
+  return { correct, correctAnswer: correct ? "" : sortedLabel };
+}
+
 // Round a single printed number to the nearest hundred (real example,
 // 2026-09-23 PDF reading: "用四捨五入法把銷量湊整至百位" table, e.g.
 // 1584->1600). Narrowly triggered on both the method keyword (四捨五入)
@@ -4459,6 +4617,12 @@ export {
   verifyElapsedTimeForward,
   verifyReverseDivisorFromRemainder,
   verifyMultipleDifference,
+  parseChineseSmallNumber,
+  parseChineseLargeNumber,
+  verifyChineseLargeNumeralToArabic,
+  verifyRepeatedDigitPlaceValueDifference,
+  verifySubstituteAndEvaluate,
+  verifySortFractionsAscending,
   verifyRoundToNearestHundred,
   verifyReverseFactorSum,
   verifyDivisionRemainderBlank,
