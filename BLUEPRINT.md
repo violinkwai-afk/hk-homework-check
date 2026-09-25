@@ -79,12 +79,19 @@ see TICKETS.md Ticket 4's own note) division of labour:
   structurally closes that failure mode wherever a match succeeds,
   rather than merely catching it after the fact.
 - **Dropped-content safety net**: separately, pattern-match
-  question-number-shaped tokens in Vision's word list, keep only
-  candidates that are BOTH X-position-aligned with other candidates AND
-  part of a sequential run (1,2,3,4… no gaps) — sequential-increment is
-  what distinguishes a real question-number column from a coincidentally
-  X-aligned table data column. Falls back to "label followed by a clear
-  spacing gap" for pages where numbering isn't aligned. Compare the
+  question-number-shaped tokens in Vision's word list. Primary, strongest
+  signal: a run of candidates that's BOTH X-position-aligned AND
+  sequential (1,2,3,4… no gaps) — sequential-increment is what
+  distinguishes a real question-number column from a coincidentally
+  X-aligned table data column (a data column like 5,8,12,20 won't be a
+  clean ascending run), and doubles as the fix for tables specifically —
+  no separate table-handling logic needed. Fallback signal (when no clean
+  aligned+sequential run is found, e.g. an irregularly-laid-out
+  worksheet): "label followed by a clear spacing gap" before the next
+  word, a purely local check that doesn't depend on page-wide alignment.
+  X-position alignment on its own is a confidence BOOSTER, not a hard
+  requirement — an isolated, unaligned candidate is not auto-discarded,
+  to avoid false-negatives on irregular real layouts. Compare the
   resulting count against how many items AI actually returned; only flag
   "possibly dropped content" on a meaningful margin (2+), not any
   mismatch, to tolerate the method's own imperfection.
