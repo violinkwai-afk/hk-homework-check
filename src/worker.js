@@ -149,11 +149,6 @@ export default {
     if (url.pathname === "/api/mark" && request.method === "POST") {
       return handleMark(request, env);
     }
-    // TEMPORARY, real-money route -- 2026-09-25 raw-OCR verbatim check,
-    // token-gated, see handleTestRawOcr's own comment. Remove once done.
-    if (url.pathname === "/api/test-raw-ocr" && request.method === "POST") {
-      return handleTestRawOcr(request, env);
-    }
     if (url.pathname === "/telegram-webhook" && request.method === "POST") {
       return handleTelegramWebhook(request, env);
     }
@@ -1712,33 +1707,6 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
   return { items, usage: data.usage || null };
-}
-
-// TEMPORARY diagnostic route (2026-09-25, real user request): returns
-// the RAW OCR output (printedQuestion/studentAnswer pairs, exactly what
-// production /api/mark's OCR step produces, via the same
-// callQwenOcrText/downscaleForCheapTier/PRODUCTION_OCR_MODEL path) for
-// one image -- unlike /api/mark's own response, which drops
-// printedQuestion once judging is done. Token-gated for the same reason
-// as the earlier model-comparison route (a caller-supplied image still
-// spends real, if tiny, OpenRouter money). Remove once this comparison
-// is done.
-async function handleTestRawOcr(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
-  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
-  try {
-    const r = await callQwenOcrText(downscaled, openrouterKey);
-    return json({ ok: true, items: r.items, usage: r.usage });
-  } catch (e) {
-    return json({ ok: false, error: (e && (e.detail || e.uiMessage)) || String(e) });
-  }
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
