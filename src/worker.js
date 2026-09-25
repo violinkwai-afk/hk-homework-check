@@ -2762,10 +2762,58 @@ function parseSignedStudentNumber(answer) {
 // ORDINAL labels ("第1組"/"第2組") were treated as quantities -- the
 // `(?<!第)` exclusion below keeps a number immediately preceded by "第"
 // (a Chinese ordinal marker, never itself a quantity) out of the sum.
+// Real example found 2026-09-25 (p1-p6.com P3 2025-2026 Term1, Q12):
+// "小克每天儲蓄30元，他五天共儲蓄多少元？" (30×5=150) -- a RATE word
+// problem (每 = per/each), not a same-kind-count addition (see the "每"
+// guard added to verifyWordProblemTotal above, found from this exact
+// example). Narrow trigger: exactly 2 numbers, a "每" rate marker on
+// the FIRST number, and a 共/總共/一共/合共 keyword -- multiplies rather
+// than sums.
+// 2026-09-25 real bug found (own test suite, real example): the printed
+// quantity is very often a CHINESE NUMERAL, not an ASCII digit ("五天",
+// not "5天") -- the original version only ever matched ASCII \d+, so it
+// silently found just 1 number (the rate) on the exact real example
+// this function was built from, and returned null instead of the
+// correct 30×5. Finds both an ASCII number AND a Chinese-numeral count
+// (immediately before a common counting-unit character), in either
+// order, rather than assuming ASCII-only.
+const RATE_MULTIPLICATION_UNIT_RE = /([一二兩三四五六七八九十]+|\d+)(?=天|日|次|個|年|月|小時|星期|週|盒|包|本|支|條)/;
+function verifyWordProblemRateMultiplication(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/每/.test(printed) || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
+
+  const rateMatch = printed.match(/(?<!第)\d+/);
+  if (!rateMatch) return { correct: null, correctAnswer: "" };
+  const rate = Number(rateMatch[0]);
+
+  const unitMatch = printed.slice(rateMatch.index + rateMatch[0].length).match(RATE_MULTIPLICATION_UNIT_RE) || printed.match(RATE_MULTIPLICATION_UNIT_RE);
+  if (!unitMatch) return { correct: null, correctAnswer: "" };
+  const countToken = unitMatch[1];
+  const count = /^\d+$/.test(countToken) ? Number(countToken) : parseChineseNumberWord(countToken);
+  if (count === null || Number.isNaN(count)) return { correct: null, correctAnswer: "" };
+
+  const expected = rate * count;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = studentNum === expected;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
+  // 2026-09-25 real bug found: this function's own "共" trigger also
+  // fires on a genuinely different real shape -- a RATE word problem
+  // ("小克每天儲蓄30元，他五天共儲蓄多少元" -> 30×5=150, NOT 30+5=35).
+  // The 2026-09-23 decision (ticket B9) to sum every number found when
+  // "共" appears was scoped to same-kind-count-addition examples; a "每"
+  // (per/each) rate marker signals a different operation entirely and
+  // must refuse here rather than silently sum, not be swept into that
+  // decision by the shared keyword. See verifyWordProblemRateMultiplication
+  // for the dedicated handler.
+  if (/每/.test(printed)) return { correct: null, correctAnswer: "" };
   const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
   if (nums.length < 2) return { correct: null, correctAnswer: "" };
   const expected = nums.reduce((a, b) => a + b, 0);
@@ -3132,6 +3180,61 @@ function parseTime12h(str) {
   if (h === 12) h = 0;
   if (isPM) h += 12;
   return h * 60 + min;
+}
+
+// 12-hour <-> 24-hour time format conversion. Real examples found
+// 2026-09-25 (p1-p6.com P3 2025-2026 Term1, Q30/32/33): a bare "HH:MM"
+// with no am/pm marker (a 24-hour-clock reading, "16:15" or a flight
+// table's "13:56") converts to "H:MM in the morning/afternoon", and the
+// reverse ("11:52 in the morning" -> "11:52"). Direction is read from
+// the instruction phrase itself ("Express the time in '12-hour time'" /
+// "以12小時報時制" vs the 24-hour equivalent) rather than guessed from
+// the printed time's own shape, since a plain "11:52" with no period
+// word is ambiguous on its own (could be either direction's input).
+// Deliberately conservative on the student answer's exact wording --
+// accepts any text containing the right hour:minute plus, when
+// converting TO 12-hour, an am/pm-equivalent word -- since the real OCR
+// answer-joining convention for this shape is unconfirmed.
+function verifyTimeFormatConversion(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+
+  const wants12h = /12[-\s]?hour|12\s*小時/i.test(printed);
+  const wants24h = /24[-\s]?hour|24\s*小時/i.test(printed);
+  if (wants12h === wants24h) return { correct: null, correctAnswer: "" }; // neither or both -- ambiguous, refuse
+
+  if (wants12h) {
+    // Source: a bare 24-hour "HH:MM", no am/pm word attached.
+    const m = printed.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b(?!\s*[ap]\.?m\.?)/i);
+    if (!m) return { correct: null, correctAnswer: "" };
+    const h24 = Number(m[1]);
+    const minute = Number(m[2]);
+    const isPM = h24 >= 12;
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    const expectedStr = `${h12}:${String(minute).padStart(2, "0")} in the ${isPM ? "afternoon/evening" : "morning"}`;
+    const answerHasTime = new RegExp(`\\b${h12}[:\\s]${String(minute).padStart(2, "0")}\\b`).test(answer);
+    const periodWord = isPM ? /下午|晚上|afternoon|evening|pm|p\.m\./i : /上午|早上|morning|am|a\.m\./i;
+    const answerHasPeriod = periodWord.test(answer);
+    const correct = answerHasTime && answerHasPeriod;
+    return { correct, correctAnswer: correct ? "" : expectedStr };
+  }
+
+  // wants24h: source is 12-hour with an explicit am/pm-equivalent word.
+  const m = printed.match(/([01]?\d):([0-5]\d)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const isPM = /下午|晚上|afternoon|evening|pm|p\.m\./i.test(printed);
+  const isAM = /上午|早上|morning|am|a\.m\./i.test(printed);
+  if (isPM === isAM) return { correct: null, correctAnswer: "" }; // no period word, or both -- can't determine
+  let h12 = Number(m[1]);
+  const minute = Number(m[2]);
+  if (h12 < 1 || h12 > 12) return { correct: null, correctAnswer: "" };
+  let h24 = h12 % 12;
+  if (isPM) h24 += 12;
+  const expectedStr = `${String(h24).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  const answerDigits = answer.replace(/[^\d:]/g, "");
+  const correct = answerDigits === expectedStr || answerDigits === `${h24}:${String(minute).padStart(2, "0")}`;
+  return { correct, correctAnswer: correct ? "" : expectedStr };
 }
 
 function verifyElapsedTimeForward(printedQuestion, studentAnswer) {
@@ -4327,6 +4430,8 @@ export {
   verifyReverseFactorSum,
   verifyDivisionRemainderBlank,
   verifyExtremeNumberDifference,
+  verifyWordProblemRateMultiplication,
+  verifyTimeFormatConversion,
   parseSignedStudentNumber,
   DIGIT_COUNT_OF_N_PLUS_ONE_RE,
   classifyAndVerify,

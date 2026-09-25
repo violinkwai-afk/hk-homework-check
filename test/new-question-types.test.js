@@ -1279,3 +1279,70 @@ test("extreme number difference: no matching phrase stays null", () => {
   const r = mod.verifyExtremeNumberDifference("34+12=", "46");
   assert.equal(r.correct, null);
 });
+
+// --- verifyWordProblemRateMultiplication (2026-09-25) ---------------------
+// Real example: p1-p6.com P3 2025-2026 Term1, Q12: "小克每天儲蓄30元，
+// 他五天共儲蓄多少元？" (30×5=150). Also the "每" guard added to
+// verifyWordProblemTotal above, from the SAME real example.
+
+test("word problem rate multiplication: real example, save $30/day for 5 days -> 150", () => {
+  const r = mod.verifyWordProblemRateMultiplication("小克每天儲蓄30元，他五天共儲蓄多少元？", "150");
+  assert.equal(r.correct, true);
+});
+
+test("word problem rate multiplication: wrong answer is caught, shows correct one", () => {
+  const r = mod.verifyWordProblemRateMultiplication("小克每天儲蓄30元，他五天共儲蓄多少元？", "35");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "150");
+});
+
+test("word problem rate multiplication: no '每' rate marker stays null", () => {
+  const r = mod.verifyWordProblemRateMultiplication("昨天賣出鉛筆34支，今天再賣22支，共賣去多少支？", "56");
+  assert.equal(r.correct, null);
+});
+
+// Regression: verifyWordProblemTotal must NOT wrongly sum a rate
+// problem's 2 numbers (30+5=35) instead of refusing.
+test("word problem total: a rate problem ('每') is refused, not wrongly summed", () => {
+  const r = mod.verifyWordProblemTotal("小克每天儲蓄30元，他五天共儲蓄多少元？", "35");
+  assert.equal(r.correct, null);
+});
+
+// --- verifyTimeFormatConversion (2026-09-25) ------------------------------
+// Real examples: p1-p6.com P3 2025-2026 Term1, Q30 ("16:15" -> 12-hour),
+// Q32 ("11:52 in the morning" -> 24-hour), Q33 (poster table -> 12-hour).
+
+test("time format conversion: 24h -> 12h, real example 16:15 -> 4:15pm", () => {
+  const r = mod.verifyTimeFormatConversion("Express the time in '12-hour time'. 16:15", "4:15 in the afternoon");
+  assert.equal(r.correct, true);
+});
+
+test("time format conversion: 24h -> 12h, wrong answer caught", () => {
+  const r = mod.verifyTimeFormatConversion("Express the time in '12-hour time'. 16:15", "5:15 in the afternoon");
+  assert.equal(r.correct, false);
+});
+
+test("time format conversion: 24h -> 12h, real table example 13:56 -> 1:56pm", () => {
+  const r = mod.verifyTimeFormatConversion("The estimated arrival time of JL 513 is ___ (Express the time in '12-hour time') 13:56", "1:56 in the afternoon");
+  assert.equal(r.correct, true);
+});
+
+test("time format conversion: 12h -> 24h, real example 11:52 in the morning -> 11:52", () => {
+  const r = mod.verifyTimeFormatConversion("I got on the bus at 11:52 in the morning. Express the time in '24-hour time'.", "11:52");
+  assert.equal(r.correct, true);
+});
+
+test("time format conversion: 12h -> 24h, afternoon example 2:05 in the afternoon -> 14:05", () => {
+  const r = mod.verifyTimeFormatConversion("The second show time is 2:05 in the afternoon. Express the time in '24-hour time'.", "14:05");
+  assert.equal(r.correct, true);
+});
+
+test("time format conversion: neither 12-hour nor 24-hour instruction present stays null", () => {
+  const r = mod.verifyTimeFormatConversion("16:15", "4:15pm");
+  assert.equal(r.correct, null);
+});
+
+test("time format conversion: 12h source with no am/pm word stays null (ambiguous)", () => {
+  const r = mod.verifyTimeFormatConversion("Express the time in '24-hour time'. 11:52", "11:52");
+  assert.equal(r.correct, null);
+});
