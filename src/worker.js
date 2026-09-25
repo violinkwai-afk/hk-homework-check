@@ -4180,6 +4180,19 @@ async function handleMark(request, env) {
     return json({ error: "too_many_pages", message: `每次最多批改 ${MARK_MAX_PAGES} 頁，請分開幾次提交。` }, 400);
   }
 
+  // 2026-09-25, real user request: /api/mark never had this at all (only
+  // /api/check did) -- reading accuracy was already protected either way
+  // (the OCR prompt below already asks the model to mentally compensate
+  // for a sideways/upside-down page), but the final annotated photo sent
+  // back to a Telegram user stayed sideways whenever the source photo
+  // was, since nothing ever physically straightened it. Mutates `images`
+  // in place (same contract as handleCheckInner's own call to this),
+  // so every downstream step (Qwen OCR, Vision bbox lookup) reads the
+  // corrected bytes automatically -- ocrCache lets a page whose rotation
+  // check found no rotation needed skip a second, redundant Vision call
+  // below, same optimization /api/check already has.
+  const { rotationApplied, ocrCache } = await detectAndCorrectRotation(images, visionKey);
+
   // Per-page pipeline (2026-09-21 rewrite, replacing one combined
   // multi-image Qwen call): a real 4-page submission reliably hit
   // callQwenOcrText's 15s per-call timeout when all 4 images went in one
@@ -4204,7 +4217,10 @@ async function handleMark(request, env) {
       .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
-    const visionPromise = !visionKey
+    const cachedOcr = ocrCache && ocrCache.get(pageIdx);
+    const visionPromise = cachedOcr
+      ? Promise.resolve({ ...cachedOcr, visionMs: 0 })
+      : !visionKey
       ? Promise.resolve(null)
       : googleOcr(img.data, visionKey)
           .then((r) => (r ? { ...r, visionMs: Date.now() - tVision } : null))
@@ -4318,10 +4334,20 @@ async function handleMark(request, env) {
   // /api/verify pairing) -- this is backend-only bookkeeping, not a
   // complete user-facing feature. Do not wire this pipeline to the
   // frontend until a real review/resolve flow exists for these.
+  // Keyed by real page index, only pages that actually needed correcting
+  // -- same shape/convention as handleCheckInner's own pageRotations, so
+  // a caller (handleTelegramWebhook below) can apply the identical
+  // rotation to its own separately-held copy of the original photo
+  // bytes before annotating, without this JSON response needing to
+  // carry the corrected image bytes themselves.
+  const pageRotations = {};
+  images.forEach((img, i) => { if (rotationApplied[i]) pageRotations[i] = rotationApplied[i]; });
+
   return json({
     results,
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
+    pageRotations,
     ...(pageErrors.length ? { pageErrors } : {}),
   });
 }
@@ -4418,8 +4444,32 @@ async function handleTelegramWebhook(request, env) {
     }
     const markMs = Date.now() - tMark;
 
+    // 2026-09-25: apply the SAME rotation handleMark already computed
+    // (and used internally for OCR/bbox) to this handler's own separate
+    // copy of the original bytes, so the final annotated photo sent back
+    // to the parent is upright too -- handleMark's JSON response can't
+    // carry corrected image bytes directly, so it reports the angle
+    // instead (see its own pageRotations comment) and this is the one
+    // caller that needs to replicate the same physical rotation.
+    // Telegram always sends exactly one photo per /api/mark call here,
+    // so only page 0 is ever relevant.
+    let bytesToAnnotate = photoBytes;
+    const rotationDeg = markJson.pageRotations && markJson.pageRotations["0"];
+    if (rotationDeg) {
+      const photonImg = PhotonImage.new_from_byteslice(photoBytes);
+      try {
+        const rotatedImg = rotate(photonImg, rotationDeg);
+        try {
+          bytesToAnnotate = rotatedImg.get_bytes_jpeg(90);
+        } finally { rotatedImg.free(); }
+      } catch (e) {
+        console.log(JSON.stringify({ event: "telegram_rotation_apply_failed", error: String(e && e.message || e) }));
+        // best-effort -- annotate the un-rotated original rather than fail the whole submission
+      } finally { photonImg.free(); }
+    }
+
     const tAnnotate = Date.now();
-    const annotated = annotateImage(photoBytes, markJson.results || []);
+    const annotated = annotateImage(bytesToAnnotate, markJson.results || []);
     const annotationMs = Date.now() - tAnnotate;
 
     const tSend = Date.now();
