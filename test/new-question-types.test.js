@@ -644,6 +644,78 @@ test("word problem difference: no '相差' keyword stays null (doesn't misfire o
   assert.equal(r.correct, null);
 });
 
+// --- Word problem: "more than"/"fewer than" (inverse of difference) ------
+// Real: 2026-09-26 question-type survey, "249 oranges; 41 MORE apples than
+// oranges; how many apples?" -> 290.
+
+test("word problem more-than: real example, base+diff (249+41=290)", async () => {
+  const r = mod.verifyWordProblemMoreThan("There are 249 oranges. There are 41 more apples than oranges. How many apples are there?", "290");
+  assert.equal(r.correct, true);
+});
+
+test("word problem more-than: Chinese 比...多 phrasing, same shape", async () => {
+  const r = mod.verifyWordProblemMoreThan("橙有249個，蘋果比橙多41個，蘋果有多少個？", "290");
+  assert.equal(r.correct, true);
+});
+
+test("word problem more-than: 比...少 (fewer) phrasing subtracts instead", async () => {
+  const r = mod.verifyWordProblemMoreThan("橙有249個，蘋果比橙少41個，蘋果有多少個？", "208");
+  assert.equal(r.correct, true);
+});
+
+test("word problem more-than: wrong answer is caught, correctAnswer given", async () => {
+  const r = mod.verifyWordProblemMoreThan("橙有249個，蘋果比橙多41個，蘋果有多少個？", "300");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "290");
+});
+
+test("word problem more-than: neither 'more' nor 'fewer' present stays null", async () => {
+  const r = mod.verifyWordProblemMoreThan("橙有249個，蘋果有41個，一共有多少個？", "290");
+  assert.equal(r.correct, null);
+});
+
+test("word problem more-than: equal values (ambiguous which is base) stays null, never guessed", async () => {
+  const r = mod.verifyWordProblemMoreThan("橙有50個，蘋果比橙多50個", "100");
+  assert.equal(r.correct, null);
+});
+
+test("word problem more-than: real bug caught while building this test -- a LATER unrelated '有多少個?' clause must not falsely trigger 'fewer' via the '少' inside '多少'", async () => {
+  // Before the fix, an unbounded "比...少" window matched the "少" in
+  // "多少" here even though this sentence is really "比...多" (more),
+  // making isMore === isFewer look true and wrongly decline a case that
+  // should resolve to 249+41=290.
+  const r = mod.verifyWordProblemMoreThan("橙有249個，蘋果比橙多41個，蘋果有多少個？", "290");
+  assert.equal(r.correct, true);
+});
+
+// --- "Write a number between X and Y" (range-membership, not exact-match) ---
+
+test("number between: real range example, a value strictly inside is correct", async () => {
+  const r = mod.verifyNumberBetween("寫一個介乎30同40之間嘅數。", "35");
+  assert.equal(r.correct, true);
+});
+
+test("number between: English phrasing, same shape", async () => {
+  const r = mod.verifyNumberBetween("Write a number between 30 and 40.", "35");
+  assert.equal(r.correct, true);
+});
+
+test("number between: a value AT either endpoint is wrong (exclusive bounds), correctAnswer stays empty (no single right answer)", async () => {
+  const r = mod.verifyNumberBetween("寫一個介乎30同40之間嘅數。", "40");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "");
+});
+
+test("number between: a value clearly outside the range is wrong", async () => {
+  const r = mod.verifyNumberBetween("寫一個介乎30同40之間嘅數。", "100");
+  assert.equal(r.correct, false);
+});
+
+test("number between: no '介乎...之間'/'between...and' phrasing stays null", async () => {
+  const r = mod.verifyNumberBetween("30加40等於幾多？", "70");
+  assert.equal(r.correct, null);
+});
+
 // --- Question-type registry: classifyAndVerify + overlap guard --------
 //
 // `classifyAndVerify` (worker.js, 2026-09-22) is a drop-in-ready
@@ -667,6 +739,8 @@ const REAL_REGISTRY_EXAMPLES = [
   { handler: "number_word_conversion", item: { printedQuestion: "Write 'twenty-six' in numerals.", studentAnswer: "26" } },
   { handler: "word_problem_total", item: { printedQuestion: "昨天文具店賣出鉛筆34支，今天再賣出鉛筆22支，這兩天共賣去鉛筆多少支？", studentAnswer: "56" } },
   { handler: "word_problem_difference", item: { printedQuestion: "子健在第一場獲得180分，第二場獲得166分。他在兩場比賽的得分相差多少分？", studentAnswer: "14" } },
+  { handler: "word_problem_more_than", item: { printedQuestion: "橙有249個，蘋果比橙多41個，蘋果有多少個？", studentAnswer: "290" } },
+  { handler: "number_between", item: { printedQuestion: "寫一個介乎30同40之間嘅數。", studentAnswer: "35" } },
   { handler: "word_problem_division", item: { printedQuestion: "媽媽用32元買了8盒豆漿，每盒豆漿售___元。", studentAnswer: "4" } },
   { handler: "grammar_cloze", item: { printedQuestion: "I ___ a good friend.", studentAnswer: "am" } },
   { handler: "math_equation", item: { printedQuestion: "10+4=", studentAnswer: "14" } },

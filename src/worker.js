@@ -3037,6 +3037,80 @@ function verifyWordProblemDifference(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Word problem: one total given, PLUS an additive "more than" relationship
+// to a second, unknown total -- find the second total (real example, 2026-
+// 09-26 question-type survey: "249 oranges; there are 41 MORE apples than
+// oranges; how many apples?" -> 249+41=290). The inverse shape of
+// verifyWordProblemDifference (that one HAS both totals, asks for the
+// difference; this one HAS one total + the difference, asks for the other
+// total). Chinese phrasing uses "比...多"/"比...少" with a base object and
+// an amount, English uses "more/fewer than" -- both narrowly triggered
+// together with exactly 2 numbers, same discipline as every other word-
+// problem verifier here (never guess which 2 numbers are "the" 2 unless
+// the count is exactly 2, since a 3rd stray number elsewhere in a badly-
+// split OCR string would make the pairing ambiguous).
+function verifyWordProblemMoreThan(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  // English real phrasing is "N more APPLES than oranges" -- "more" and
+  // "than" are not adjacent, a noun sits between them, so this allows a
+  // short gap rather than requiring them back-to-back.
+  //
+  // Real bug caught by this function's own tests: an unbounded "比...少"
+  // window (no punctuation boundary) also matched "少" from an entirely
+  // unrelated LATER "有多少個?" ("how many?") clause in the same
+  // sentence -- "少" is the second character of "多少", so almost every
+  // real word problem asking "...是多少?" would false-positive as
+  // "fewer" too. Bounded to the SAME clause (stops at the next comma/
+  // full-width punctuation) so a later "多少" can never leak in.
+  const isMore = /比[^，,。？?！!]{0,10}多/.test(printed) || /\bmore\b.{0,20}\bthan\b/i.test(printed);
+  const isFewer = /比[^，,。？?！!]{0,10}少/.test(printed) || /\b(fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+  if (isMore === isFewer) return { correct: null, correctAnswer: "" }; // neither, or both (ambiguous OCR) -- decline
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  // The base total is always the LARGER of the two real-world quantities
+  // in this shape (a count of objects), the difference the smaller "by
+  // how much" amount -- real worksheets always state the difference as
+  // the smaller number (you can't have "41 more" out of a base of 20).
+  // Ambiguous/equal values are declined rather than guessed.
+  const [a, b] = nums;
+  if (a === b) return { correct: null, correctAnswer: "" };
+  const base = Math.max(a, b), diff = Math.min(a, b);
+  const expected = isMore ? base + diff : base - diff;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// "Write a number between X and Y" -- a genuinely different verification
+// SHAPE from ordinary fill-blank (range-membership, not exact-match: any
+// value strictly between the two bounds is correct, not just one specific
+// answer). Chinese "介乎X同Y之間"/"喺X同Y之間", English "between X and Y".
+// Deliberately STRICT (exclusive) bounds -- "between 3 and 8" in real
+// worksheet phrasing means a value other than the two named endpoints
+// themselves; a student answer equal to either bound is treated as
+// wrong, not guessed as maybe-acceptable, matching this project's
+// never-guess discipline (if a real worksheet turns out to intend
+// inclusive bounds, that's a correction to make once real evidence of
+// that shows up, not something to hedge on speculatively now).
+function verifyNumberBetween(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = /(?:介乎|喺)\s*(\d+)\s*(?:同|和|與)\s*(\d+)\s*之間|\bbetween\s+(\d+)\s+and\s+(\d+)\b/i.exec(printed);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const lo = Number(m[1] ?? m[3]), hi = Number(m[2] ?? m[4]);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = studentNum > lo && studentNum < hi;
+  // Range-membership has no single "the" correct answer (any value
+  // strictly between lo/hi qualifies) -- correctAnswer stays empty even
+  // when wrong, since there's nothing honest and singular to fill in.
+  return { correct, correctAnswer: "" };
+}
+
 // Word problem needing a ROUND-UP (ceiling) division, not floor -- real,
 // recurring trap found independently in 3 separate PDF-reading passes
 // 2026-09-23 (Groups A, B, D): "的士站有18人,每輛的士載4人,最少需要幾多
@@ -3959,6 +4033,33 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyWordProblemDifference(item.printedQuestion, item.studentAnswer),
   },
   {
+    // 2026-09-26 question-type survey: the inverse of word_problem_
+    // difference above (that one has both totals, asks for the
+    // difference; this one has one total + the difference, asks for the
+    // other total). "比...多/少" only means this shape when NOT also
+    // matching word_problem_difference's own "相差" trigger, which runs
+    // first in this array and would already have claimed it.
+    name: "word_problem_more_than",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const hasMoreOrFewer = /比[^，,。？?！!]{0,10}(多|少)/.test(printed) || /\b(more|fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+      if (!hasMoreOrFewer) return false;
+      return (printed.match(/\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyWordProblemMoreThan(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // 2026-09-26 question-type survey: "write a number between X and Y"
+    // -- a genuinely different verification shape (range-membership),
+    // not a fill-blank exact-match.
+    name: "number_between",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /(?:介乎|喺)\s*\d+\s*(?:同|和|與)\s*\d+\s*之間/.test(printed) || /\bbetween\s+\d+\s+and\s+\d+\b/i.test(printed);
+    },
+    verify: (item) => verifyNumberBetween(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Must run BEFORE word_problem_division: both key off a "每" per-unit
     // rate phrase, but this one is the narrower, more specific trigger
     // (至少/最少/"at least" additionally required) -- first-match-wins
@@ -4087,7 +4188,7 @@ function classifyAndVerify(item) {
     if (handler.detect(item)) {
       const result = handler.verify(item);
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
-        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum"].includes(handler.name)
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum", "number_between"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
       return { ...result, subject, handler: handler.name };
     }
@@ -4995,6 +5096,8 @@ export {
   verifyPriceTableLookup,
   verifyWordProblemDivision,
   verifyWordProblemDifference,
+  verifyWordProblemMoreThan,
+  verifyNumberBetween,
   verifyWordProblemCeilingDivision,
   verifyDigitCountOfNPlusOne,
   verifyCompoundUnitConversion,
