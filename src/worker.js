@@ -4182,14 +4182,33 @@ const QUESTION_TYPE_HANDLERS = [
 // through to `correct: null` (needs human review) when nothing matches --
 // never an AI judgment call. `verifyMultiBoxDigitAnswer` remains
 // deliberately unregistered (see the registry's own comment above).
-function classifyAndVerify(item) {
+// Ticket 22 Stage A (2026-09-26): `getImageCrop` is an OPTIONAL lazy
+// thunk (`() => {data, mediaType} | null`), supplied by handleMark, that
+// returns a real cropped photo of this item's own region. Only ever
+// called for a handler that declares `verifyVisual` -- every existing
+// text-only handler (the ~25 already live) never triggers a crop at
+// all, so this is zero-risk for them. This is deliberately GENERIC
+// plumbing, not abacus-specific: any future "must look at the photo"
+// question type (clock faces, rulers, ...) plugs into the exact same
+// `verifyVisual` contract, per explicit instruction that solving
+// methods should generalize, not be one-off hacks.
+function classifyAndVerify(item, getImageCrop) {
   if (item.parseFailed) return { correct: null, correctAnswer: "", subject: "uncertain", handler: null };
   for (const handler of QUESTION_TYPE_HANDLERS) {
     if (handler.detect(item)) {
-      const result = handler.verify(item);
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
         || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum", "number_between"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
+      if (handler.verifyVisual) {
+        const crop = typeof getImageCrop === "function" ? getImageCrop() : null;
+        // No crop available (no bbox match, page failed, decode error)
+        // -- fails open to needs_review, same as every other "can't
+        // verify this" path in this file, never a guess.
+        if (!crop) return { correct: null, correctAnswer: "", subject, handler: handler.name };
+        const result = handler.verifyVisual(item, crop);
+        return { ...result, subject, handler: handler.name };
+      }
+      const result = handler.verify(item);
       return { ...result, subject, handler: handler.name };
     }
   }
@@ -4547,20 +4566,48 @@ async function handleMark(request, env) {
   });
   const pagesMs = Date.now() - tPages;
 
-  // Module 2: subject-aware verification (deterministic, no I/O) -- one
-  // failed page contributes an empty verdict list, nothing more.
-  const tVerify = Date.now();
-  const verdictsByPage = pageResults.map((pr) => (pr.failed ? [] : pr.items.map((item) => classifyAndVerify(item))));
-  const verifyMs = Date.now() - tVerify;
-
-  // Module 3: bbox, scoped to each item's OWN page's Vision words only --
-  // no more cross-page guessing needed now that page identity is already
-  // structural (see above).
+  // Module 2 (bbox), moved BEFORE verification (2026-09-26, Ticket 22
+  // Stage A): scoped to each item's OWN page's Vision words only -- no
+  // more cross-page guessing needed now that page identity is already
+  // structural (see above). Computed first now so verification below can
+  // optionally crop the real image for a "must look at the photo"
+  // question type (abacus, clock faces, rulers, ...) -- previously bbox
+  // was computed AFTER verification purely for drawing the ✓/✗ mark,
+  // with no way for a verifier to ever see the image itself.
   const tMap = Date.now();
   const matchesByPage = pageResults.map((pr) =>
     pr.failed ? [] : pr.items.map((item) => (pr.vision ? findBboxForItem(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
   );
   const mapMs = Date.now() - tMap;
+
+  // Module 3: subject-aware verification (deterministic, no real
+  // network I/O) -- one failed page contributes an empty verdict list,
+  // nothing more. `visualPhotonCache` follows the exact same
+  // decode-once-per-page/free-at-the-end convention as /api/check's own
+  // zoom-recheck tiers (see cropItem's own comment) -- shared across
+  // every item's crop within this one /api/mark call, freed below once
+  // verification is done with it. Passing a lazy `getImageCrop` thunk
+  // (not a pre-computed crop) means an item only pays the real crop cost
+  // when a matched handler actually declares it needs one
+  // (`verifyVisual`) -- every existing text-only handler is completely
+  // unaffected, zero risk of regression for the ~25 handlers already
+  // live.
+  const tVerify = Date.now();
+  const visualPhotonCache = new Map();
+  const verdictsByPage = pageResults.map((pr, pageIdx) => (pr.failed ? [] : pr.items.map((item, i) => {
+    const match = matchesByPage[pageIdx][i];
+    const getImageCrop = () => {
+      if (!match) return null;
+      try {
+        return cropItem({ bbox: match, page: pageIdx }, images, visualPhotonCache);
+      } catch (e) {
+        return null; // fails open -- verifyVisual handlers treat a null crop as "can't verify", same as any other missing input
+      }
+    };
+    return classifyAndVerify(item, getImageCrop);
+  })));
+  for (const img of visualPhotonCache.values()) img.free();
+  const verifyMs = Date.now() - tVerify;
 
   // Module 3b, Ticket 4 (2026-09-25): cross-check printed NUMBERS
   // against Vision's independent reading, per item -- see
@@ -5124,4 +5171,6 @@ export {
   parseSignedStudentNumber,
   DIGIT_COUNT_OF_N_PLUS_ONE_RE,
   classifyAndVerify,
+  QUESTION_TYPE_HANDLERS,
+  cropItem,
 };

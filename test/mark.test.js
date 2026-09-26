@@ -19,6 +19,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { PAGE0, PAGE1, PAGE2 } = require("./fixtures.js");
+const REAL_JPEG_800x600 = fs.readFileSync(path.join(__dirname, "fixtures", "tiny-photo.jpg"));
 
 const SRC = path.join(__dirname, "..", "src", "worker.js");
 const TMP = path.join(__dirname, "..", "src", "worker_nodetest_mark.mjs");
@@ -990,4 +991,82 @@ test("2026-09-23 (challenge-all review finding): a real word-problem item is NOT
   });
   assert.equal(difference.handler, "word_problem_difference");
   assert.equal(difference.correct, true);
+});
+
+// Ticket 22 Stage A (2026-09-26): generic "verifier can see the real
+// photo, not just OCR'd text" plumbing -- cropItem (shared with /api/
+// check's own zoom-recheck tiers) + classifyAndVerify's new optional
+// getImageCrop/verifyVisual contract. No real visual handler (abacus
+// etc.) is wired into QUESTION_TYPE_HANDLERS yet -- these tests prove
+// the PLUMBING itself works against a real decoded image, using a
+// throwaway fake handler pushed onto (and popped back off) the real
+// registry, rather than a hypothetical.
+
+test("Ticket 22 Stage A: cropItem returns real, valid, non-empty JPEG bytes for a bbox on a real 800x600 photo", async () => {
+  const worker = await import(TMP);
+  const images = [{ data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" }];
+  const photonCache = new Map();
+  try {
+    const crop = worker.cropItem({ bbox: { x: 10, y: 10, w: 20, h: 20 }, page: 0 }, images, photonCache);
+    assert.equal(crop.mediaType, "image/jpeg");
+    assert.ok(crop.data && crop.data.length > 100, "must return real, non-trivial JPEG bytes, not an empty/placeholder result");
+    const cropBytes = Buffer.from(crop.data, "base64");
+    assert.equal(cropBytes[0], 0xff, "must be real JPEG magic bytes (SOI marker), not garbage");
+    assert.equal(cropBytes[1], 0xd8);
+  } finally {
+    for (const img of photonCache.values()) img.free();
+  }
+});
+
+test("Ticket 22 Stage A: cropItem throws cleanly (caught by classifyAndVerify's fail-open path) when the item has no bbox", async () => {
+  const worker = await import(TMP);
+  const images = [{ data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" }];
+  assert.throws(() => worker.cropItem({ bbox: null, page: 0 }, images, new Map()));
+});
+
+test("Ticket 22 Stage A: classifyAndVerify's verifyVisual contract -- a matched visual handler receives the REAL cropped image, and its verdict flows through exactly like a text handler's", async () => {
+  const worker = await import(TMP);
+  const images = [{ data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" }];
+  const photonCache = new Map();
+  let receivedCrop = null;
+  const fakeHandler = {
+    name: "fake_visual_test_handler",
+    detect: (item) => item.printedQuestion === "__TICKET22_STAGE_A_TEST__",
+    verifyVisual: (item, crop) => {
+      receivedCrop = crop;
+      return { correct: true, correctAnswer: "" };
+    },
+  };
+  worker.QUESTION_TYPE_HANDLERS.unshift(fakeHandler); // front of the list so it can't be shadowed by an earlier real handler
+  try {
+    const item = { label: "1", printedQuestion: "__TICKET22_STAGE_A_TEST__", studentAnswer: "whatever" };
+    const getImageCrop = () => worker.cropItem({ bbox: { x: 5, y: 5, w: 30, h: 30 }, page: 0 }, images, photonCache);
+    const result = worker.classifyAndVerify(item, getImageCrop);
+    assert.equal(result.handler, "fake_visual_test_handler");
+    assert.equal(result.correct, true);
+    assert.ok(receivedCrop, "the handler must have actually received a crop object");
+    assert.equal(receivedCrop.mediaType, "image/jpeg");
+    assert.ok(receivedCrop.data.length > 100, "the handler's crop must be real image bytes, not a placeholder");
+  } finally {
+    worker.QUESTION_TYPE_HANDLERS.shift(); // remove the fake handler -- never pollute the real registry for other tests
+    for (const img of photonCache.values()) img.free();
+  }
+});
+
+test("Ticket 22 Stage A: a visual handler with NO crop available (getImageCrop omitted) fails open to needs_review, never a guess", async () => {
+  const worker = await import(TMP);
+  const fakeHandler = {
+    name: "fake_visual_test_handler_2",
+    detect: (item) => item.printedQuestion === "__TICKET22_STAGE_A_TEST_NO_CROP__",
+    verifyVisual: () => ({ correct: true, correctAnswer: "" }), // must never actually be called
+  };
+  worker.QUESTION_TYPE_HANDLERS.unshift(fakeHandler);
+  try {
+    const item = { label: "1", printedQuestion: "__TICKET22_STAGE_A_TEST_NO_CROP__", studentAnswer: "x" };
+    const result = worker.classifyAndVerify(item); // no getImageCrop passed at all
+    assert.equal(result.handler, "fake_visual_test_handler_2");
+    assert.equal(result.correct, null, "must fail open to needs_review, never call verifyVisual without a real crop");
+  } finally {
+    worker.QUESTION_TYPE_HANDLERS.shift();
+  }
 });
