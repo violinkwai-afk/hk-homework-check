@@ -1355,6 +1355,13 @@ async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
   const body = {
     model,
     max_tokens: maxTokens,
+    // Ticket 20 (2026-09-26): 0 (most deterministic) instead of the
+    // API's default (1, full randomness) -- this is a reading/grading
+    // task, not creative writing, so nothing is gained from letting the
+    // model vary its answer run to run, and a lower temperature is a
+    // real, well-established lever against hallucination on this class
+    // of task. No prior code anywhere in this file ever set this.
+    temperature: 0,
     messages: [
       {
         role: "user",
@@ -1427,6 +1434,11 @@ async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model,
   const body = {
     model,
     max_tokens: maxTokens,
+    // Ticket 20 (2026-09-26): see callClaude's identical comment -- same
+    // reasoning, applied to every OpenRouter-routed model (Qwen,
+    // DeepSeek, and the Ticket 13 AI-fallback layer, which both go
+    // through this shared function).
+    temperature: 0,
     ...(providerFilter ? { provider: providerFilter } : {}),
     messages: [
       {
@@ -1652,6 +1664,8 @@ async function callQwenOcrText(images, openrouterKey) {
     // the already-rejected DeepSeek failure pattern almost exactly).
     // Reverted to default OpenRouter routing (no provider override).
     max_tokens: 2000,
+    // Ticket 20 (2026-09-26): see callClaude's identical comment.
+    temperature: 0,
     messages: [
       {
         role: "user",

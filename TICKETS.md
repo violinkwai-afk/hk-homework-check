@@ -238,3 +238,4 @@
 - 🔲 **第17項：Ticket 13嘅fallback prompt直接塞入未經處理嘅OCR印刷文字，理論上有prompt injection風險。** 一張刻意整嘅"功課相"如果印刷字度藏住指令，冇防範機制去阻止AI判斷被操控。
 - 🔲 **第18項：同一頁如果OCR整咗重複題號，Ticket 13嘅merge邏輯淨係用題號做key，兩條唔同題可能錯誤咁攞埋同一個AI判斷。** 需要加返disambiguation（例如用array index代替純題號做key）。
 - 🔴 **第19項（2026-09-26提升為最高優先級）：`verifiedBy: "ai"`嘅判斷結果冇做過好似baseline咁嘅40張相rigor check，唔知呢層加咗之後真實準繩度係咪真係有改善。** 用戶明確咗「標籤唔重要，準唔準先重要」之後，呢個先係第13項真正嘅驗收條件——冇呢個rigor check，就唔知第13項加落嘅AI判斷層係咪都係「錯漏百出」，同第9項嘅核心問題其實係同一件事。建議跟進方法：同已有嘅40張相rigor check一樣，攞真實相直接讀`verifiedBy: "ai"`嘅結果，人手核實準唔準。
+- ✅ **第20項：全部AI call加返`temperature: 0`（AI答案random程度設做最低）。** 之前成個code base冇任何一個call設過呢個參數，即係一直用緊AI provider嘅預設值（通常唔係0，即係有隨機性）。呢個係讀字/判斷任務，唔係作文，唔應該有隨機性，減低幻覺（老作嘢）風險嘅其中一個具體、平快嘅做法。已加落`callClaude`、`callOpenRouterVisionModel`（Qwen/DeepSeek/Ticket13 fallback共用）、`callQwenOcrText`三個call嘅地方，313/313測試通過。
