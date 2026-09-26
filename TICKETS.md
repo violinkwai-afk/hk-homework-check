@@ -244,3 +244,9 @@
   結論：**Ticket 13加咗嘅AI判斷層，本質上仲係用緊嗰個已經確認「絕對唔可以用」嘅Qwen（temperature=0都冇解決呢個問題，因為問題唔係random，係讀錯/判斷邏輯本身）。第9項嘅核心問題完全未解決，只係換咗個包裝。** 呢個發現直接支持返用戶今晚提出嘅方向：code能力以外嘅嘢，AI暫時唔應該自己落最終判斷。
 - ✅ **第20項：全部AI call加返`temperature: 0`（AI答案random程度設做最低）。** 之前成個code base冇任何一個call設過呢個參數，即係一直用緊AI provider嘅預設值（通常唔係0，即係有隨機性）。呢個係讀字/判斷任務，唔係作文，唔應該有隨機性，減低幻覺（老作嘢）風險嘅其中一個具體、平快嘅做法。已加落`callClaude`、`callOpenRouterVisionModel`（Qwen/DeepSeek/Ticket13 fallback共用）、`callQwenOcrText`三個call嘅地方，313/313測試通過。
 - ✅ **第21項：Qwen嘅call都加返排除Alibaba做provider，`2257f0b`已push，313/313測試通過。** 用戶明確因私隱理由要求（唔想小朋友功課相經內地伺服器）。`callQwen`（`providerFilter`）同`callQwenOcrText`（自己個body入面）兩個地方都加咗`{ignore:["Alibaba"]}`，同DeepSeek已有嘅設定睇齊。
+- ✅ **第23項：AI model watch搵到嘅4個candidate測試完，真實成本US$0.005666。** 3張唔睇嘅相，OCR-only test：
+  - **Gemini 3.1 Flash Lite：3/3成功，內容同已有嘅Qwen baseline脗合度好高**（其中一題「40;8;5」完全脗合，呢條之前有確認過嘅「40讀成30」bug歷史）——**今晚目前為止表現最好嘅新candidate**。發現一個真實format問題：多重答案有時會拆成幾個用返同一個題號嘅獨立item（而唔係跟prompt指示用分號連埋一個item），如果照跟而家「用題號做key」嘅merge邏輯，會靜靜雞跌咗3/4個sub-answer——呢個係prompt跟從度嘅問題，唔係內容準繩度問題，可以修。
+  - DeepSeek vision版：0/3，同其他已拒絕嘅model一樣嘅「reasoning燒晒budget」問題，reject。
+  - ERNIE 4.5 VL：technically 3/3，但有真實嚴重嘅內容合併問題（一整頁撈埋做一嚿`parseFailed`，仲加埋自己老作嘅中文評論），同GLM-4.6V一樣嘅問題class，reject。
+  - Amazon Nova Lite：2/3，1/3都係撞到reasoning budget問題，冇Gemini咁穩，唔繼續跟。
+  **建議跟進**：Gemini 3.1 Flash Lite值得再試（judging task test+修format問題），未做。
