@@ -4557,17 +4557,39 @@ async function handleMark(request, env) {
     });
   });
 
-  // Module 4, Ticket 13 (2026-09-26): AI judges what code couldn't --
-  // one call per page (only pages with unresolved items), run
-  // concurrently. A page's fallback failing (both Qwen and DeepSeek)
-  // leaves its items exactly as already built above -- needs_review,
-  // verifiedBy "pending" -- never a regression versus not having this
-  // stage at all. `aiFallbackUsage` is logged below (mark_usage) so real
-  // per-page cost/timing can be read from production logs, per explicit
-  // request to always know both after a change like this.
+  // Module 4, Ticket 13 (2026-09-26): AI judges what code couldn't.
+  // Ticket 15 (2026-09-26, real production finding): a single 10-item
+  // batch made BOTH tiers (Qwen 8s, DeepSeek 12s) time out -- confirmed
+  // live, not theoretical (see TICKETS.md). Real data points: 5 items
+  // succeeded in 3.9s, 4 items in 3.2s, 10 items failed both tiers
+  // entirely. Sample is small (3 data points) -- the exact safe
+  // threshold isn't precisely known, but 5 is a defensible cutoff given
+  // what actually succeeded. AI_FALLBACK_BATCH_SIZE caps each call at 5
+  // items; a page with MORE than 5 pending items is split into several
+  // ≤5-item batches, all run in parallel (flattened into the same
+  // Promise.all as every other page/batch, not nested/sequential) --
+  // this resolves MORE items with LOWER latency than one oversized call
+  // that just fails, matching the real 10-item finding's own fix
+  // suggestion (batch + parallelize, not "make the model faster", which
+  // has no reliable lever -- see the batch-size discussion in memory/
+  // chat for why "reduce max_tokens" was considered and rejected as too
+  // weak a lever to rely on).
+  const AI_FALLBACK_BATCH_SIZE = 5;
+  const aiFallbackBatches = []; // { pageIdx, pendingItems }
+  pendingForAiByPage.forEach((pendingItems, pageIdx) => {
+    for (let i = 0; i < pendingItems.length; i += AI_FALLBACK_BATCH_SIZE) {
+      aiFallbackBatches.push({ pageIdx, pendingItems: pendingItems.slice(i, i + AI_FALLBACK_BATCH_SIZE) });
+    }
+  });
+  // A page's fallback failing (both Qwen and DeepSeek) leaves its items
+  // exactly as already built above -- needs_review, verifiedBy
+  // "pending" -- never a regression versus not having this stage at
+  // all. `aiFallbackUsage` is logged below (mark_usage) so real
+  // per-batch cost/timing can be read from production logs, per
+  // explicit request to always know both after a change like this.
   const aiFallbackUsage = [];
-  if (openrouterKey && pendingForAiByPage.size) {
-    await Promise.all(Array.from(pendingForAiByPage.entries()).map(async ([pageIdx, pendingItems]) => {
+  if (openrouterKey && aiFallbackBatches.length) {
+    await Promise.all(aiFallbackBatches.map(async ({ pageIdx, pendingItems }) => {
       const tFallback = Date.now();
       const outcome = await callAiFallbackJudge([downscaleForCheapTier(images[pageIdx], 640)], pendingItems, openrouterKey);
       aiFallbackUsage.push({ page: pageIdx, items: pendingItems.length, ms: Date.now() - tFallback, model: outcome && outcome.model, usage: outcome && outcome.usage });

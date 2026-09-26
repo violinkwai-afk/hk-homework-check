@@ -451,6 +451,34 @@ test("Ticket 13: fallback returning null for an item keeps it needs_review with 
   assert.equal(r.note, "睇唔清幅圖");
 });
 
+test("Ticket 15: a page with MORE than 5 unresolved items is split into multiple ≤5-item fallback batches (real production finding: a single 10-item batch made both tiers time out)", async () => {
+  const items = Array.from({ length: 7 }, (_, i) => ({ label: String(i + 1), printed: `題目${i + 1}`, answer: `答案${i + 1}` }));
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  let fallbackCalls = 0;
+  const inner = mockFetch(
+    { PAGE0: qwenLineFor(items) },
+    { PAGE0: { results: items.map((it) => ({ question: it.label, correct: true, correctAnswer: "", note: "" })) } },
+  );
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body || "{}");
+    const textBlock = body.messages && body.messages[0].content.find((c) => c.type === "text");
+    if (textBlock && textBlock.text.startsWith("你是一位細心的小學老師")) fallbackCalls++;
+    return inner(url, opts);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ images }) });
+    const env = { OPENROUTER_API_KEY: "test-openrouter-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("not found", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const resJson = await res.json();
+    assert.equal(fallbackCalls, 2, "7 items at a 5-item cap must split into exactly 2 batches (5 + 2), not 1 oversized call");
+    assert.equal(resJson.results.filter((r) => r.verifiedBy === "ai").length, 7, "both batches' results still get merged back correctly");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("needs_review item logs mark_unresolved_question with the PRINTED question only, never the student's answer", async () => {
   const items = [{ label: "7", printed: "男仔叫咩名？", answer: "阿明" }];
   const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
