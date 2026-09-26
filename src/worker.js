@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-judge" && request.method === "POST") {
+      return handleTestJudge(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1707,6 +1710,60 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
   return { items, usage: data.usage || null };
+}
+
+// Temporary diagnostic route (real user request, 2026-09-26): "just check
+// if the child's answer is right or wrong" -- i.e. the SAME single-call
+// read+judge task /api/check's deepseekPrompt already does, run against
+// Qwen (production baseline) plus the 3 candidates already rejected for
+// pure-OCR reliability (Ticket 11), to see whether the judging task (not
+// just OCR) changes the verdict. Own copy of the judging prompt text
+// rather than reaching into handleCheck's local `deepseekPrompt` closure
+// -- keeps this temporary route from touching production code at all.
+// Token-gated the same way as the earlier temporary routes. Remove once
+// this comparison is done.
+const JUDGE_TEST_ALLOWED_MODELS = [PRODUCTION_OCR_MODEL, "z-ai/glm-5.3-flash", "openai/gpt-6-luna", "inclusionai/ling-3.0-flash-vl"];
+const JUDGE_TEST_PROMPT = `你是一位細心的小學老師，正在批改學生的功課相片（共1頁）。冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
+
+要求（精簡）：
+1. 相有機會打橫/倒轉，先確認閱讀方向啱先答題，尤其留意6/9呢類易錯數字。
+2. 題目已經用文字/數字寫明要計算嘅數值（例如「10 upstairs 4 downstairs」或「10+4=」），一定要用返題目寫低嘅數字去計，唔好走去數插圖入面畫緊幾多個人/物件代替。
+3. 學生成日用鉛筆寫字，筆跡好淺好幼，容易同紙張反光/陰影混淆——判斷「未作答」之前，一定要放大瞇實眼仔細睇清楚個格仔入面實際有冇淺色筆劃，唔好因為顏色淺就衝口而出話未作答；隱約見到但唔夠肯定寫緊咩，"correct"設null。
+4. 睇圖表/刻度/圖形先答到嘅題目（水位、尺、角度、立體圖形、硬幣面額等），睇唔清就"correct"設null，唔好靠估。
+5. 只有答題位置確實有筆跡但太潦草/有歧義先"correct"設null，"note"簡短註明原因。
+6. 只有"correct"為false先填"correctAnswer"，其他情況留空字串。
+7. "bbox"用百分比(0-100)表示，相對於嗰頁相片闊度/高度。"anchor"填低嗰題印刷體題號本身（例如"1."），搵唔到留空。
+8. "riskyDiagram"設true如果屬於刻度/量度/角度/立體圖形/硬幣/方向/分數塗色/位值比較等易錯類型。
+
+只回覆一個JSON物件，不要加任何其他文字：
+{
+  "results": [
+    {"question":"題號","studentAnswer":"學生答案","correct":true/false/null,"correctAnswer":"","note":"","page":0,"bbox":{"x":0,"y":0,"w":0,"h":0},"anchor":"","riskyDiagram":false}
+  ],
+  "score": "X / Y（Y為總題數，X為答對題數，包括未作答；只有字跡不清的題目不計入Y）",
+  "continuesFromPrevious": false,
+  "continuesToNext": false
+}`;
+async function handleTestJudge(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = env.OPENROUTER_API_KEY && typeof env.OPENROUTER_API_KEY.get === "function"
+    ? await env.OPENROUTER_API_KEY.get()
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images, model } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const useModel = model || PRODUCTION_OCR_MODEL;
+  if (!JUDGE_TEST_ALLOWED_MODELS.includes(useModel)) return json({ error: "model_not_allowed", allowed: JUDGE_TEST_ALLOWED_MODELS }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const startedAt = Date.now();
+  try {
+    const r = await callOpenRouterVisionModel(downscaled, JUDGE_TEST_PROMPT, openrouterKey, { model: useModel, maxTokens: 4096, timeoutMs: 30000, logPrefix: "judge_test" });
+    return json({ ok: true, model: useModel, ms: Date.now() - startedAt, parsed: r.parsed, usage: r.usage });
+  } catch (e) {
+    return json({ ok: false, model: useModel, ms: Date.now() - startedAt, error: (e && (e.detail || e.uiMessage)) || String(e) });
+  }
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
