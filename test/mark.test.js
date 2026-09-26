@@ -84,7 +84,17 @@ const PAGE_BY_MARKER = { PAGE0, PAGE1, PAGE2 };
 // per PAGE (since /api/mark now makes one Qwen call per image). A marker
 // mapped to `{ error: true }` simulates that page's Qwen call failing
 // (used for the page-isolation tests).
-function mockFetch(qwenByMarker) {
+// Ticket 13 (2026-09-26): the AI-fallback pass sends a SECOND, distinct
+// prompt (buildAiFallbackPrompt) to the same "openrouter.ai" URL for any
+// page with unresolved items -- distinguished here by its own opening
+// phrase (distinct from OCR_ONLY_PROMPT's), not by URL, since both calls
+// hit the same endpoint. `fallbackByMarker` is optional and defaults to
+// "nothing mocked" (existing tests never register one, so their
+// unresolved items' fallback attempts fail closed exactly like a real
+// unmocked call would -- caught internally by callAiFallbackJudge,
+// leaving those items untouched, which is why adding this stage never
+// broke any pre-existing test).
+function mockFetch(qwenByMarker, fallbackByMarker = {}) {
   return async (url, opts) => {
     const u = String(url);
     if (u.includes("openrouter.ai")) {
@@ -94,6 +104,17 @@ function mockFetch(qwenByMarker) {
       const dataUrl = imageBlock.image_url.url; // "data:image/jpeg;base64,<marker-b64>"
       const b64data = dataUrl.split(",")[1];
       const marker = markerFromB64(b64data);
+      const textBlock = content.find((c) => c.type === "text");
+      const isFallbackCall = textBlock && textBlock.text.startsWith("你是一位細心的小學老師");
+      if (isFallbackCall) {
+        const entry = fallbackByMarker[marker];
+        if (entry === undefined) return new Response("no mocked fallback response", { status: 502 });
+        if (entry && entry.error) return new Response("upstream failure", { status: 502 });
+        return new Response(JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(entry) } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.0001 },
+        }), { status: 200 });
+      }
       const entry = qwenByMarker[marker];
       if (entry === undefined) throw new Error("no mocked Qwen response for marker: " + marker);
       if (entry && entry.error) {
@@ -123,7 +144,7 @@ function mockFetch(qwenByMarker) {
 async function callMark(images, qwenByMarker, opts = {}) {
   const worker = await import(TMP);
   const originalFetch = global.fetch;
-  const inner = mockFetch(qwenByMarker);
+  const inner = mockFetch(qwenByMarker, opts.fallbackByMarker);
   global.fetch = async (...args) => {
     if (opts.fetchSpy) opts.fetchSpy();
     return inner(...args);
@@ -370,6 +391,64 @@ test("Chinese-subject item: always null/needs_review, never a fake reliable verd
   assert.equal(r.subject, "chinese");
   assert.equal(r.correct, null);
   assert.equal(r.status, "needs_review");
+});
+
+// Ticket 13 (2026-09-26): AI judges what code can't -- a code-unresolved
+// (Chinese) item gets a real verdict from the fallback pass instead of
+// staying needs_review forever.
+test("Ticket 13: a code-unresolved Chinese item gets resolved by the AI fallback pass", async () => {
+  const items = [{ label: "7", printed: "男仔叫咩名？", answer: "阿明" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) }, {
+    fallbackByMarker: { PAGE0: { results: [{ question: "7", correct: true, correctAnswer: "", note: "" }] } },
+  });
+  const r = json.results[0];
+  assert.equal(r.correct, true);
+  assert.equal(r.status, "ok");
+  assert.equal(r.verifiedBy, "ai");
+});
+
+test("Ticket 13: fallback failure (nothing mocked) leaves the item exactly as before -- needs_review/pending, no regression", async () => {
+  const items = [{ label: "7", printed: "男仔叫咩名？", answer: "阿明" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) }); // no fallbackByMarker at all
+  const r = json.results[0];
+  assert.equal(r.correct, null);
+  assert.equal(r.status, "needs_review");
+  assert.equal(r.verifiedBy, "pending");
+});
+
+test("Ticket 13: fallback batches ALL of a page's unresolved items into one call, and ignores any extra label it wasn't asked about", async () => {
+  const items = [
+    { label: "1", printed: "男仔叫咩名？", answer: "阿明" },
+    { label: "2", printed: "女仔叫咩名？", answer: "阿珠" },
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) }, {
+    fallbackByMarker: { PAGE0: { results: [
+      { question: "1", correct: true, correctAnswer: "", note: "" },
+      { question: "2", correct: false, correctAnswer: "阿英", note: "" },
+      { question: "99", correct: true, correctAnswer: "", note: "" }, // hallucinated extra -- must be ignored, not crash
+    ] } },
+  });
+  const byLabel = Object.fromEntries(json.results.map((r) => [r.question, r]));
+  assert.equal(byLabel["1"].correct, true);
+  assert.equal(byLabel["2"].correct, false);
+  assert.equal(byLabel["2"].correctAnswer, "阿英");
+  assert.equal(json.results.length, 2, "the hallucinated extra label must not appear as a phantom result");
+});
+
+test("Ticket 13: fallback returning null for an item keeps it needs_review with the AI's own note, verifiedBy stays pending (not falsely 'ai')", async () => {
+  const items = [{ label: "7", printed: "睇圖，呢個係咩形狀？", answer: "三角形" }];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) }, {
+    fallbackByMarker: { PAGE0: { results: [{ question: "7", correct: null, correctAnswer: "", note: "睇唔清幅圖" }] } },
+  });
+  const r = json.results[0];
+  assert.equal(r.correct, null);
+  assert.equal(r.status, "needs_review");
+  assert.equal(r.verifiedBy, "pending");
+  assert.equal(r.note, "睇唔清幅圖");
 });
 
 test("needs_review item logs mark_unresolved_question with the PRINTED question only, never the student's answer", async () => {

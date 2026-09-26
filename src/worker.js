@@ -1709,6 +1709,55 @@ async function callQwenOcrText(images, openrouterKey) {
   return { items, usage: data.usage || null };
 }
 
+// Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
+// -- judges the items classifyAndVerify left unresolved. One call per
+// PAGE (not per item), batching every unresolved item on that page into
+// one prompt -- far cheaper/faster than one call each, and matches how
+// /api/check already batches a whole page's items. Sends the REAL image
+// alongside the already-OCR'd text (not text alone): a real risk flagged
+// to the user before building this -- some question types (rulers,
+// angles, coins, 3D shapes, water levels) can't be judged from text at
+// all, so a text-only fallback would silently mis-grade them. The OCR'd
+// text is still included as a hint (usually correct, saves the model
+// re-transcribing from scratch), with an explicit instruction to trust
+// the photo over it on conflict.
+function buildAiFallbackPrompt(pendingItems) {
+  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」`).join("\n");
+  return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
+
+${itemsText}
+
+要求：
+1. 相有機會打橫/倒轉，先確認閱讀方向。
+2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。
+3. 只有答題位置確實有筆跡但太潦草/有歧義先"correct"設null，"note"簡短講原因。
+4. 只有"correct"為false先填"correctAnswer"，其他情況留空字串。
+5. 淨係回答上面列出嘅題號，唔好加返其他題目。
+
+只回覆一個JSON物件，唔好加其他文字：
+{"results":[{"question":"題號","correct":true/false/null,"correctAnswer":"","note":""}]}`;
+}
+
+// Same two-tier fallback as /api/check (Qwen first, DeepSeek on failure)
+// for the same proven reasons (callDeepSeek's own comment). A total
+// failure here (both tiers) throws nothing -- the caller treats a null
+// return as "leave these items exactly as they already were", the same
+// fail-open discipline as every other optional stage in this pipeline.
+async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
+  const prompt = buildAiFallbackPrompt(pendingItems);
+  try {
+    const r = await callQwen(images, prompt, openrouterKey);
+    return { parsed: r.parsed, usage: r.usage, model: "qwen" };
+  } catch (e) {
+    try {
+      const r = await callDeepSeek(images, prompt, openrouterKey);
+      return { parsed: r.parsed, usage: r.usage, model: "deepseek" };
+    } catch (e2) {
+      return null;
+    }
+  }
+}
+
 // A real handwritten sub-answer is short; anything wildly longer than that
 // is a signal that an item boundary was missed and several items' content
 // bled into one -- see MAX_ANSWER_LEN below. Printed questions are NOT
@@ -4438,6 +4487,14 @@ async function handleMark(request, env) {
   // failure took down the whole submission.
   const results = [];
   const pageErrors = [];
+  // Ticket 13 (2026-09-26): items classifyAndVerify couldn't resolve are
+  // captured here WITH their printedQuestion, before the `results` push
+  // below drops it -- the AI-fallback pass after this loop needs it, but
+  // `results` itself never carries it (client-facing shape, unchanged).
+  // Never includes printedNumberMismatch items: those need a human
+  // because the QUESTION TEXT itself is in doubt, which an AI fallback
+  // reading the same page can't resolve any better than code did.
+  const pendingForAiByPage = new Map();
   pageResults.forEach((pr, pageIdx) => {
     if (pr.failed) {
       const e = pr.error;
@@ -4498,8 +4555,46 @@ async function handleMark(request, env) {
         riskyDiagram: null,
         verifiedBy: verdict.correct === null ? "pending" : "code",
       });
+      if (effectiveCorrect === null && !printedNumberMismatch) {
+        if (!pendingForAiByPage.has(pageIdx)) pendingForAiByPage.set(pageIdx, []);
+        pendingForAiByPage.get(pageIdx).push({
+          resultIndex: results.length - 1,
+          question: item.label,
+          printedQuestion: item.printedQuestion || "",
+          studentAnswer: item.studentAnswer,
+        });
+      }
     });
   });
+
+  // Module 4, Ticket 13 (2026-09-26): AI judges what code couldn't --
+  // one call per page (only pages with unresolved items), run
+  // concurrently. A page's fallback failing (both Qwen and DeepSeek)
+  // leaves its items exactly as already built above -- needs_review,
+  // verifiedBy "pending" -- never a regression versus not having this
+  // stage at all. `aiFallbackUsage` is logged below (mark_usage) so real
+  // per-page cost/timing can be read from production logs, per explicit
+  // request to always know both after a change like this.
+  const aiFallbackUsage = [];
+  if (openrouterKey && pendingForAiByPage.size) {
+    await Promise.all(Array.from(pendingForAiByPage.entries()).map(async ([pageIdx, pendingItems]) => {
+      const tFallback = Date.now();
+      const outcome = await callAiFallbackJudge([downscaleForCheapTier(images[pageIdx], 640)], pendingItems, openrouterKey);
+      aiFallbackUsage.push({ page: pageIdx, items: pendingItems.length, ms: Date.now() - tFallback, model: outcome && outcome.model, usage: outcome && outcome.usage });
+      if (!outcome) return;
+      const byQuestion = new Map((outcome.parsed.results || []).map((r) => [String(r.question), r]));
+      pendingItems.forEach((pending) => {
+        const aiResult = byQuestion.get(String(pending.question));
+        if (!aiResult) return; // AI didn't answer this one -- stays needs_review, not a regression
+        const r = results[pending.resultIndex];
+        r.correct = typeof aiResult.correct === "boolean" ? aiResult.correct : null;
+        r.correctAnswer = r.correct === false ? String(aiResult.correctAnswer || "") : "";
+        r.status = r.correct === null ? "needs_review" : "ok";
+        r.note = r.correct === null ? (aiResult.note || "需要人手複核") : "";
+        r.verifiedBy = r.correct === null ? "pending" : "ai";
+      });
+    }));
+  }
 
   const correctCount = results.filter((r) => r.correct === true).length;
   const needsReviewCount = results.filter((r) => r.correct === null).length;
@@ -4512,6 +4607,7 @@ async function handleMark(request, env) {
     needsReview: needsReviewCount,
     totalMs, pagesMs, verifyMs, mapMs,
     perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
+    aiFallback: aiFallbackUsage,
   }));
 
   // Ticket 5 (2026-09-25): dropped-content safety net. Logging only for
