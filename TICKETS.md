@@ -232,9 +232,9 @@
 
 跟返「大改動要challenge-all + code review」呢個規矩，做完之後搵到嘅新問題：
 
-- 🔴 **第14項：`verifiedBy: "ai"`同`verifiedBy: "code"`喺annotate.js同website完全冇分開顯示。** 即係已經確認唔夠準（Ticket 9）嘅Qwen判斷結果，同deterministic code嘅結果，家長睇落去嘅✓/✗一模一樣，冇分別——最嚴重嘅發現，建議優先處理。
+- ❌ **第14項：`verifiedBy: "ai"`同`verifiedBy: "code"`喺UI冇分開顯示——用戶決定唔使做呢個方向。** 用戶明確講法：「家長如果一見到一條係對得唔準確，成個app已經係作廢」——即係分唔分得出邊個判斷嚟自邊度冇意義，家長唔會因為知道「呢個係AI判斷」就接受佢錯，一錯就已經失去信任。真正要解決嘅唔係「標示邊個判斷嚟自邊個來源」，而係「AI判斷本身準唔準」——即係問題根源返返去第9項（Qwen核心準繩度）同第19項（要驗證第13項個AI層真實準唔準）。
 - 🔲 **第15項：Ticket 13嘅fallback一頁題目數冇上限，已證實10題會令兩層model都timeout（8秒+12秒）。** 建議：限制一頁最多送幾多條去AI，超過就拆細批次或者直接維持needs_review，避免嘥錢同嘥時間。
 - 🔲 **第16項：`/api/mark`冇duplicate/idempotency保護。** 用戶手快撳兩下send同一張相，會觸發兩次獨立嘅OCR+fallback call，雙重收費。建議：用相片內容hash做短時間dedup。
 - 🔲 **第17項：Ticket 13嘅fallback prompt直接塞入未經處理嘅OCR印刷文字，理論上有prompt injection風險。** 一張刻意整嘅"功課相"如果印刷字度藏住指令，冇防範機制去阻止AI判斷被操控。
 - 🔲 **第18項：同一頁如果OCR整咗重複題號，Ticket 13嘅merge邏輯淨係用題號做key，兩條唔同題可能錯誤咁攞埋同一個AI判斷。** 需要加返disambiguation（例如用array index代替純題號做key）。
-- 🔲 **第19項（已經喺Ticket 13入面提出，未做）：`verifiedBy: "ai"`嘅判斷結果冇做過好似baseline咁嘅40張相rigor check，唔知呢層加咗之後真實準繩度係咪真係有改善。** 建議跟進方法同已有嘅rigor check一樣。
+- 🔴 **第19項（2026-09-26提升為最高優先級）：`verifiedBy: "ai"`嘅判斷結果冇做過好似baseline咁嘅40張相rigor check，唔知呢層加咗之後真實準繩度係咪真係有改善。** 用戶明確咗「標籤唔重要，準唔準先重要」之後，呢個先係第13項真正嘅驗收條件——冇呢個rigor check，就唔知第13項加落嘅AI判斷層係咪都係「錯漏百出」，同第9項嘅核心問題其實係同一件事。建議跟進方法：同已有嘅40張相rigor check一樣，攞真實相直接讀`verifiedBy: "ai"`嘅結果，人手核實準唔準。
