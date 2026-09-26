@@ -227,3 +227,14 @@
   - 相3（6題，數學）：1題code直接解決、1題因為印刷數字唔肯定而正確咁冇送去AI（設計如此）、4題送咗去AI，全部解決，14.9秒，US$0.00072——**有一條真實捕捉咗bug**：第3題OCR讀到學生答案「30;8;5」，AI（睇緊真相）判斷做**錯**，話啱嘅答案應該係「40;8;5」——同之前懷疑嘅「40讀成30」bug完全脗合，證明呢個設計（俾AI睇真相，唔淨係文字）真係有用
   - 相2（10題，英文）：**AI fallback呢頁完全失敗**——10條題一次過問，Qwen（8秒timeout）同DeepSeek（12秒timeout）都爆晒timeout（前後加埋岩岩好係20秒），全部10題維持needs_review，冇改善但都冇變差（fail-safe設計生效，冇亂咁俾錯答案）。**根本原因**：一頁題目太多一次過問，超出咗兩層model嘅timeout。**建議跟進**（未做，要你話事）：一頁題目太多時拆細啲批次去問，或者加長timeout。
   真實總成本（3頁加埋，唔計相2失敗嗰部分冇被記錄嘅費用）：US$0.00198。
+
+## 2026年9月26號：Ticket 13完成後嘅challenge-all + code review
+
+跟返「大改動要challenge-all + code review」呢個規矩，做完之後搵到嘅新問題：
+
+- 🔴 **第14項：`verifiedBy: "ai"`同`verifiedBy: "code"`喺annotate.js同website完全冇分開顯示。** 即係已經確認唔夠準（Ticket 9）嘅Qwen判斷結果，同deterministic code嘅結果，家長睇落去嘅✓/✗一模一樣，冇分別——最嚴重嘅發現，建議優先處理。
+- 🔲 **第15項：Ticket 13嘅fallback一頁題目數冇上限，已證實10題會令兩層model都timeout（8秒+12秒）。** 建議：限制一頁最多送幾多條去AI，超過就拆細批次或者直接維持needs_review，避免嘥錢同嘥時間。
+- 🔲 **第16項：`/api/mark`冇duplicate/idempotency保護。** 用戶手快撳兩下send同一張相，會觸發兩次獨立嘅OCR+fallback call，雙重收費。建議：用相片內容hash做短時間dedup。
+- 🔲 **第17項：Ticket 13嘅fallback prompt直接塞入未經處理嘅OCR印刷文字，理論上有prompt injection風險。** 一張刻意整嘅"功課相"如果印刷字度藏住指令，冇防範機制去阻止AI判斷被操控。
+- 🔲 **第18項：同一頁如果OCR整咗重複題號，Ticket 13嘅merge邏輯淨係用題號做key，兩條唔同題可能錯誤咁攞埋同一個AI判斷。** 需要加返disambiguation（例如用array index代替純題號做key）。
+- 🔲 **第19項（已經喺Ticket 13入面提出，未做）：`verifiedBy: "ai"`嘅判斷結果冇做過好似baseline咁嘅40張相rigor check，唔知呢層加咗之後真實準繩度係咪真係有改善。** 建議跟進方法同已有嘅rigor check一樣。
