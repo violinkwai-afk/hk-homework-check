@@ -1449,58 +1449,9 @@ test("crossCheckPrintedNumbers: printed question with no numbers at all stays nu
   assert.equal(r, null);
 });
 
-// --- countLikelyQuestionNumbers (2026-09-25, Ticket 5: dropped-content
-// safety net) -------------------------------------------------------
-
-test("countLikelyQuestionNumbers: clean sequential run detected via the primary (aligned+sequential) signal", () => {
-  const visionWords = [
-    visionWord("1.", 10, 10), visionWord("题目一", 40, 10),
-    visionWord("2.", 10, 50), visionWord("题目二", 40, 50),
-    visionWord("3.", 10, 90), visionWord("题目三", 40, 90),
-    visionWord("4.", 10, 130), visionWord("题目四", 40, 130),
-    visionWord("5.", 10, 170), visionWord("题目五", 40, 170),
-  ];
-  const r = mod.countLikelyQuestionNumbers(visionWords, 1000, 1000);
-  assert.equal(r, 5);
-});
-
-test("countLikelyQuestionNumbers: an aligned but NON-sequential column (table data trap) doesn't get the strong primary signal", () => {
-  // 5, 8, 12, 20 -- aligned in one column, but not consecutive integers,
-  // so this must not be confidently reported as a run of 4 via the
-  // primary signal the way a real 1,2,3,4 run would be.
-  const visionWords = [
-    visionWord("5.", 10, 10), visionWord("8.", 10, 50),
-    visionWord("12.", 10, 90), visionWord("20.", 10, 130),
-  ];
-  const r = mod.countLikelyQuestionNumbers(visionWords, 1000, 1000);
-  // Falls through to the gap fallback (each is followed by nothing else
-  // nearby in this fixture) -- the real assertion is that it's NOT
-  // treated as a confident 4-long sequential run; a returned count from
-  // the weaker fallback is acceptable, a false "these 4 are definitely
-  // real, sequential question numbers" is what this test guards against.
-  assert.ok(r === null || r <= 4);
-});
-
-test("countLikelyQuestionNumbers: no candidate labels on the page returns null", () => {
-  const visionWords = [visionWord("3+3=6", 10, 10), visionWord("40", 50, 10)];
-  const r = mod.countLikelyQuestionNumbers(visionWords, 1000, 1000);
-  assert.equal(r, null);
-});
-
-test("countLikelyQuestionNumbers: irregular (non-aligned) real labels still counted via the gap fallback", () => {
-  const visionWords = [
-    visionWord("1.", 10, 10), visionWord("題目內容在這裡", 40, 10),
-    visionWord("2.", 300, 200), visionWord("另一題在這裡", 340, 200),
-  ];
-  const r = mod.countLikelyQuestionNumbers(visionWords, 1000, 1000);
-  assert.ok(r >= 2);
-});
-
-test("countLikelyQuestionNumbers: a label-shaped token with no gap after it (tight against the next word) isn't counted", () => {
-  const visionWords = [visionWord("5.", 10, 10, 10), visionWord("×2=10", 12, 10)]; // essentially touching, no real gap
-  const r = mod.countLikelyQuestionNumbers(visionWords, 1000, 1000);
-  assert.equal(r, null);
-});
+// countLikelyQuestionNumbers (Ticket 5's dropped-content safety net) and
+// its tests were removed 2026-09-26 per explicit user decision -- see
+// worker.js's comment where the function used to live.
 
 // --- 2026-09-25 batch: real P5 1st-term exam (p1-p6.com, downloaded and
 // read directly) --------------------------------------------------------
