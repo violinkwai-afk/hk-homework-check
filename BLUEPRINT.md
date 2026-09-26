@@ -158,6 +158,19 @@ question stitching for Telegram — `/api/check` already has this via
 migration onto the shared pipeline (8, blocked on 1-6 being done AND
 re-verified with the same rigor method before cutting over).
 
+**Ticket 9, current top priority (2026-09-25 night)**: after Tickets 1-3
+shipped, the user personally reviewed a fresh Qwen OCR test and verdict
+was direct — "錯漏百出，絕對唔可以用" (riddled with errors, absolutely
+unusable). This means Ticket 8's "re-verify before cutting over"
+precondition is nowhere close to met yet; accuracy work is not done just
+because 1-3 shipped. Model search is ALSO active in parallel: GLM-4.6V
+tested once (real 3-photo test, inconclusive — fewer items returned on
+2/3 photos vs baseline, not yet read through to know if that's dropped
+content or just different segmentation); GLM-5.3-Flash, GPT-6 Luna, and
+Ling-3.0-Flash-VL found as further candidates, none tested yet.
+Fine-tuning a custom model was explicitly discussed and deferred — not
+enough verified real examples yet (have ~40, would need hundreds+).
+
 ## 4. Standing product principles
 
 1. **Accuracy is the floor, never traded for cost/speed/cleanliness/
