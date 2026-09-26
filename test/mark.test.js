@@ -690,6 +690,38 @@ test("rate limit: at the threshold is rejected BEFORE any AI call, with its own 
   assert.equal(await kv.get("checkrate:" + ip), null, "this test never touched /api/check's bucket");
 });
 
+// Ticket 16 (2026-09-26): duplicate-submission protection -- a parent
+// double-tapping "send" in Telegram must not trigger two real OCR spends
+// for the identical photo(s).
+test("Ticket 16: an identical resubmission within the dedup window returns the cached result WITHOUT a second Qwen call", async () => {
+  const kv = fakeRateLimitKV("9.9.9.9", null);
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const qwenByMarker = { PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]) };
+  let fetchCalls = 0;
+  const first = await callMark(images, qwenByMarker, { env: { RATE_LIMIT_KV: kv }, fetchSpy: () => { fetchCalls++; } });
+  assert.equal(first.status, 200);
+  const callsAfterFirst = fetchCalls;
+  assert.ok(callsAfterFirst > 0, "the first submission should genuinely call Qwen/Vision");
+
+  const second = await callMark(images, qwenByMarker, { env: { RATE_LIMIT_KV: kv }, fetchSpy: () => { fetchCalls++; } });
+  assert.equal(second.status, 200);
+  assert.deepEqual(second.json.results, first.json.results, "the resubmission returns the exact same result");
+  assert.equal(fetchCalls, callsAfterFirst, "no additional Qwen/Vision calls on the duplicate submission");
+});
+
+test("Ticket 16: a genuinely DIFFERENT submission (different image) is never treated as a duplicate", async () => {
+  const kv = fakeRateLimitKV("9.9.9.9", null);
+  const qwenByMarker = {
+    PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]),
+    PAGE1: qwenLineFor([{ label: "1", printed: "2+2=", answer: "4" }]),
+  };
+  const first = await callMark([{ data: b64("PAGE0"), mediaType: "image/jpeg" }], qwenByMarker, { env: { RATE_LIMIT_KV: kv } });
+  const second = await callMark([{ data: b64("PAGE1"), mediaType: "image/jpeg" }], qwenByMarker, { env: { RATE_LIMIT_KV: kv } });
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.notDeepEqual(second.json.results, first.json.results, "a different photo must be graded independently, not served from the other one's cache");
+});
+
 // 2026-09-22 Tier 1: blank-in-the-middle single-blank substitution.
 // Real 235B output confirmed (in-band debug against real photos B/C)
 // printedQuestion correctly preserves a blank token ("?" or "□") while

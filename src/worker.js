@@ -4362,6 +4362,32 @@ async function handleMark(request, env) {
     return json({ error: "too_many_pages", message: `每次最多批改 ${MARK_MAX_PAGES} 頁，請分開幾次提交。` }, 400);
   }
 
+  // Ticket 16 (2026-09-26): duplicate-submission protection. A parent
+  // double-tapping "send" in Telegram, or a flaky client retry, fires
+  // two full /api/mark calls for the identical photo(s) -- each one a
+  // real, separate OCR+AI-fallback spend for work already being (or
+  // just having been) done. Keyed on a content hash of the exact image
+  // bytes submitted (order-sensitive -- a genuinely different page order
+  // is a different submission), short TTL (2 minutes -- long enough to
+  // catch a double-send, short enough that a parent resubmitting the
+  // same photo later for a real reason isn't blocked). Fails open (no
+  // dedup) if KV is unbound or the hash/cache round-trip errors -- never
+  // blocks real grading over this being unavailable.
+  const MARK_DEDUP_TTL = 120;
+  let dedupKey = null;
+  if (env.RATE_LIMIT_KV) {
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(images.map((img) => img.data).join("|")));
+      const hashHex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+      dedupKey = "markdedup:" + hashHex;
+      const cached = await env.RATE_LIMIT_KV.get(dedupKey);
+      if (cached) {
+        console.log(JSON.stringify({ event: "mark_dedup_hit" }));
+        return new Response(cached, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+    } catch (e) { /* best-effort -- fall through and process normally */ }
+  }
+
   // 2026-09-25, real user request: /api/mark never had this at all (only
   // /api/check did) -- reading accuracy was already protected either way
   // (the OCR prompt below already asks the model to mentally compensate
@@ -4594,13 +4620,19 @@ async function handleMark(request, env) {
   const pageRotations = {};
   images.forEach((img, i) => { if (rotationApplied[i]) pageRotations[i] = rotationApplied[i]; });
 
-  return json({
+  const responseBody = {
     results,
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
     pageRotations,
     ...(pageErrors.length ? { pageErrors } : {}),
-  });
+  };
+  if (dedupKey && env.RATE_LIMIT_KV) {
+    try {
+      await env.RATE_LIMIT_KV.put(dedupKey, JSON.stringify(responseBody), { expirationTtl: MARK_DEDUP_TTL });
+    } catch (e) { /* best-effort */ }
+  }
+  return json(responseBody);
 }
 
 // Telegram MVP (2026-09-22): one photo in, one annotated photo out.
