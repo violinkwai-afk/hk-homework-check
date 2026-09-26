@@ -131,7 +131,7 @@
 - 🔲 用尺量嘢——未試過,估計都做唔到
 - 🟨 **算盤讀數（2026-09-26重新查證，之前記錄過時）——Photon port其實已經做咗（5/5準確），但未通用化+未接落判斷系統。** 真實現狀：`benchmark/photon-prototypes/abacus-reader.js`已經有5/5準確嘅Photon版本，但(a)算盤條數位置寫死喺code入面，未做到自動認任何一張相嘅條數位置；(b)`classifyAndVerify`（而家嘅判斷系統）淨係睇AI讀到嘅文字，冇接觸相片本身，算盤讀珠仔呢類「要睇緊張相先計到」嘅題型冇辦法直接接落去。真正瓶頸係(b)，見第22項。
 - 🔴 **第22項（2026-09-26新增）：而家嘅判斷系統（`classifyAndVerify`）結構上冇辦法處理「要睇緊張相先計到答案」嘅題型（算盤、睇鐘面、用尺量嘢全部屬於呢類）。** 需要諗一個新接口，等判斷系統可以攞到相片本身（唔淨係AI讀到嘅文字）去做呢類判斷，先可以逐個解決呢類題型。呢個唔係邊個題型嘅問題，係架構層面嘅缺口，做完呢個先可以逐個解決埋算盤/鐘面/用尺呢幾樣。
-- 🔲 38種新搵到嘅題型（見G7）——絕大部分未寫code
+- 🟨 **38種新搵到嘅題型（見`benchmark/question-type-library.md`，2026-09-26重新查證，之前記錄過時）——比記錄講嘅多好多已經寫咗code。** 查confirm咗`digit_count_of_n_plus_one`、`compound_unit_conversion`、`construct_extreme_number`、`elapsed_time_forward`、`reverse_divisor_from_remainder`呢幾個之前寫低"NOT built"嘅，其實已經寫咗、已經接駁落`classifyAndVerify`。今晚仲加多兩個新嘅：`word_problem_more_than`（「比...多/少」加減關係題）、`number_between`（「寫一個介乎X同Y之間嘅數」）。仍然有一批真係未寫嘅（Multi-box digit answer、Select 2 of 3 sum to target、Classify numbers even/odd/prime from a set、LCM/GCD short division、Algebra substitution、HCF-matching MC等），詳細見question-type-library.md。
 
 ### 中英文題判斷（淨係得設計,未起code）
 
