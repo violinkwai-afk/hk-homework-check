@@ -237,6 +237,9 @@
 - 🔲 **第16項：`/api/mark`冇duplicate/idempotency保護。** 用戶手快撳兩下send同一張相，會觸發兩次獨立嘅OCR+fallback call，雙重收費。建議：用相片內容hash做短時間dedup。
 - 🔲 **第17項：Ticket 13嘅fallback prompt直接塞入未經處理嘅OCR印刷文字，理論上有prompt injection風險。** 一張刻意整嘅"功課相"如果印刷字度藏住指令，冇防範機制去阻止AI判斷被操控。
 - 🔲 **第18項：同一頁如果OCR整咗重複題號，Ticket 13嘅merge邏輯淨係用題號做key，兩條唔同題可能錯誤咁攞埋同一個AI判斷。** 需要加返disambiguation（例如用array index代替純題號做key）。
-- 🔴 **第19項（2026-09-26提升為最高優先級）：`verifiedBy: "ai"`嘅判斷結果冇做過好似baseline咁嘅40張相rigor check，唔知呢層加咗之後真實準繩度係咪真係有改善。** 用戶明確咗「標籤唔重要，準唔準先重要」之後，呢個先係第13項真正嘅驗收條件——冇呢個rigor check，就唔知第13項加落嘅AI判斷層係咪都係「錯漏百出」，同第9項嘅核心問題其實係同一件事。建議跟進方法：同已有嘅40張相rigor check一樣，攞真實相直接讀`verifiedBy: "ai"`嘅結果，人手核實準唔準。
+- ✅ **第19項完成：`verifiedBy: "ai"`真實rigor check做咗，結論——同Ticket 9一樣，仍然「錯漏百出」，未解決核心問題。** 用返10張全新真實相（今晚未用過），跑production `/api/mark`，人手逐張直接睇相核實：
+  - **相1（三年級數學卷）4條AI判斷嘅題，最少確認咗2條真實錯**：第1題（MC選擇題）學生實際填咗嘅係B，AI讀成C，仲判做啱；第5題（排序題）AI讀到嘅數字「54148」「54188」同張相實際印刷嘅數據（56219/54119/54198）完全對唔上，明顯亂讀。
+  - **相2（一年級睇鐘面卷）出現一個自相矛盾嘅結果**：第3題AI話學生答案係「6」，判做**錯**，但「正確答案」都係填「6」——即係AI話學生答案同正確答案一樣，但又判佢錯，邏輯上完全講唔通，merge code冇捕捉到呢種矛盾輸出。呢張相仲要係「睇鐘面」呢類已知未支援嘅題型（見工作清單），代表AI fallback畀咗一個假裝自信嘅錯判斷落一條本身就做唔到嘅題型度。
+  結論：**Ticket 13加咗嘅AI判斷層，本質上仲係用緊嗰個已經確認「絕對唔可以用」嘅Qwen（temperature=0都冇解決呢個問題，因為問題唔係random，係讀錯/判斷邏輯本身）。第9項嘅核心問題完全未解決，只係換咗個包裝。** 呢個發現直接支持返用戶今晚提出嘅方向：code能力以外嘅嘢，AI暫時唔應該自己落最終判斷。
 - ✅ **第20項：全部AI call加返`temperature: 0`（AI答案random程度設做最低）。** 之前成個code base冇任何一個call設過呢個參數，即係一直用緊AI provider嘅預設值（通常唔係0，即係有隨機性）。呢個係讀字/判斷任務，唔係作文，唔應該有隨機性，減低幻覺（老作嘢）風險嘅其中一個具體、平快嘅做法。已加落`callClaude`、`callOpenRouterVisionModel`（Qwen/DeepSeek/Ticket13 fallback共用）、`callQwenOcrText`三個call嘅地方，313/313測試通過。
 - ✅ **第21項：Qwen嘅call都加返排除Alibaba做provider，`2257f0b`已push，313/313測試通過。** 用戶明確因私隱理由要求（唔想小朋友功課相經內地伺服器）。`callQwen`（`providerFilter`）同`callQwenOcrText`（自己個body入面）兩個地方都加咗`{ignore:["Alibaba"]}`，同DeepSeek已有嘅設定睇齊。
