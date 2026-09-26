@@ -141,15 +141,15 @@ model burning its whole completion budget before producing OCR output,
 this says nothing about the baseline's OWN absolute accuracy (see the
 rigor-check numbers above for that; they're the real, separate finding).
 
-**Open tickets** (see TICKETS.md "2026年9月25號" section for full detail,
-1-8): prompt fixes for blank-handling/teacher-marks/homework-detection
-(1-3), the Vision-primary printed-text mechanism from §2b (4), the
-dropped-content safety net (5), PDF upload handling — cheap first step
-shipped 2026-09-26 (`f797ad7`): a PDF/document sent via Telegram now gets
-a clear "not supported" reply instead of total silence; real PDF support
-still not built (6), cross-page question stitching for Telegram —
-`/api/check` already has this via `stitchPages`, `/api/mark` has no
-equivalent (7), and the website migration onto the shared pipeline (8,
+**Open tickets** (see TICKETS.md for full detail): prompt fixes for
+blank-handling/teacher-marks/homework-detection (1-3, shipped), the
+Vision-primary printed-text mechanism from §2b (4, partial), the
+dropped-content safety net (5, removed 2026-09-26 per user decision), PDF
+upload — **closed 2026-09-26**: user decided not to build real PDF
+support; a PDF/document sent via Telegram gets a clear "not supported"
+reply, that's the final behavior (6), cross-page question stitching for
+Telegram — `/api/check` already has this via `stitchPages`, `/api/mark`
+has no equivalent (7), and the website migration onto the shared pipeline (8,
 blocked on 1-6 being done AND re-verified with the same rigor method
 before cutting over).
 
