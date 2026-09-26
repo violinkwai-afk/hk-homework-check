@@ -4607,6 +4607,25 @@ async function handleTelegramWebhook(request, env) {
     return new Response("ok");
   }
 
+  // Ticket 6, cheap first step: a PDF/document (or any other file type)
+  // has no `message.photo`, so parseTelegramUpdate below returns null for
+  // it -- previously that meant total silence, indistinguishable from a
+  // sticker or text message being (correctly) ignored. A parent who sends
+  // a PDF deserves to know why nothing came back, not silence that looks
+  // like a bug. PDF support itself is still not built (see TICKETS.md
+  // Ticket 6) -- this only replaces silence with an honest, clear message.
+  const docChatId = update && update.message && update.message.chat && update.message.chat.id;
+  const hasDocument = update && update.message && update.message.document;
+  const hasPhoto = update && update.message && Array.isArray(update.message.photo) && update.message.photo.length;
+  if (docChatId && hasDocument && !hasPhoto) {
+    try {
+      await telegramSendMessage(botToken, String(docChatId), "暫時未支援 PDF／文件格式，請影相或者send相片。");
+    } catch (e) {
+      console.log(JSON.stringify({ event: "telegram_document_notice_failed", error: String(e && e.message || e) }));
+    }
+    return new Response("ok");
+  }
+
   const parsed = parseTelegramUpdate(update);
   if (!parsed) {
     // Not a photo message (text, sticker, no message at all, ...) --

@@ -139,6 +139,26 @@ test("2. no photo update: returns ok, makes no Telegram/OpenRouter calls at all"
   assert.equal(calls.length, 0, "a non-photo update should never touch Telegram or OpenRouter");
 });
 
+test("2b. document (e.g. PDF) update with no photo: sends a clear 'not supported' message, no getFile/mark/OpenRouter calls", async () => {
+  const { status, text, calls } = await callWebhook({
+    message: { chat: { id: 1 }, document: { file_id: "doc1", mime_type: "application/pdf", file_name: "homework.pdf" } },
+  });
+  assert.equal(status, 200);
+  assert.equal(text, "ok");
+  assert.ok(!calls.some((u) => u.includes("/getFile")), "must not try to download a document as a photo");
+  assert.ok(!calls.some((u) => u.includes("openrouter.ai")), "must not spend any AI call on an unsupported document");
+  const sendMessageCalls = calls.filter((u) => u.includes("/sendMessage"));
+  assert.equal(sendMessageCalls.length, 1, "expected exactly one clear notice message, not silence");
+});
+
+test("2c. document AND photo both present (e.g. photo sent as a file attachment): treated as a photo, not silenced", async () => {
+  const update = photoUpdate("file123");
+  update.message.document = { file_id: "doc1", mime_type: "image/jpeg", file_name: "scan.jpg" };
+  const { status, calls } = await callWebhook(update);
+  assert.equal(status, 200);
+  assert.ok(calls.some((u) => u.includes("/getFile")), "photo present alongside a document should still be marked normally");
+});
+
 test("3. malformed update: bad JSON body returns ok, does not throw", async () => {
   const { status, text, calls } = await callWebhook("{not valid json");
   assert.equal(status, 200);
