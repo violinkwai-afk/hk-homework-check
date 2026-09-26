@@ -78,23 +78,15 @@ see TICKETS.md Ticket 4's own note) division of labour:
   LLM can (it has no world knowledge to draw from) — making it primary
   structurally closes that failure mode wherever a match succeeds,
   rather than merely catching it after the fact.
-- **Dropped-content safety net**: separately, pattern-match
-  question-number-shaped tokens in Vision's word list. Primary, strongest
-  signal: a run of candidates that's BOTH X-position-aligned AND
-  sequential (1,2,3,4… no gaps) — sequential-increment is what
-  distinguishes a real question-number column from a coincidentally
-  X-aligned table data column (a data column like 5,8,12,20 won't be a
-  clean ascending run), and doubles as the fix for tables specifically —
-  no separate table-handling logic needed. Fallback signal (when no clean
-  aligned+sequential run is found, e.g. an irregularly-laid-out
-  worksheet): "label followed by a clear spacing gap" before the next
-  word, a purely local check that doesn't depend on page-wide alignment.
-  X-position alignment on its own is a confidence BOOSTER, not a hard
-  requirement — an isolated, unaligned candidate is not auto-discarded,
-  to avoid false-negatives on irregular real layouts. Compare the
-  resulting count against how many items AI actually returned; only flag
-  "possibly dropped content" on a meaningful margin (2+), not any
-  mismatch, to tolerate the method's own imperfection.
+- **Dropped-content safety net: REMOVED 2026-09-26.** Used to
+  pattern-match question-number-shaped tokens in Vision's word list
+  (aligned+sequential run, or a spacing-gap fallback) and compare the
+  count against how many items AI returned. Retired per explicit user
+  decision — judged that Vision's own output is a better signal than a
+  custom regex/heuristic layer for this. (Technical caveat raised but not
+  blocking: Vision's block/paragraph structure is a LAYOUT signal from
+  whitespace/position, not a semantic "this is question 3" signal — worth
+  keeping in mind if question-boundary detection is revisited later.)
 - **Homework-vs-not classification**: a page counts as homework only if
   it shows NO website/app UI chrome (browser bars, buttons, hyperlinks,
   cursors) AND its layout resembles an educational worksheet/textbook
@@ -152,11 +144,14 @@ rigor-check numbers above for that; they're the real, separate finding).
 **Open tickets** (see TICKETS.md "2026年9月25號" section for full detail,
 1-8): prompt fixes for blank-handling/teacher-marks/homework-detection
 (1-3), the Vision-primary printed-text mechanism from §2b (4), the
-dropped-content safety net (5), PDF upload handling (6), cross-page
-question stitching for Telegram — `/api/check` already has this via
-`stitchPages`, `/api/mark` has no equivalent (7), and the website
-migration onto the shared pipeline (8, blocked on 1-6 being done AND
-re-verified with the same rigor method before cutting over).
+dropped-content safety net (5), PDF upload handling — cheap first step
+shipped 2026-09-26 (`f797ad7`): a PDF/document sent via Telegram now gets
+a clear "not supported" reply instead of total silence; real PDF support
+still not built (6), cross-page question stitching for Telegram —
+`/api/check` already has this via `stitchPages`, `/api/mark` has no
+equivalent (7), and the website migration onto the shared pipeline (8,
+blocked on 1-6 being done AND re-verified with the same rigor method
+before cutting over).
 
 **Ticket 9, current top priority (2026-09-25 night)**: after Tickets 1-3
 shipped, the user personally reviewed a fresh Qwen OCR test and verdict
@@ -167,9 +162,20 @@ because 1-3 shipped. Model search is ALSO active in parallel: **GLM-4.6V tested 
 REJECTED** (real 3-photo rigor check, read through directly — on one
 photo GLM got only 1/5 items right vs Qwen's 4-5/5; on another GLM
 failed to structure its output at all, `parseFailed: true`, while Qwen
-stayed correctly structured despite 1-2 likely digit misreads). GLM-5.3-
-Flash, GPT-6 Luna, and Ling-3.0-Flash-VL found as further candidates,
-none tested yet.
+stayed correctly structured despite 1-2 likely digit misreads). GLM-5.3-Flash, GPT-6 Luna, and Ling-3.0-Flash-VL were tested next
+(2026-09-26) and **all 3 REJECTED for pure OCR**: 6 of 9 real calls (3
+photos × 3 models) failed outright, mostly hitting `incomplete: length` —
+the model burned its token budget on internal reasoning before producing
+any OCR output, the same failure pattern already confirmed for
+Qwen3.6-flash. Even the calls that succeeded leaned heavily on reasoning
+tokens (69-80% of completion tokens) and one had a structural parse
+error. A follow-up same-day test tried the SAME 3 models on the
+read+judge task instead (`/api/check`'s actual job): Ling-3.0-Flash-VL
+was still 0/3 (unreliable regardless of task), but GLM-5.3-Flash and
+GPT-6 Luna both completed reliably this time — still showed no real
+advantage though (both slower than Qwen, one notably pricier, judgments
+disagreed with baseline on some items with no independently-verified
+answer key to say who's right). No further candidates in the queue.
 Fine-tuning a custom model was explicitly discussed and deferred — not
 enough verified real examples yet (have ~40, would need hundreds+).
 
