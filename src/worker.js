@@ -1590,6 +1590,12 @@ async function callQwen(images, prompt, openrouterKey) {
     model: PRODUCTION_OCR_MODEL,
     maxTokens: 4096,
     timeoutMs: 8000,
+    // Ticket 21 (2026-09-26, explicit user decision): never route through
+    // Alibaba -- real children's homework photos shouldn't touch that
+    // provider's infrastructure. Matches callDeepSeek's existing
+    // exclusion below (that one for a content-moderation false-positive
+    // reason, not privacy, but the same effect either way).
+    providerFilter: { ignore: ["Alibaba"] },
     logPrefix: "qwen",
   });
 }
@@ -1662,10 +1668,14 @@ async function callQwenOcrText(images, openrouterKey) {
     // tried and rejected -- real benchmark showed it made every case
     // SLOWER (not faster) and one case notably LESS accurate (matching
     // the already-rejected DeepSeek failure pattern almost exactly).
-    // Reverted to default OpenRouter routing (no provider override).
+    // No sort override; Ticket 21 below is a provider EXCLUSION, not a
+    // sort preference, so that finding still stands.
     max_tokens: 2000,
     // Ticket 20 (2026-09-26): see callClaude's identical comment.
     temperature: 0,
+    // Ticket 21 (2026-09-26, explicit user decision): never route
+    // through Alibaba -- see callQwen's identical comment.
+    provider: { ignore: ["Alibaba"] },
     messages: [
       {
         role: "user",
