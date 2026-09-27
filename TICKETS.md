@@ -332,4 +332,12 @@
   **真實驗證（已做）**：用返一張正常、完整（唔係split）嘅相直接call真正`/api/mark`——`continuesFromPrevious`/`continuesToNext`都啱啱好係false（冇亂報），12條item全部正確解析（同prompt改動之前一樣，冇regression）。
   **未驗證（老實講清楚）**：手上冇一張真係「橫跨兩頁」嘅相，所以未實測過個flag喺真正split情況會唔會啱啱好報做true、跟住個stitch會唔會真係觸發到。如果你有呢類相，可以send俾我測到正嘅positive case。
 
+- ✅ **第49項完成：全面review咗所有「解題code」，確保寫咗嘅嘢真係接落生產環境用緊嘅pipeline。** 用戶要求「ensure all codes written for solving questions can be used in the pipeline」，做咗一次完整審計：
+  - 成個codebase有45個`verify*` function，逐一check邊啲真係喺`QUESTION_TYPE_HANDLERS`（真正production行緊嗰個dispatcher）入面有註冊。
+  - **9個冇註冊，其中2個係啱嘅（有記錄低原因）**：`verifySelectTwoNumbersSumTarget`、`verifySortFractionsAscending`——呢兩個要求structured輸入（已解析好嘅候選數字array），而OCR而家淨係識攞文字，未有可靠方法由張相度直接攞到呢種structured data，暫時真係做唔到，唔係漏咗。
+  - **另外7個已有documented原因**（`verifySudoku4x4`/`verifySelectFromPassage`/`verifyPictureMatchFormat`/`verifyWordBankOnceEach`/`verifyLiteralKeywordMC`/`verifyConjunctionFill`/`verifyPriceTableLookup`）——全部要OCR輸出而家未有嘅structured欄位（格仔grid、原文段落、word bank等），同上面一樣，真係欠OCR prompt先可以接。
+  - **搵到7個真係「寫咗、測試過、但一直冇接落pipeline」嘅handler，已經全部接返落去**：`chinese_large_numeral_to_arabic`（阿拉伯數字轉換）、`word_problem_rate_multiplication`（「每...共」rate應用題,例如「小克每天儲蓄30元...五天共」）、`division_remainder_blank`（除式帶餘數空格）、`extreme_number_difference`（最大/最小N位數相差）、`substitute_and_evaluate`（代數代入求值）、`repeated_digit_place_value_difference`（重複數字位值相差）、`time_format_conversion`（12/24小時制轉換）。全部有真實例子嘅regression test，加咗7條「真係經classifyAndVerify行到」嘅integration test（唔淨係test個function本身，係test成條dispatcher）。
+  - **過程中真係搵到並修好一個碰撞（collision）**：`repeated_digit_place_value_difference`最初擺喺一個位置,俾`word_problem_difference`（更闊嘅trigger,淨係check「相差」+2個數字）搶先攔截咗個真實例子——已經調返去更前面,確保更specific嘅handler優先攞。
+  369/369測試通過，已push。
+
 

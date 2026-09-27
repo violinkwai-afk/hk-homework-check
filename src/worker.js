@@ -4249,6 +4249,21 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyComputationMC(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now -- found during an audit of every written
+    // verify* function against QUESTION_TYPE_HANDLERS. Must run BEFORE
+    // number_word_conversion: a large-numeral phrase quoted in 「」 that
+    // ONLY uses small-numeral characters (no 億/萬/百) also matches that
+    // handler's own "quoted content" trigger, so this more specific
+    // "阿拉伯數字" + quote combination needs first claim.
+    name: "chinese_large_numeral_to_arabic",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /阿拉伯數字/.test(printed) && /「[^」]+」/.test(printed);
+    },
+    verify: (item) => verifyChineseLargeNumeralToArabic(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "number_word_conversion",
     detect: (item) => {
       const printed = String(item.printedQuestion || "").trim();
@@ -4284,6 +4299,20 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyNumberWordConversion(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25 (found from
+    // the exact bug verifyWordProblemTotal's own "每" guard documents --
+    // that function safely declines a rate-multiplication shape rather
+    // than mis-summing it, but nothing ever solved it either, until now).
+    // Must run BEFORE word_problem_total: both share the 共/總共/一共/合共
+    // trigger, and this is the more specific (每-rate) case.
+    name: "word_problem_rate_multiplication",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /每/.test(printed) && /(共|總共|一共|合共)/.test(printed);
+    },
+    verify: (item) => verifyWordProblemRateMultiplication(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -4291,6 +4320,18 @@ const QUESTION_TYPE_HANDLERS = [
       return (printed.match(/(?<!第)\d+/g) || []).length >= 2;
     },
     verify: (item) => verifyWordProblemTotal(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now. Must run BEFORE word_problem_difference --
+    // a real collision found via the new integration test: this
+    // question's own "相差" wording plus exactly-2-numbers-in-the-text
+    // ALSO matches word_problem_difference's much looser trigger, so the
+    // more specific full-shape match ("在...這個數中...兩個「D」的數值
+    // 相差多少") needs first claim.
+    name: "repeated_digit_place_value_difference",
+    detect: (item) => /在\s*\d+\s*這個數中.*?兩個「\d」的數值相差多少/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyRepeatedDigitPlaceValueDifference(item.printedQuestion, item.studentAnswer),
   },
   {
     name: "word_problem_difference",
@@ -4405,9 +4446,50 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyReverseDivisorFromRemainder(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now. Distinct shape from reverse_divisor_from_
+    // remainder above -- there the blank is the DIVISOR (between ÷ and
+    // =); here dividend/divisor/quotient are all given and the blank is
+    // the REMAINDER (after the "…"), so the two triggers structurally
+    // can't overlap.
+    name: "division_remainder_blank",
+    detect: (item) => /\d+\s*[÷\/]\s*\d+\s*=\s*\d+\s*(?:[…⋯]|\.{2,3})\s*[●?□]/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDivisionRemainderBlank(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "multiple_difference",
     detect: (item) => /\d+嘅第[一二三四五六七八九十]+個同第[一二三四五六七八九十]+個倍數相差/.test(String(item.printedQuestion || "")),
     verify: (item) => verifyMultipleDifference(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now. Distinct from construct_extreme_number above
+    // -- that one builds a number FROM a given digit set; this is pure
+    // place-value general knowledge (no digits given at all), keyed off
+    // "largest/smallest N-digit number...differ" phrasing.
+    name: "extreme_number_difference",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const m = printed.match(/(.+?)(?:和|與)(.+?)相差是?/);
+      if (!m) return false;
+      const termPattern = /(最大|最小)的?([一二兩三四五六]|\d+)位(奇|偶)?數/;
+      return termPattern.test(m[1]) && termPattern.test(m[2]);
+    },
+    verify: (item) => verifyExtremeNumberDifference(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now.
+    name: "substitute_and_evaluate",
+    detect: (item) => /如果\s*[A-Za-z]\s*=\s*-?\d+(?:\.\d+)?\s*[，,]\s*那麼.+的值是/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySubstituteAndEvaluate(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 49 (2026-09-27): written and tested 2026-09-25, never
+    // registered until now.
+    name: "time_format_conversion",
+    detect: (item) => /12[-\s]?hour|12\s*小時|24[-\s]?hour|24\s*小時/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyTimeFormatConversion(item.printedQuestion, item.studentAnswer),
   },
   {
     name: "round_to_nearest_hundred",
@@ -4486,7 +4568,7 @@ function classifyAndVerify(item, getImageCrop) {
   for (const handler of QUESTION_TYPE_HANDLERS) {
     if (handler.detect(item)) {
       const subject = handler.name === "math_equation" || handler.name.startsWith("word_problem")
-        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum", "number_between"].includes(handler.name)
+        || ["multi_blank_math", "missing_digit_in_number", "missing_digits_in_equation", "multi_box_digit_answer", "sequence_fill", "sort_numbers", "comparison_symbol", "parity_mc", "computation_mc", "number_word_conversion", "digit_count_of_n_plus_one", "compound_unit_conversion", "construct_extreme_number", "list_factors", "count_primes_below", "elapsed_time_forward", "reverse_divisor_from_remainder", "multiple_difference", "round_to_nearest_hundred", "reverse_factor_sum", "number_between", "chinese_large_numeral_to_arabic", "division_remainder_blank", "extreme_number_difference", "substitute_and_evaluate", "repeated_digit_place_value_difference", "time_format_conversion"].includes(handler.name)
         ? "math" : detectSubject(item.printedQuestion, item.studentAnswer);
       if (handler.verifyVisual) {
         const crop = typeof getImageCrop === "function" ? getImageCrop() : null;

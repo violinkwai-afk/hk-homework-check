@@ -1732,3 +1732,61 @@ test("verifyMath: bare division question with a bare 'quotient…remainder' answ
   const asciiDots = mod.verifyMath("87÷6", "14...3");
   assert.equal(asciiDots.correct, true);
 });
+
+// Ticket 49 (2026-09-27): audit found 7 fully-written, fully-tested
+// verify* functions that were NEVER reachable in production because no
+// QUESTION_TYPE_HANDLERS entry ever called them -- each function's own
+// unit tests only ever called it directly, never through the real
+// classifyAndVerify dispatcher a live /api/mark request actually uses.
+// These integration tests close that gap: same real example sentences
+// as each function's own unit test, but routed through classifyAndVerify
+// itself, proving the new registry entries actually fire.
+test("classifyAndVerify: chinese_large_numeral_to_arabic now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "以阿拉伯數字寫出「五億零八百萬零二十」。", studentAnswer: "508000020" });
+  assert.equal(v.handler, "chinese_large_numeral_to_arabic");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: word_problem_rate_multiplication now reachable via the real dispatcher (previously fell through to word_problem_total's safe null)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "小克每天儲蓄30元，他五天共儲蓄多少元？", studentAnswer: "150" });
+  assert.equal(v.handler, "word_problem_rate_multiplication");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: division_remainder_blank now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "在49÷5=9…●的除式中，●代表的數是___", studentAnswer: "4" });
+  assert.equal(v.handler, "division_remainder_blank");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: extreme_number_difference now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "最大的三位數和最小的三位奇數相差是___", studentAnswer: "898" });
+  assert.equal(v.handler, "extreme_number_difference");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: substitute_and_evaluate now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "如果T=8，那麼10+T-6的值是______。", studentAnswer: "12" });
+  assert.equal(v.handler, "substitute_and_evaluate");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: repeated_digit_place_value_difference now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "在71460864這個數中，兩個「6」的數值相差多少？", studentAnswer: "59940" });
+  assert.equal(v.handler, "repeated_digit_place_value_difference");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: time_format_conversion now reachable via the real dispatcher", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "Express the time in '12-hour time'. 16:15", studentAnswer: "4:15 in the afternoon" });
+  assert.equal(v.handler, "time_format_conversion");
+  assert.equal(v.correct, true);
+});
+
+// Collision guard: chinese_large_numeral_to_arabic must claim priority
+// over number_word_conversion when both triggers are technically present
+// (a small-numeral-only quote plus the "阿拉伯數字" keyword).
+test("classifyAndVerify: chinese_large_numeral_to_arabic beats number_word_conversion on overlapping trigger shape", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "以阿拉伯數字寫出「五十二」。", studentAnswer: "52" });
+  assert.equal(v.handler, "chinese_large_numeral_to_arabic");
+});
