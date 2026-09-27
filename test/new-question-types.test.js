@@ -1790,3 +1790,33 @@ test("classifyAndVerify: chinese_large_numeral_to_arabic beats number_word_conve
   const v = mod.classifyAndVerify({ label: "1", printedQuestion: "以阿拉伯數字寫出「五十二」。", studentAnswer: "52" });
   assert.equal(v.handler, "chinese_large_numeral_to_arabic");
 });
+
+// Ticket 51 (2026-09-27): verifyConjunctionFill now reachable via the
+// real dispatcher, using clauseA/clauseB split directly out of the
+// existing printedQuestion (no OCR prompt change) -- real shape
+// confirmed post-Ticket-29 ("My name is Eric. I have three sisters
+// ____ I don't have any brothers.").
+test("classifyAndVerify: conjunction_fill now reachable via the real dispatcher, split from a single-sentence printedQuestion", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I like cherries ____ I don't like strawberries.", studentAnswer: "but" });
+  assert.equal(v.handler, "conjunction_fill");
+  assert.equal(v.correct, true);
+  assert.equal(v.subject, "english");
+});
+
+test("classifyAndVerify: conjunction_fill correctly reports a wrong but/and answer", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I like cherries ____ I don't like strawberries.", studentAnswer: "and" });
+  assert.equal(v.handler, "conjunction_fill");
+  assert.equal(v.correct, false);
+  assert.equal(v.correctAnswer, "but");
+});
+
+test("classifyAndVerify: conjunction_fill does not misfire on a non-but/and answer (e.g. 'or', the third real option on this worksheet type)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I can't swim ____ ride a bicycle.", studentAnswer: "or" });
+  assert.notEqual(v.handler, "conjunction_fill");
+});
+
+test("classifyAndVerify: conjunction_fill does not collide with number_word_conversion on a real elliptical example", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I have two brothers ____ one sister.", studentAnswer: "and" });
+  assert.equal(v.handler, "conjunction_fill");
+  assert.equal(v.correct, true);
+});

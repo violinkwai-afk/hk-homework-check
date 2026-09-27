@@ -4563,6 +4563,32 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyReverseFactorSum(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 51 (2026-09-27): verifyConjunctionFill was written and
+    // tested 2026-09-25 but never registered, ostensibly because it
+    // takes (clauseA, clauseB) as two SEPARATE strings rather than one
+    // printedQuestion -- but Ticket 29's context-preservation fix
+    // (2026-09-27) means a real single-blank item's printedQuestion now
+    // already carries the full sentence with the blank marked as a
+    // run of underscores (confirmed real example: "My name is Eric. I
+    // have three sisters ____ I don't have any brothers."), so clauseA/
+    // clauseB can be split straight out of the EXISTING printedQuestion
+    // with no OCR prompt change needed at all -- the data was already
+    // there, just never wired through.
+    name: "conjunction_fill",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const answer = String(item.studentAnswer || "").trim().toLowerCase();
+      return (answer === "but" || answer === "and") && /_{2,}/.test(printed);
+    },
+    verify: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const parts = printed.split(/_{2,}/);
+      const clauseA = (parts[0] || "").trim();
+      const clauseB = parts.slice(1).join(" ").trim();
+      return verifyConjunctionFill(clauseA, clauseB, item.studentAnswer);
+    },
+  },
+  {
     name: "grammar_cloze",
     // Ticket 27 (2026-09-27, real data finding): a 7-photo real-pipeline
     // test found this handler wrongly claiming a completely different

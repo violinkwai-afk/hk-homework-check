@@ -345,4 +345,7 @@
   做法：每次做Photon嘢（annotateImage、轉向處理），將真實耗時（毫秒）累計寫入KV（key: `cpuguard:<HK日期>`），跟返第40項一樣嘅best-effort做法。門檻暫定每日100萬毫秒（根據Workers Paid plan每月包3000萬CPU-ms÷30日嘅保守估算，未有真實數據校準，之後可以再調）。
   373/373測試通過（新加7個，包括fail-open保護測試），已push。
 
+- 🟨 **第51項進行中：跟返「work on OCR prompt」呢個要求，接第一個未接嘅handler——`verifyConjunctionFill`（but/and連接句）。** 意外發現：其實唔使改OCR prompt都做到！因為第29項（2026-09-27）嗰個context保留修正,而家一個blank嘅printedQuestion已經帶埋成句嘢（真實例子：「My name is Eric. I have three sisters ____ I don't have any brothers.」），淨係將呢句字用「____」切開做clauseA/clauseB就得，資料一早已經有，之前淨係冇駁埋。377/377測試通過，已push。
+  **剩低6個仲要真係改OCR prompt先接到**（word bank、原文段落、價目表、選項A/B/C/D分開、4x4格仔、睇圖format）——呢6個先係真係要動OCR prompt呢個高風險嘅位（歷史上第26/31項都因為改prompt整出過真regression），建議逐個、逐個驗證咁做，唔好一次過全部加。想我揀邊一個先開始？
+
 
