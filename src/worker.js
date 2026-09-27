@@ -1760,6 +1760,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁係一篇閱讀理解，有一段原文（文章/對話/詩歌），學生要根據原文答題（例如喺原文入面揀返啱嘅字填空,或者揀MC選項）**，喺回覆最開始加一行「PASSAGE: <原文全文>」，將成段原文文字全部放喺呢一行（原文入面如果本身有換行,轉做空格,確保成段原文淨係一行）。如果冇呢類原文就完全唔使加呢行。
 
+**如果呢頁有印刷咗一個「詞語庫」（一組可以填嘅詞語/短語,規定每個淨係用一次,例如"a cup of/a bar of/a bowl of/a piece of/a basket of/a packet of"）**，喺回覆最開始加一行「WORD_BANK: 詞1;詞2;詞3;...」，列晒成組詞語庫嘅每一個詞（用";"分隔）。如果冇呢類詞語庫就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -1791,6 +1793,21 @@ function extractPassageText(text) {
   const m = /^PASSAGE:\s*(.+)$/m.exec(text);
   const cleanedText = text.replace(/^PASSAGE:.*$/gm, "");
   return { passageText: m ? m[1].trim() : null, cleanedText };
+}
+
+// Ticket 54 (2026-09-27): extracts an optional printed word bank (see
+// OCR_ONLY_PROMPT's own instruction above). Unlike price table/passage,
+// this is NOT wired through a QUESTION_TYPE_HANDLERS entry -- the
+// underlying check (verifyWordBankOnceEach) is a GROUP constraint across
+// all of a page's word-bank items together, not a per-item check, so
+// it's applied as its own pass in handleMark instead (see the
+// "Module 2b" comment there).
+function extractWordBank(text) {
+  const m = /^WORD_BANK:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^WORD_BANK:.*$/gm, "");
+  if (!m) return { wordBank: null, cleanedText };
+  const bank = m[1].split(";").map((s) => s.trim()).filter(Boolean);
+  return { wordBank: bank.length ? bank : null, cleanedText };
 }
 
 // Shared by literal_keyword_mc (and any future MC-options consumer):
@@ -1903,12 +1920,13 @@ async function callQwenOcrText(images, openrouterKey) {
   const text = (choice.message && choice.message.content) || "";
   const { continuesFromPrevious, continuesToNext, cleanedText: cleanedText1 } = extractContinuationMarkers(text);
   const { priceTable, cleanedText: cleanedText2 } = extractPriceTable(cleanedText1);
-  const { passageText, cleanedText } = extractPassageText(cleanedText2);
+  const { passageText, cleanedText: cleanedText3 } = extractPassageText(cleanedText2);
+  const { wordBank, cleanedText } = extractWordBank(cleanedText3);
   const items = parseOcrLine(cleanedText);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -1924,7 +1942,10 @@ async function callQwenOcrText(images, openrouterKey) {
 // re-transcribing from scratch), with an explicit instruction to trust
 // the photo over it on conflict.
 function buildAiFallbackPrompt(pendingItems) {
-  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」`).join("\n");
+  // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
+  // -- if Jev couldn't confidently resolve a word-bank clash, this judge
+  // (which additionally sees the real photo) should still know about it.
+  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
 
 ${itemsText}
@@ -1997,7 +2018,11 @@ function buildJevQuestions(pendingItems) {
   pendingItems.forEach((item) => {
     questions[String(item.resultIndex)] = {
       type: "noul",
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？`,
+      // Ticket 54: wordBankHint (if present) appends the one piece of
+      // cross-item context this item wouldn't otherwise have -- Jev
+      // normally judges every item in total isolation, with no idea
+      // another item on the same page used the identical bank phrase.
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -5102,7 +5127,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -5134,7 +5159,14 @@ async function handleMark(request, env) {
     if (qwenOutcome.passageText) {
       qwenOutcome.items.forEach((item) => { item.passageText = qwenOutcome.passageText; });
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext };
+    // Ticket 54: word bank is also page-level shared context, but (unlike
+    // priceTable/passageText) is NOT consumed via a per-item
+    // QUESTION_TYPE_HANDLERS entry -- see the dedicated "Module 2b" pass
+    // below, which needs the bank list directly on the page result too.
+    if (qwenOutcome.wordBank) {
+      qwenOutcome.items.forEach((item) => { item.wordBank = qwenOutcome.wordBank; });
+    }
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null };
   });
   const pagesMs = Date.now() - tPages;
 
@@ -5190,6 +5222,57 @@ async function handleMark(request, env) {
   const numberChecksByPage = pageResults.map((pr) =>
     pr.failed ? [] : pr.items.map((item) => (pr.vision ? crossCheckPrintedNumbers(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
   );
+
+  // Module 2b, Ticket 54 (2026-09-27): word-bank "used once each" GROUP
+  // constraint. Unlike every other check in this file, this is not a
+  // per-item verdict -- verifyWordBankOnceEach only makes sense across
+  // ALL of a page's word-bank items together, so it runs as its own pass
+  // here rather than a QUESTION_TYPE_HANDLERS entry (see extractWordBank's
+  // comment). Only ever touches items classifyAndVerify left unresolved
+  // (verdict.correct === null) -- never overrides a real handler's own
+  // confident verdict. Two outcomes, per explicit user decision
+  // (2026-09-27): (1) an answer that isn't even a real bank phrase is a
+  // certain, code-confident wrong -- mutates the verdict directly.
+  // (2) an answer that IS a real bank phrase but is ALSO used by another
+  // item on the page (a well-designed word-bank exercise never has two
+  // blanks that legitimately share the same correct phrase, so a real
+  // clash means at least one of them is a genuine student error) is NOT
+  // forced to
+  // needs_review -- code can't tell which one is wrong, but Jev/the
+  // AI-fallback judge CAN, once told about the clash (each item is
+  // normally judged in total isolation, with no visibility into any
+  // other item -- this is the one piece of cross-item context they
+  // wouldn't otherwise have). item.wordBankHint carries that context
+  // through to buildJevQuestions below; Jev's own existing confidence
+  // threshold still decides case by case, falling back to unresolved
+  // exactly as it already does for every other question type when it's
+  // genuinely unsure -- this never forces an answer, it only gives Jev
+  // the same clash-awareness a real teacher marking the whole page would
+  // have.
+  pageResults.forEach((pr, pageIdx) => {
+    if (pr.failed) return;
+    const bankItems = [];
+    pr.items.forEach((item, i) => {
+      if (item.wordBank && verdictsByPage[pageIdx][i].correct === null) bankItems.push({ item, i });
+    });
+    if (!bankItems.length) return;
+    const bank = bankItems[0].item.wordBank;
+    const bankLower = bank.map((p) => p.toLowerCase());
+    const answers = bankItems.map(({ item }) => String(item.studentAnswer || "").trim().toLowerCase());
+    const counts = {};
+    answers.forEach((a) => { if (a) counts[a] = (counts[a] || 0) + 1; });
+    bankItems.forEach(({ item, i }, idx) => {
+      const answer = answers[idx];
+      if (!answer) return;
+      if (!bankLower.includes(answer)) {
+        const v = verdictsByPage[pageIdx][i];
+        verdictsByPage[pageIdx][i] = { correct: false, correctAnswer: "", subject: v.subject, handler: "word_bank_once_each" };
+      } else if (counts[answer] > 1) {
+        const otherLabels = bankItems.filter((other, j) => j !== idx && answers[j] === answer).map(({ item: other }) => other.label);
+        item.wordBankHint = `呢個答案「${item.studentAnswer}」同第${otherLabels.join("、")}題撞用咗同一個詞——呢個詞語庫規定每個詞淨係用一次，所以呢兩題入面最多得一題係真係啱，請你自己判斷呢一題係咪先啱嗰個，唔好因為個詞本身喺詞語庫入面就當佢自動啱。`;
+      }
+    });
+  });
 
   // Deterministic merge: a failed page is recorded in `pageErrors` and
   // simply contributes no items -- every OTHER page's results are
@@ -5273,6 +5356,10 @@ async function handleMark(request, env) {
           printedQuestion: item.printedQuestion || "",
           studentAnswer: item.studentAnswer,
           subject: verdict.subject,
+          // Ticket 54: cross-item context Jev/the AI-fallback judge
+          // wouldn't otherwise have (each item is normally judged in
+          // total isolation) -- see Module 2b above for where this gets set.
+          wordBankHint: item.wordBankHint,
         });
       }
     });
@@ -5811,6 +5898,7 @@ export {
   extractContinuationMarkers,
   extractPriceTable,
   extractPassageText,
+  extractWordBank,
   parseMcOptions,
   crossCheckPrintedNumbers,
   evalArithmetic,

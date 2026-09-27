@@ -175,3 +175,22 @@ test("parseMcOptions: pulls A/B/C/D options straight out of a real printedQuesti
   assert.equal(options.length, 4);
   assert.deepEqual(options[3], { letter: "D", text: "sweets, buns and cakes" });
 });
+
+// Ticket 54 (2026-09-27): extractWordBank pulls an optional printed word
+// bank out of the raw OCR text (same marker-line pattern as
+// extractPriceTable/extractPassageText).
+test("extractWordBank: parses a real word-bank line and strips it from the item text", () => {
+  const raw = "WORD_BANK: a cup of;a bar of;a bowl of\n1=I'd like ____ tea.|a cup of";
+  const { wordBank, cleanedText } = mod.extractWordBank(raw);
+  assert.deepEqual(wordBank, ["a cup of", "a bar of", "a bowl of"]);
+  assert.doesNotMatch(cleanedText, /WORD_BANK/);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 1);
+});
+
+test("extractWordBank: no bank present returns null and leaves the text untouched", () => {
+  const raw = "1=25÷5|5";
+  const { wordBank, cleanedText } = mod.extractWordBank(raw);
+  assert.equal(wordBank, null);
+  assert.equal(cleanedText, raw);
+});

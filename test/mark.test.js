@@ -1232,3 +1232,97 @@ test("isCpuGuardTripped: fails open (false) when RATE_LIMIT_KV is missing or a r
   const throwingKv = { get: async () => { throw new Error("kv down"); } };
   assert.equal(await worker.isCpuGuardTripped({ RATE_LIMIT_KV: throwingKv }), false);
 });
+
+// Ticket 54 (2026-09-27): word-bank "used once each" group constraint
+// (Module 2b in handleMark). Two real, explicit-user-decision outcomes:
+// (1) an answer that isn't even a real bank phrase is code-confident
+// wrong; (2) a genuine clash (same bank phrase used by 2+ items) is NOT
+// forced to needs_review -- it's passed to Jev/the AI-fallback judge
+// WITH the cross-item context they wouldn't otherwise have, and their
+// own existing confidence mechanism decides case by case.
+test("Module 2b: an answer not in the word bank at all is code-confident wrong, no AI involved", async () => {
+  const worker = await import(TMP);
+  const ocrText = "WORD_BANK: a cup of;a bar of;a bowl of\n1=I'd like ____ tea.|a mug of";
+  const originalFetch = global.fetch;
+  let fallbackCalled = false;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("vision.googleapis.com")) return new Response(JSON.stringify({ responses: [{}] }), { status: 200 });
+    if (u.includes("alpha/decisions")) return new Response("no jev in this test", { status: 502 });
+    if (u.includes("openrouter.ai")) {
+      const body = JSON.parse(opts.body);
+      const textBlock = body.messages[0].content.find((c) => c.type === "text");
+      if (textBlock.text.startsWith("你是一位細心的小學老師")) { fallbackCalled = true; return new Response("should not be called", { status: 502 }); }
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: ocrText } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200 });
+    }
+    throw new Error("unexpected fetch: " + u);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: Buffer.from("PAGE0").toString("base64"), mediaType: "image/jpeg" }] }),
+    });
+    const env = { OPENROUTER_API_KEY: "test-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("nf", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const json = await res.json();
+    assert.equal(json.results[0].correct, false);
+    assert.equal(json.results[0].verifiedBy, "code");
+    assert.equal(fallbackCalled, false, "a definite not-in-bank violation needs no AI at all");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Module 2b: two items using the same bank phrase get a cross-item hint passed to the AI-fallback judge, not silently forced to needs_review", async () => {
+  const worker = await import(TMP);
+  const ocrText = "WORD_BANK: a cup of;a bar of;a bowl of\n1=I'd like ____ of tea.|a cup of,2=I'd like ____ of soap.|a cup of";
+  const originalFetch = global.fetch;
+  let capturedFallbackPrompt = null;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("vision.googleapis.com")) return new Response(JSON.stringify({ responses: [{}] }), { status: 200 });
+    if (u.includes("alpha/decisions")) return new Response("no jev in this test", { status: 502 });
+    if (u.includes("openrouter.ai")) {
+      const body = JSON.parse(opts.body);
+      const textBlock = body.messages[0].content.find((c) => c.type === "text");
+      if (textBlock.text.startsWith("你是一位細心的小學老師")) {
+        capturedFallbackPrompt = textBlock.text;
+        return new Response(JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ results: [
+            { question: "1", correct: true, correctAnswer: "", note: "" },
+            { question: "2", correct: false, correctAnswer: "a bowl of", note: "" },
+          ] }) } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.0001 },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: ocrText } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200 });
+    }
+    throw new Error("unexpected fetch: " + u);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: Buffer.from("PAGE0").toString("base64"), mediaType: "image/jpeg" }] }),
+    });
+    const env = { OPENROUTER_API_KEY: "test-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("nf", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const json = await res.json();
+    assert.ok(capturedFallbackPrompt, "the AI-fallback judge should have been called for these unresolved word-bank items");
+    assert.match(capturedFallbackPrompt, /撞用咗同一個詞/, "the clash hint must reach the fallback judge's prompt");
+    const r1 = json.results.find((r) => r.question === "1");
+    const r2 = json.results.find((r) => r.question === "2");
+    assert.equal(r1.correct, true);
+    assert.equal(r2.correct, false);
+    assert.equal(r2.correctAnswer, "a bowl of");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
