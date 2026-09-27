@@ -1607,10 +1607,21 @@ const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 // exact "printed/answer swap" failure mode already flagged elsewhere in
 // this file for a different model -- it makes the deterministic checker
 // grade a CORRECT student answer as wrong. A real child could see a
-// wrong mark on correct work. Reverted to Qwen until this is specifically
-// fixed and re-verified (not just re-tested on the layouts that already
-// passed) -- see TICKETS.md Ticket 26.
-const OCR_TEXT_MODEL = PRODUCTION_OCR_MODEL;
+// wrong mark on correct work.
+//
+// RE-SWITCHED same day, Ticket 27/29: the blocking bug above was
+// specifically fixed (the general □-preservation prompt rule, Ticket 27)
+// and re-verified directly against Gemini -- "54÷□=6"/"42÷□=7" etc. now
+// correctly preserve the blank. Ticket 29's multi-blank-passage context
+// fix was also verified against Gemini (photo 4, 12 items, real sentence
+// context preserved, though with minor printedQuestion duplication
+// artifacts vs. Qwen's cleaner output -- not a correctness bug, just
+// noisier). Real per-user-instruction decision to re-enable given the
+// specific blocking bug is now resolved. MUST be re-verified live via
+// the real /api/mark path (not just the isolated OCR diagnostic route)
+// before this is trusted again -- same discipline as the original
+// rollback, not just "should be fine now".
+const OCR_TEXT_MODEL = "google/gemini-3.1-flash-lite";
 
 async function callQwen(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
