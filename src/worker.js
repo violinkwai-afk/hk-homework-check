@@ -1882,6 +1882,16 @@ function buildJevQuestions(pendingItems) {
 // throws -- fails open to an empty Map, exactly like callAiFallbackJudge
 // returning null, so a Jev outage costs nothing but the (skipped)
 // speed/cost saving it would have provided.
+// Ticket 40 (2026-09-27): Jev sits on OpenRouter's ALPHA decisions
+// endpoint, which the provider itself hasn't committed to stability on --
+// it could change shape or go away with no notice. callJevPreCheck was
+// already fail-open (a dead endpoint never blocks grading), but that also
+// meant a real outage was INVISIBLE -- it looked identical to "jev ran
+// fine, every item happened to be genuinely uncertain". `resolved` is
+// tagged with a `.callStatus` string (attached directly on the returned
+// Map, so every existing caller/test reading `.size`/`.get()` is
+// unaffected) so handleMark can record real call outcomes, not just
+// resolved-count, for the daily health check below.
 async function callJevPreCheck(pendingItems, openrouterKey) {
   const resolved = new Map();
   if (!pendingItems.length) return resolved;
@@ -1904,7 +1914,7 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
       }),
       timeoutPromise,
     ]);
-    if (!res.ok) return resolved;
+    if (!res.ok) { resolved.callStatus = "http_error_" + res.status; return resolved; }
     const data = await res.json();
     const answers = data.answers || {};
     for (const [key, answer] of Object.entries(answers)) {
@@ -1914,8 +1924,10 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
       // otherwise: genuinely uncertain -- deliberately left unresolved,
       // falls through to the real vision-based fallback.
     }
+    resolved.callStatus = "ok";
     return resolved;
   } catch (e) {
+    resolved.callStatus = e && e.message === "jev_timeout" ? "timeout" : "exception_" + String((e && e.message) || "unknown").slice(0, 60);
     return resolved; // fail open -- Jev being unavailable never blocks grading
   }
 }
@@ -4958,7 +4970,25 @@ async function handleMark(request, env) {
   if (openrouterKey && allPendingFlat.length) {
     const tJev = Date.now();
     const jevResolved = await callJevPreCheck(allPendingFlat, openrouterKey);
-    jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev };
+    jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev, callStatus: jevResolved.callStatus || "unknown" };
+    // Ticket 40: accumulate a daily "did jev's endpoint actually work
+    // today" counter in KV so a real outage (not just low-confidence
+    // answers) is visible. Best-effort, non-atomic read-modify-write --
+    // KV has no increment primitive, and this is a monitoring signal, not
+    // a billing-grade count, so an occasional lost increment under
+    // concurrent requests is an accepted tradeoff (never worth adding
+    // retry/locking complexity for). Never allowed to affect grading --
+    // wrapped in its own try/catch, failure here is silently swallowed.
+    if (env.RATE_LIMIT_KV) {
+      try {
+        const dateKey = "jevhealth:" + new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Hong_Kong" });
+        const raw = await env.RATE_LIMIT_KV.get(dateKey);
+        const counts = raw ? JSON.parse(raw) : { calls: 0, fails: 0 };
+        counts.calls += 1;
+        if (jevUsageLog.callStatus !== "ok") counts.fails += 1;
+        await env.RATE_LIMIT_KV.put(dateKey, JSON.stringify(counts), { expirationTtl: 8 * 86400 });
+      } catch (e) { /* monitoring only, never block grading */ }
+    }
     if (jevResolved.size) {
       jevResolved.forEach((verdict, resultIndex) => {
         const r = results[resultIndex];
