@@ -371,4 +371,11 @@
   3. 跟用戶指示：暫時唔提供「正確答案」（`correctAnswer`留空），得返啱/錯/未填晒3種狀態；未填晒嘅唔會send去jev或者AI（呢兩個而家嘅prompt設計都答唔到一嚿16格嘅嘢），留返做人手覆核，呢個係第一版嘅已知限制
   401/401測試通過（新增9個，包括3個完整handleMark端對端測試：全啱、行內撞號判錯、未填晒唔會送AI），已push、已deploy。**未做真銀live驗證**（跟返新規矩問你先做）。
 
+- 🟨 **第56項進行中：MCLQ 2A survey發現1——擴闊應用題handler,加返英文觸發字。** 已做3個（真實引用嘅例子有quote先做,冇quote嘅例子暫時唔做,避免亂猜）：
+  1. `word_problem_total`加咗「altogether/in total/originally」，例如「sold 119 newspapers,16 left over,how many originally?」(119+16=135)
+  2. `word_problem_difference`加咗「difference」，例如「what is the difference between the two scores?」
+  3. `word_problem_rate_multiplication`加咗全新嘅「each X has N...in total」pattern（英文語序同中文相反,中文係rate行先,英文係count行先），真實例子「6 tubes...each tube has 5...how many in total?」(6×5=30)
+  **暫時未做**（冇足夠真實quote,唔想靠估）：`word_problem_division`嘅英文版、「$5 per cup + N friends」呢種要「+1」邏輯嘅shape。
+  406/406測試通過（新增5個），已push、已deploy。**未做真銀live驗證**。
+
 

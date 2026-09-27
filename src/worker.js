@@ -3329,9 +3329,48 @@ function parseSignedStudentNumber(answer) {
 // (immediately before a common counting-unit character), in either
 // order, rather than assuming ASCII-only.
 const RATE_MULTIPLICATION_UNIT_RE = /([一二兩三四五六七八九十]+|\d+)(?=天|日|次|個|年|月|小時|星期|週|盒|包|本|支|條)/;
+// Ticket 56 (2026-09-27, real MCLQ 2A workbook survey): English "each
+// UNIT has N" pattern -- real quoted example: "6 tubes...each tube has
+// 5...how many in total?" (6×5=30). Structurally the REVERSE of the
+// Chinese shape above (there the rate number comes first in the
+// sentence; here the COUNT comes first and the rate is named after
+// "has"), so this is a separate, narrower extraction rather than a
+// generalisation of RATE_MULTIPLICATION_UNIT_RE -- only fires on this
+// exact "each ... has" shape, with exactly 2 numbers in the whole
+// sentence (the count and the rate), same "never guess which 2 numbers"
+// discipline as every other word-problem verifier here.
+function tryEnglishEachHasRateMultiplication(printed) {
+  if (!/\beach\b.{0,30}\bhas\b/i.test(printed)) return null;
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return null;
+  const hasIdx = printed.search(/\bhas\b/i);
+  const eachIdx = printed.search(/\beach\b/i);
+  // The rate is the number that appears AFTER "has" (closer to it than
+  // to "each"); the other number is the count. Real sentences always
+  // put the rate immediately after "has" ("each tube has 5"), so using
+  // string position (not just which one is textually first) correctly
+  // handles the count appearing either before or after the "each...has"
+  // clause.
+  const numPositions = [];
+  let m;
+  const re = /\d+/g;
+  while ((m = re.exec(printed))) numPositions.push({ value: Number(m[0]), index: m.index });
+  const rateEntry = numPositions.reduce((best, n) => (Math.abs(n.index - hasIdx) < Math.abs(best.index - hasIdx) ? n : best));
+  const countEntry = numPositions.find((n) => n !== rateEntry);
+  if (!countEntry || eachIdx === -1) return null;
+  return { rate: rateEntry.value, count: countEntry.value };
+}
 function verifyWordProblemRateMultiplication(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
+  const englishMatch = tryEnglishEachHasRateMultiplication(printed);
+  if (englishMatch) {
+    const expected = englishMatch.rate * englishMatch.count;
+    const studentNum = parseSignedStudentNumber(answer);
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const correct = studentNum === expected;
+    return { correct, correctAnswer: correct ? "" : String(expected) };
+  }
   if (!answer || !/每/.test(printed) || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
 
   const rateMatch = printed.match(/(?<!第)\d+/);
@@ -3351,20 +3390,29 @@ function verifyWordProblemRateMultiplication(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : String(expected) };
 }
 
+// Ticket 56 (2026-09-27, real MCLQ 2A workbook survey): this whole
+// family of word-problem verifiers only ever recognised CHINESE trigger
+// keywords, even though the underlying arithmetic logic is language-
+// agnostic -- confirmed real gap on an entirely English-medium P2
+// workbook (real examples: "sold 119 newspapers, 16 left over, how many
+// originally?" -- 119+16=135; "...how many were there altogether?").
+// English total-word-problem trigger, shared by this function's own
+// guard below.
+const WORD_PROBLEM_TOTAL_EN_RE = /\b(altogether|in total|originally)\b/i;
 function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
-  if (!answer || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
+  if (!answer || (!/(共|總共|一共|合共)/.test(printed) && !WORD_PROBLEM_TOTAL_EN_RE.test(printed))) return { correct: null, correctAnswer: "" };
   // 2026-09-25 real bug found: this function's own "共" trigger also
   // fires on a genuinely different real shape -- a RATE word problem
   // ("小克每天儲蓄30元，他五天共儲蓄多少元" -> 30×5=150, NOT 30+5=35).
   // The 2026-09-23 decision (ticket B9) to sum every number found when
   // "共" appears was scoped to same-kind-count-addition examples; a "每"
-  // (per/each) rate marker signals a different operation entirely and
-  // must refuse here rather than silently sum, not be swept into that
-  // decision by the shared keyword. See verifyWordProblemRateMultiplication
-  // for the dedicated handler.
-  if (/每/.test(printed)) return { correct: null, correctAnswer: "" };
+  // (per/each)/"per"/"each...has" rate marker signals a different
+  // operation entirely and must refuse here rather than silently sum,
+  // not be swept into that decision by the shared keyword. See
+  // verifyWordProblemRateMultiplication for the dedicated handler.
+  if (/每/.test(printed) || /\bper\b/i.test(printed) || /\beach\b.{0,15}\bhas\b/i.test(printed)) return { correct: null, correctAnswer: "" };
   const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
   if (nums.length < 2) return { correct: null, correctAnswer: "" };
   const expected = nums.reduce((a, b) => a + b, 0);
@@ -3450,10 +3498,14 @@ function verifyWordProblemDivision(printedQuestion, studentAnswer) {
 // verifyWordProblemTotal's "共" trigger and verifyPriceTableLookup's
 // "比...貴/平/多/少" trigger for the same difference shape in a
 // price-table context -- this is the plain-word-problem version.
+// Ticket 56 (2026-09-27): English equivalent of "相差" -- "what is the
+// difference between the two scores?" style phrasing, real gap found on
+// an English-medium P2 workbook survey.
+const WORD_PROBLEM_DIFFERENCE_EN_RE = /\bdifference\b/i;
 function verifyWordProblemDifference(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
-  if (!answer || !/相差/.test(printed)) return { correct: null, correctAnswer: "" };
+  if (!answer || (!/相差/.test(printed) && !WORD_PROBLEM_DIFFERENCE_EN_RE.test(printed))) return { correct: null, correctAnswer: "" };
   const nums = (printed.match(/\d+/g) || []).map(Number);
   if (nums.length !== 2) return { correct: null, correctAnswer: "" };
   const expected = Math.abs(nums[0] - nums[1]);
@@ -4471,7 +4523,8 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_rate_multiplication",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      return /每/.test(printed) && /(共|總共|一共|合共)/.test(printed);
+      if (/每/.test(printed) && /(共|總共|一共|合共)/.test(printed)) return true;
+      return !!tryEnglishEachHasRateMultiplication(printed);
     },
     verify: (item) => verifyWordProblemRateMultiplication(item.printedQuestion, item.studentAnswer),
   },
@@ -4500,7 +4553,7 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      if (!/(共|總共|一共|合共)/.test(printed)) return false;
+      if (!/(共|總共|一共|合共)/.test(printed) && !WORD_PROBLEM_TOTAL_EN_RE.test(printed)) return false;
       return (printed.match(/(?<!第)\d+/g) || []).length >= 2;
     },
     verify: (item) => verifyWordProblemTotal(item.printedQuestion, item.studentAnswer),
@@ -4521,7 +4574,7 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_difference",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      if (!/相差/.test(printed)) return false;
+      if (!/相差/.test(printed) && !WORD_PROBLEM_DIFFERENCE_EN_RE.test(printed)) return false;
       return (printed.match(/\d+/g) || []).length === 2;
     },
     verify: (item) => verifyWordProblemDifference(item.printedQuestion, item.studentAnswer),

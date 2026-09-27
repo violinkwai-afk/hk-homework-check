@@ -1884,3 +1884,37 @@ test("classifyAndVerify: select_from_passage does not misfire on an unrelated it
   assert.notEqual(v.handler, "select_from_passage");
   assert.equal(v.correct, true, "still resolved correctly by math_equation, unaffected by the page-level passage context");
 });
+
+// Ticket 56 (2026-09-27, real MCLQ 2A workbook survey): word-problem
+// verifiers widened to accept real English trigger keywords, alongside
+// their existing Chinese-only triggers.
+test("word_problem_total: real English 'originally' example (sold 119 newspapers, 16 left over)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "A shop sold 119 newspapers, with 16 left over. How many newspapers were there originally?", studentAnswer: "135" });
+  assert.equal(v.handler, "word_problem_total");
+  assert.equal(v.correct, true);
+});
+
+test("word_problem_total: 'altogether' still declines when a per/each rate marker is also present (must route to rate_multiplication instead)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "6 tubes of paint. Each tube has 5 brushes. How many brushes are there altogether?", studentAnswer: "30" });
+  assert.equal(v.handler, "word_problem_rate_multiplication");
+  assert.equal(v.correct, true);
+});
+
+test("word_problem_difference: real English 'difference' example", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "Tom scored 180 points. Mary scored 166 points. What is the difference between their scores?", studentAnswer: "14" });
+  assert.equal(v.handler, "word_problem_difference");
+  assert.equal(v.correct, true);
+});
+
+test("word_problem_rate_multiplication: real English 'each X has N...in total' example (6 tubes, each tube has 5)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "There are 6 tubes. Each tube has 5 sweets. How many sweets are there in total?", studentAnswer: "30" });
+  assert.equal(v.handler, "word_problem_rate_multiplication");
+  assert.equal(v.correct, true);
+});
+
+test("word_problem_rate_multiplication: English pattern catches a wrong answer too, not just format-validates", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "There are 6 tubes. Each tube has 5 sweets. How many sweets are there in total?", studentAnswer: "11" });
+  assert.equal(v.handler, "word_problem_rate_multiplication");
+  assert.equal(v.correct, false);
+  assert.equal(v.correctAnswer, "30");
+});
