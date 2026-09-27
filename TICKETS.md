@@ -280,4 +280,8 @@
   - **修好嘅prompt**：加咗兩條新規則——(1) printedQuestion一定要包含緊貼空格嘅完整句子，唔可以淨係標籤/答案字；(2) 短文入面每個空格一定要拆做獨立item，唔可以因為同一段就冧埋、唔可以因為手寫字讀漏就報做未答。
   - **真實驗證（用返真實相，Qwen production model）**：相4(and/but/or信件)12條item全部啱——每條都有完整句子context、答案全部正確抽取到，同之前「成段冧埋、全部"?"」相比係質嘅飛躍。相5(代名詞+safari短文)15條item全部啱，同樣結構乾淨、context齊全。
   - **附帶發現（未深究，唔阻住呢個ticket close）**：相6(中文書信)測試嗰陣，Qwen讀到嘅內容同之前核實過嘅ground truth有出入（例如「親愛的表姐」答案讀成「表姐」而唔係「表弟」）——因為中文題已經喺第27項排除咗Jev、會跌返落而家嘅vision AI覆核安全網，呢個發現冇即時風險，但值得後續留意。
+- ✅ **第30項完成：用戶明確要求換返Gemini做/api/mark嘅OCR模型——已經換咗，真實驗證過production路徑冇問題。**
+  - 前提：導致第26項rollback嘅致命bug（A÷□掉轉）已經喺第27項修好，並且直接用Gemini驗證過；第29項嘅短文context修正都用Gemini測試過，有明顯改善。
+  - `OCR_TEXT_MODEL`由`PRODUCTION_OCR_MODEL`（Qwen）改返做`"google/gemini-3.1-flash-lite"`。
+  - **真實驗證**：用返嗰張原本令第26項撞板嘅除法相，直接call真正production `/api/mark`（唔係診斷route）——第1、2、3、5、6、8題全部正確判做啱（答案5、4、9、9、8、4，同ground truth完全脗合，冇再撞板），第4、7題被Ticket4嘅印刷數字cross-check標做needs_review（呢個係Qwen都會有嘅pre-existing現象，唔係新問題）。351/351測試通過，已部署。
 
