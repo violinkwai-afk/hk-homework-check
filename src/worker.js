@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-full-flow-v2" && request.method === "POST") {
+      return handleTestFullFlowV2(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1918,6 +1921,99 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
   }
+}
+
+// Temporary diagnostic route (2026-09-27, real user request): re-run
+// the full real flow (Gemini OCR -> classifyAndVerify -> Jev pre-check,
+// now at the updated 0.88 threshold + Ticket 29's context-preservation
+// prompt) across 7 real photos, recording EVERY stage's own tool name,
+// timing, and real cost -- per the standing "record per-step timing"
+// rule, extended this time to also capture per-step COST. Remove after
+// use.
+async function handleTestFullFlowV2(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
+
+  const perPhoto = [];
+  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
+    const steps = [];
+    const tOcrStart = Date.now();
+    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
+    const prompt = OCR_ONLY_PROMPT(1);
+    const body = {
+      model: OCR_TEXT_MODEL,
+      max_tokens: 2000,
+      temperature: 0,
+      provider: { ignore: ["Alibaba"] },
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
+    };
+    let items = [];
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-fullflow-v2-test" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const choice = data.choices && data.choices[0];
+      const rawText = (choice && choice.message && choice.message.content) || "";
+      items = parseOcrLine(rawText);
+      steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: Date.now() - tOcrStart, cost: data.usage ? data.usage.cost : null });
+    } catch (e) {
+      steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: Date.now() - tOcrStart, error: String((e && e.message) || e) });
+      perPhoto.push({ page: pageIdx, steps, items: [] });
+      continue;
+    }
+
+    const tCodeStart = Date.now();
+    const itemResults = items.map((item) => {
+      const verdict = classifyAndVerify(item);
+      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, correct: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code" };
+    });
+    steps.push({ tool: "code (classifyAndVerify)", ms: Date.now() - tCodeStart, cost: 0 });
+
+    const pendingForJev = [];
+    itemResults.forEach((r, i) => {
+      if (r.correct === null) pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer, subject: null });
+    });
+    if (pendingForJev.length) {
+      const tJevStart = Date.now();
+      const jevBody = {
+        model: JEV_MODEL,
+        state: "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。",
+        questions: buildJevQuestions(pendingForJev),
+      };
+      try {
+        const jevRes = await fetch("https://openrouter.ai/api/alpha/decisions", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
+          body: JSON.stringify(jevBody),
+        });
+        const jevData = await jevRes.json();
+        const answers = jevData.answers || {};
+        pendingForJev.forEach((pending) => {
+          const answer = answers[String(pending.resultIndex)];
+          if (answer && typeof answer.noul === "number") {
+            if (answer.noul >= JEV_CONFIDENT_CORRECT) { itemResults[pending.resultIndex].correct = true; itemResults[pending.resultIndex].resolvedBy = "jev"; }
+            else if (answer.noul <= JEV_CONFIDENT_WRONG) { itemResults[pending.resultIndex].correct = false; itemResults[pending.resultIndex].resolvedBy = "jev"; }
+          }
+        });
+        steps.push({ tool: `Jev (${JEV_MODEL})`, ms: Date.now() - tJevStart, cost: jevData.usage ? jevData.usage.cost : null, itemsAsked: pendingForJev.length });
+      } catch (e) {
+        steps.push({ tool: `Jev (${JEV_MODEL})`, ms: Date.now() - tJevStart, error: String((e && e.message) || e) });
+      }
+    }
+    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
+
+    perPhoto.push({ page: pageIdx, itemCount: items.length, steps, items: itemResults });
+  }
+  return json({ ok: true, perPhoto });
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
