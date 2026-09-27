@@ -717,15 +717,26 @@ submitBtn.onclick = async () => {
       s.requestId = (pIdx === 0 && requestId) ? requestId : genId();
       if (pIdx === 0) requestId = null; // demoId (if any) only ever applies to the first submission
     }
-    const attemptOnce = () => fetch('/api/check', {
+    // Ticket 32 (2026-09-27): switched from /api/check (the older,
+    // AI-judges-directly pipeline, untouched by any of Tickets 25-31's
+    // fixes) to /api/mark (Gemini OCR -> code -> Jev, the pipeline all
+    // of today's real testing/fixes actually landed on). Response shape
+    // is already compatible (results[].bbox/correct/correctAnswer/page,
+    // pageRotations) -- built that way originally for the Telegram
+    // annotateImage feature, which happens to match what this page's
+    // own fillPageResult already expects, so no rendering changes needed.
+    // Real, known regression from this swap: /api/mark doesn't support
+    // pageIndex/priorPagesContext/requestId/deviceId/rememberHandwriting
+    // at all -- it silently ignores them. Practical effect: no more
+    // cross-page context for multi-page submissions, no more "remember
+    // this handwriting" feature, and requestId-based retry-dedup is
+    // replaced by /api/mark's own content-hash dedup (Ticket 16) instead
+    // -- functionally similar for the common case, but not identical.
+    const attemptOnce = () => fetch('/api/mark', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         images: [{ data: s.base64, mediaType: 'image/jpeg' }],
-        pageIndex: pIdx,
-        priorPagesContext: priorPagesContext.slice(),
-        requestId: s.requestId,
-        deviceId, rememberHandwriting,
       }),
     });
     try {
