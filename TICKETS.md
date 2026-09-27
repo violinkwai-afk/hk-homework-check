@@ -326,4 +326,6 @@
 
 - 🟨 **第47項（免費部分做咗，真OCR驗證未做）：相片壓縮改用快啲嘅filter。** 用真實3張相本地benchmark咗Photon嘅5種resize filter（免費，冇call任何AI）：而家用緊嘅`Lanczos3`每次resize要52ms左右，`Triangle`得23-34ms（快接近一倍），而且輸出檔案仲細啲（例如35.2KB vs 39.6KB）。`Nearest`最快但輸出檔案反而最大（鋸齒令JPEG壓縮率變差），唔建議。**未做嘅部分**：冇驗證過用`Triangle`會唔會影響Gemini讀字（OCR）嘅準繩度——resize快得嚟畫質糙咗，有機會令細字/手寫字模糊咗，跟返「換嘢要用真正pipeline驗證，唔淨係睇跑得快唔快」呢個規矩（Ticket 26教訓），要用真銀做幾張相嘅OCR準繩度對比先可以放心轉。真銀成本好細（3張相×2種filter×Gemini OCR≈$0.006）。等用戶話事想唔想做呢個驗證。
 
+- 🟨 **第46項跟進：加咗一個自動測試`test/no-unguarded-paid-routes.test.js`，會自動搵晒成個worker.js入面所有call真銀AI嘅route，check佢哋有冇保護（rate limit/DEBUG_TOKEN/webhook密碼）。** 用戶問「有冇工具可以確保呢類security風險唔再發生」，答案係：冇工具可以100%保證「全部」風險消除（呢個講法本身唔誠實），但可以將已知嗰類風險（冇保護嘅route）變做自動、持續嘅check。已經實測confirm：呢個新測試準確咁淨係flag到第46項嗰3條真係有問題嘅route，冇flag錯（例如`/api/check`本身有rate limit但淨係喺個inner function度，test識得跟埋去check，冇誤報）。**呢個測試而家會fail**——因為第46項本身仲未修，呢個係故意嘅：測試會一直紅住提醒你，直至你決定點做（加token定刪走）先會轉綠。想我而家就手修埋第46項（加DEBUG_TOKEN），令個新測試都轉綠？
+
 
