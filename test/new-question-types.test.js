@@ -1661,3 +1661,48 @@ test("grammar_cloze: still correctly claims a real subject+be-verb item", () => 
   assert.equal(verdict.handler, "grammar_cloze");
   assert.equal(verdict.correct, true);
 });
+
+// --- Ticket 27 (2026-09-27) regression: verifyMath division-with-remainder
+// full-equation sub-answer ("30÷4=7...2") -- a real word-problem answer
+// shape that previously reported null (both evalArithmetic and
+// parseNumericAnswer fail on remainder notation), and in one real case
+// was mis-caught by number_word_conversion and reported FALSE (a
+// confirmed wrong verdict on a genuinely correct student answer).
+
+test("verifyMath: division-with-remainder full equation, correct remainder", () => {
+  const r = mod.verifyMath("Ivy takes 4 minutes to fold a paper crane...", "30÷4=7...2");
+  assert.equal(r.correct, true);
+});
+
+test("verifyMath: division-with-remainder full equation, wrong remainder", () => {
+  const r = mod.verifyMath("...", "30÷4=7...3");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "7...2");
+});
+
+test("verifyMath: division-with-remainder full equation, wrong quotient", () => {
+  const r = mod.verifyMath("...", "30÷4=6...2");
+  assert.equal(r.correct, false);
+});
+
+test("verifyMath: division-with-remainder equation followed by a restated English sentence -- core equation no longer misjudged, safely declines (null) rather than guessing on the prose part", () => {
+  const r = mod.verifyMath(
+    "Ivy takes 4 minutes to fold a paper crane. How many paper cranes can she fold in half an hour? How many minutes are left?",
+    "30÷4=7...2;She can fold 7 paper cranes in half an hour;2 minutes are left"
+  );
+  // Not a full fix (the prose sub-answers still can't be independently
+  // verified as math), but must NEVER be false -- the pre-fix bug was
+  // this exact case being misrouted to number_word_conversion and
+  // reported as a confident wrong answer.
+  assert.notEqual(r.correct, false, "must never report a genuinely correct answer as wrong");
+});
+
+test("classifyAndVerify: real division-with-remainder word problem routes to math_equation, not number_word_conversion", () => {
+  const verdict = mod.classifyAndVerify({
+    label: "11",
+    printedQuestion: "Ivy takes 4 minutes to fold a paper crane. How many paper cranes can she fold in half an hour? How many minutes are left?",
+    studentAnswer: "30÷4=7...2",
+  });
+  assert.equal(verdict.handler, "math_equation");
+  assert.equal(verdict.correct, true);
+});

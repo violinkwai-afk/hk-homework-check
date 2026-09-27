@@ -2181,6 +2181,34 @@ function verifyMath(printedQuestion, studentAnswer) {
     if (eqIdx !== -1) {
       const lhs = sub.slice(0, eqIdx);
       const rhs = sub.slice(eqIdx + 1);
+      // Ticket 27 (2026-09-27, real data finding): a real division
+      // word-problem answer written as "30÷4=7...2" (quotient...remainder,
+      // the standard HK notation) fell through both this and Case 2 as
+      // undecidable -- evalArithmetic("30÷4") gives 7.5 (division has no
+      // remainder concept), and parseNumericAnswer("7...2") isn't a clean
+      // number either, so BOTH sides were unparseable and this genuinely
+      // correct sub-answer reported null, which then made the whole
+      // multi-part answer (equation + restated sentence) null -- and
+      // upstream, a null sub-answer inside an otherwise-resolvable item
+      // could differ from a false one in caller behaviour, but the real
+      // production impact seen was this exact case being one of several
+      // Ticket 27 findings. Checked first, before the general float path,
+      // so a clean division-with-remainder equation is verified exactly
+      // (dividend = divisor*quotient + remainder, 0 <= remainder < divisor)
+      // rather than falling through to a same-shape-different-meaning
+      // float comparison.
+      const remainderMatch = /^\s*(-?\d+)\s*[÷/]\s*(-?\d+)\s*$/.exec(lhs);
+      const rhsRemainderMatch = /^\s*(-?\d+)\s*(?:[…⋯]|\.{2,3})\s*(-?\d+)\s*$/.exec(rhs);
+      if (remainderMatch && rhsRemainderMatch) {
+        const dividend = Number(remainderMatch[1]);
+        const divisor = Number(remainderMatch[2]);
+        const quotient = Number(rhsRemainderMatch[1]);
+        const remainder = Number(rhsRemainderMatch[2]);
+        if (divisor !== 0) {
+          const correct = dividend === divisor * quotient + remainder && remainder >= 0 && remainder < Math.abs(divisor);
+          return { correct, correctAnswer: correct ? "" : `${Math.floor(dividend / divisor)}...${dividend - divisor * Math.floor(dividend / divisor)}` };
+        }
+      }
       const lhsVal = evalArithmetic(lhs);
       const rhsVal = parseNumericAnswer(rhs);
       if (lhsVal !== null && !Number.isNaN(rhsVal)) {
