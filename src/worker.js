@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-full-flow-timed" && request.method === "POST") {
-      return handleTestFullFlowTimed(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1897,81 +1894,6 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
   }
-}
-
-// Temporary diagnostic route (2026-09-27, real user request + standing
-// rule: every test must record per-stage timing, not just one total).
-// Same flow as the earlier (now-removed) full-flow test -- Gemini OCR ->
-// classifyAndVerify -> Jev pre-check -- but instruments each stage's own
-// duration from the start. Remove after use.
-async function handleTestFullFlowTimed(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
-
-  const perPhoto = [];
-  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
-    const tOcrStart = Date.now();
-    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
-    const prompt = OCR_ONLY_PROMPT(1);
-    const body = {
-      model: "google/gemini-3.1-flash-lite",
-      max_tokens: 2000,
-      temperature: 0,
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
-    };
-    let items = [];
-    let ocrUsage = null;
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-fullflow-timed-test" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      const choice = data.choices && data.choices[0];
-      const rawText = (choice && choice.message && choice.message.content) || "";
-      items = parseOcrLine(rawText);
-      ocrUsage = data.usage || null;
-    } catch (e) {
-      perPhoto.push({ page: pageIdx, error: String((e && e.message) || e), ocrMs: Date.now() - tOcrStart });
-      continue;
-    }
-    const ocrMs = Date.now() - tOcrStart;
-
-    const tCodeStart = Date.now();
-    const itemResults = items.map((item) => {
-      const verdict = classifyAndVerify(item);
-      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, correct: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code" };
-    });
-    const codeMs = Date.now() - tCodeStart;
-
-    const pendingForJev = [];
-    itemResults.forEach((r, i) => {
-      if (r.correct === null) pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer });
-    });
-    let jevMs = 0;
-    let jevUsage = null;
-    if (pendingForJev.length) {
-      const tJevStart = Date.now();
-      const jevResolved = await callJevPreCheck(pendingForJev, openrouterKey);
-      jevMs = Date.now() - tJevStart;
-      jevResolved.forEach((verdict, idx) => {
-        itemResults[idx].correct = verdict.correct;
-        itemResults[idx].resolvedBy = "jev";
-      });
-    }
-    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
-
-    perPhoto.push({ page: pageIdx, itemCount: items.length, ocrMs, codeMs, jevMs, totalMs: ocrMs + codeMs + jevMs, ocrUsage, items: itemResults });
-  }
-  return json({ ok: true, perPhoto });
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
