@@ -126,3 +126,24 @@ test("extractContinuationMarkers: only CONTINUES_TO_NEXT present, item text stil
   assert.equal(items.length, 1);
   assert.equal(items[0].studentAnswer, "53÷7=7...4");
 });
+
+// Ticket 52 (2026-09-27): extractPriceTable pulls an optional printed
+// price table out of the raw OCR text so verifyPriceTableLookup can
+// finally be reached in production. Real shape (same source PDF as
+// verifyPriceTableLookup's own comment): 機械人=$48, 跑車=$89, 洋娃娃=$25.
+test("extractPriceTable: parses a real price table line and strips it from the item text", () => {
+  const raw = "PRICE_TABLE: 機械人=48;跑車=89;洋娃娃=25\n1=買機械人和洋娃娃各一個共需付()元|73";
+  const { priceTable, cleanedText } = mod.extractPriceTable(raw);
+  assert.deepEqual(priceTable, { "機械人": 48, "跑車": 89, "洋娃娃": 25 });
+  assert.doesNotMatch(cleanedText, /PRICE_TABLE/);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].studentAnswer, "73");
+});
+
+test("extractPriceTable: no table present returns null and leaves the text untouched", () => {
+  const raw = "1=25÷5|5";
+  const { priceTable, cleanedText } = mod.extractPriceTable(raw);
+  assert.equal(priceTable, null);
+  assert.equal(cleanedText, raw);
+});

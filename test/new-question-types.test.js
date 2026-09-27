@@ -1820,3 +1820,24 @@ test("classifyAndVerify: conjunction_fill does not collide with number_word_conv
   assert.equal(v.handler, "conjunction_fill");
   assert.equal(v.correct, true);
 });
+
+// Ticket 52 (2026-09-27): price_table_lookup now reachable via the real
+// dispatcher, using a priceTable extracted from a new OCR_ONLY_PROMPT
+// PRICE_TABLE line and attached to each of that page's items.
+test("classifyAndVerify: price_table_lookup now reachable via the real dispatcher (sum shape)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "買機械人和洋娃娃各一個共需付()元", studentAnswer: "73", priceTable: { "機械人": 48, "跑車": 89, "洋娃娃": 25 } });
+  assert.equal(v.handler, "price_table_lookup");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: price_table_lookup now reachable via the real dispatcher (difference shape)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "跑車比機械人貴()元", studentAnswer: "41", priceTable: { "機械人": 48, "跑車": 89, "洋娃娃": 25 } });
+  assert.equal(v.handler, "price_table_lookup");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: price_table_lookup does not fire with no priceTable attached (a normal item on a page with no printed price table)", () => {
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "25÷5", studentAnswer: "5" });
+  assert.notEqual(v.handler, "price_table_lookup");
+  assert.equal(v.correct, true); // still resolved correctly by math_equation as before
+});

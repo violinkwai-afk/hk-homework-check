@@ -1756,7 +1756,29 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **呢張相可能只係一份多頁功課入面嘅其中一頁。**留意張相嘅最頂同最底：如果最頂一開始就係一題嘅中間部分（冇題號、冇上文，好似接住上一頁未完嘅嘢），喺回覆最後面加多一行單獨嘅"CONTINUES_FROM_PREVIOUS"；如果最底最後一題睇落未完（例如題目敘述好似仲未問完、冇答題位置、圖表被切斷），加多一行單獨嘅"CONTINUES_TO_NEXT"。呢兩行如果唔適用就完全唔使加，唔好預設加埋佢哋——要真係見到明顯線索先加，寧願漏報都好過亂報。呢兩行唔算題目item，唔使跟「題號=...|...」個format。
 
+**如果呢頁有印刷咗一張「價目表」（物品名稱配對價錢,例如「機械人 $48」「跑車 $89」「洋娃娃 $25」）**，喺回覆最開始加一行「PRICE_TABLE: 名稱1=價錢1;名稱2=價錢2;...」，列晒成張表嘅每一項（名稱同價錢之間用"="，唔同項之間用";"分隔），然之後先跟正常格式列每一條題目。如果冇呢類價目表就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
+
+// Ticket 52 (2026-09-27): extracts an optional printed price table (see
+// OCR_ONLY_PROMPT's own instruction above) so verifyPriceTableLookup --
+// written and tested 2026-09-25, never reachable before now -- can
+// finally be registered. Same "marker line stripped before parseOcrLine
+// runs" pattern as extractContinuationMarkers.
+function extractPriceTable(text) {
+  const m = /^PRICE_TABLE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PRICE_TABLE:.*$/gm, "");
+  if (!m) return { priceTable: null, cleanedText };
+  const table = {};
+  for (const pair of m[1].split(";")) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = pair.slice(0, eqIdx).trim();
+    const price = Number(pair.slice(eqIdx + 1).trim());
+    if (name && Number.isFinite(price)) table[name] = price;
+  }
+  return { priceTable: Object.keys(table).length ? table : null, cleanedText };
+}
 
 // Extracts the two page-continuation markers (see OCR_ONLY_PROMPT's own
 // instruction above) from the raw OCR text and strips them out, so
@@ -1856,12 +1878,13 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
   }
   const text = (choice.message && choice.message.content) || "";
-  const { continuesFromPrevious, continuesToNext, cleanedText } = extractContinuationMarkers(text);
+  const { continuesFromPrevious, continuesToNext, cleanedText: cleanedText1 } = extractContinuationMarkers(text);
+  const { priceTable, cleanedText } = extractPriceTable(cleanedText1);
   const items = parseOcrLine(cleanedText);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -4370,6 +4393,27 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyWordProblemRateMultiplication(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 52 (2026-09-27): verifyPriceTableLookup was written and
+    // tested 2026-09-25, never registered -- needed a page-level printed
+    // price table the OCR step didn't extract as structured data until
+    // now (see OCR_ONLY_PROMPT's new PRICE_TABLE instruction and
+    // extractPriceTable). Must run BEFORE word_problem_total: a real
+    // price-sum question's own "共需付" wording also contains word_
+    // problem_total's "共" trigger -- in practice that handler's own
+    // 2-numbers-in-the-printed-text requirement means it wouldn't
+    // actually misfire here (the two prices live in the table, not the
+    // question text), but placing the more specific handler first keeps
+    // that safety explicit rather than incidental.
+    name: "price_table_lookup",
+    detect: (item) => {
+      if (!item.priceTable || typeof item.priceTable !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      const names = Object.keys(item.priceTable).filter((n) => printed.includes(n));
+      return names.length === 2;
+    },
+    verify: (item) => verifyPriceTableLookup(item.priceTable, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -4996,7 +5040,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -5015,6 +5059,14 @@ async function handleMark(request, env) {
       const e = qwenOutcome.error;
       console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
       return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    }
+    // Ticket 52: price table is page-level shared context (one table,
+    // many items reference it), attached directly onto each of this
+    // page's own item objects -- simplest way to reach
+    // classifyAndVerify(item) without changing its call signature, same
+    // approach as every other per-item field (subject, handler, etc.).
+    if (qwenOutcome.priceTable) {
+      qwenOutcome.items.forEach((item) => { item.priceTable = qwenOutcome.priceTable; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext };
   });
@@ -5691,6 +5743,7 @@ export {
   isCpuGuardTripped,
   CPU_GUARD_DAILY_THRESHOLD_MS,
   extractContinuationMarkers,
+  extractPriceTable,
   crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,
