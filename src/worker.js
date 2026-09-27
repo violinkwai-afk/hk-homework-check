@@ -2373,6 +2373,19 @@ function parseEnglishNumberWord(s) {
   }
   return null;
 }
+
+// Ticket 38 (2026-09-27, code review finding): extracted from what used
+// to be two verbatim copies of this exact check (verifyNumberWordConversion
+// and the number_word_conversion handler's own detect()) -- a future
+// change to "does this answer look like a number word" only needs to
+// happen once now. See Ticket 27's comment history for why this check
+// exists: it must actually PARSE as a number word, not just contain a
+// letter/CN-numeral, or it misfires on unrelated short-word answers
+// (e.g. "but"/"and"/"or") that happen to sit next to a printed digit.
+function looksLikeNumberWord(answer) {
+  return parseEnglishNumberWord(answer) !== null || parseChineseNumberWord(answer) !== null;
+}
+
 function numberToEnglishWord(n) {
   if (!Number.isInteger(n) || n < 0 || n > 99) return null;
   if (EN_NUM_WORDS_REV[n]) return EN_NUM_WORDS_REV[n];
@@ -2415,7 +2428,7 @@ function verifyNumberWordConversion(printedQuestion, studentAnswer) {
   // ("one") and confidently reported a real, correct answer as wrong.
   // Now the answer itself must actually PARSE as a number word (not
   // just contain letters) before this branch claims the item.
-  const isWordAnswer = parseEnglishNumberWord(answer) !== null || parseChineseNumberWord(answer) !== null;
+  const isWordAnswer = looksLikeNumberWord(answer);
   if (digitMatch && isWordAnswer) {
     const target = parseInt(digitMatch[1], 10);
     const expectedEn = numberToEnglishWord(target);
@@ -4200,7 +4213,9 @@ const QUESTION_TYPE_HANDLERS = [
       // sentence connector" exercise whose OCR'd printedQuestion was just
       // a bare digit label. See verifyNumberWordConversion's matching
       // comment -- the answer must actually PARSE as a number word.
-      const isWordAnswer = parseEnglishNumberWord(answer) !== null || parseChineseNumberWord(answer) !== null;
+      // Ticket 38: shared with verifyNumberWordConversion via
+      // looksLikeNumberWord, was a verbatim duplicate before.
+      const isWordAnswer = looksLikeNumberWord(answer);
       return hasSmallDigit && isWordAnswer;
     },
     verify: (item) => verifyNumberWordConversion(item.printedQuestion, item.studentAnswer),
