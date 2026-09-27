@@ -1820,7 +1820,29 @@ async function handleTestRealCallQwenOcrText(request, env) {
     const r = await callQwenOcrText(downscaled, openrouterKey);
     return json({ ok: true, ms: Date.now() - startedAt, items: r.items, usage: r.usage });
   } catch (e) {
-    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e) });
+    // Also fetch the raw completion text directly (same model/prompt as
+    // callQwenOcrText) so a "qwen_ocr_empty" failure can be distinguished
+    // from a genuine API failure -- the thrown error only carries a
+    // detail code, not the text that failed to parse.
+    let rawText = null;
+    try {
+      const prompt = OCR_ONLY_PROMPT(downscaled.length);
+      const body = {
+        model: OCR_TEXT_MODEL,
+        max_tokens: 2000,
+        temperature: 0,
+        provider: { ignore: ["Alibaba"] },
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+      };
+      const res2 = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-rootcause" },
+        body: JSON.stringify(body),
+      });
+      const data2 = await res2.json();
+      rawText = data2.choices && data2.choices[0] && data2.choices[0].message && data2.choices[0].message.content;
+    } catch (e2) { rawText = `raw_fetch_failed: ${String(e2)}`; }
+    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e), rawText });
   }
 }
 
