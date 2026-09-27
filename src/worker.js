@@ -1975,15 +1975,37 @@ async function callQwenOcrText(images, openrouterKey) {
 // text is still included as a hint (usually correct, saves the model
 // re-transcribing from scratch), with an explicit instruction to trust
 // the photo over it on conflict.
+// Ticket 57 (2026-09-27): real, verified HK currency reference (HKMA +
+// Wikipedia, checked live 2026-09-27 -- see the "$10 note colour
+// unconfirmed" caveat below, deliberately left out rather than guessed).
+// Coin/banknote denomination recognition is a real Tier V weak spot
+// (complex printed designs, not a simple pixel-signal problem Photon
+// could solve deterministically -- see the parallel investigation into
+// clock-hand reading this same session). This doesn't make the AI
+// fallback judge's guess CORRECT, but gives it real facts instead of
+// relying purely on its own pretrained visual memory, which is the only
+// lever available for this specific weak spot right now. Only appended
+// when a pending item's printed text actually mentions money, to avoid
+// bloating (and paying extra input-token cost for) every other
+// AI-fallback call with an irrelevant reference block.
+const HK_CURRENCY_REFERENCE = `參考資料——香港硬幣同紙幣真實資料（幫你分辨相入面嘅面額，唔好靠估）：
+硬幣（1993年洋紫荊系列）：1毫=金色細圓形(17.5mm)；2毫=金色花瓣形(18-19mm)；5毫=金色圓形(22.5mm)；$1=銀色圓形(25.5mm)；$2=銀色花瓣形(26.3-28mm)；$5=銀色圓形、邊有凹槽字(27mm)；$10=銀色圈+金色芯嘅雙色圓形(24mm)。全部正面都係洋紫荊花圖案。
+紙幣顏色：$20藍色、$50綠色、$100紅色、$500啡色、$1000金色。`;
+
+function mentionsMoneyDenomination(pendingItems) {
+  return pendingItems.some((it) => /\$|coin|note|cent|denomination|硬幣|紙幣|銀紙|面額|毫子|蚊/i.test(String(it.printedQuestion || "")));
+}
+
 function buildAiFallbackPrompt(pendingItems) {
   // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
   // (which additionally sees the real photo) should still know about it.
   const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
+  const currencyBlock = mentionsMoneyDenomination(pendingItems) ? `\n${HK_CURRENCY_REFERENCE}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
 
 ${itemsText}
-
+${currencyBlock}
 要求：
 1. 相有機會打橫/倒轉，先確認閱讀方向。
 2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。
@@ -6013,6 +6035,8 @@ function json(obj, status) {
 export {
   callJevPreCheck,
   buildJevQuestions,
+  buildAiFallbackPrompt,
+  mentionsMoneyDenomination,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,

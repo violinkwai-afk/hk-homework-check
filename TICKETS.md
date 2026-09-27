@@ -378,4 +378,8 @@
   **暫時未做**（冇足夠真實quote,唔想靠估）：`word_problem_division`嘅英文版、「$5 per cup + N friends」呢種要「+1」邏輯嘅shape。
   406/406測試通過（新增5個），已push、已deploy。**未做真銀live驗證**。
 
+- ✅ **第57項完成：將真實嘅香港硬幣/紙幣資料加入AI覆核（Ticket13）嘅prompt度，幫佢分辨面額。** 用戶提出用「文字描述」輔助AI判斷硬幣/紙幣面額嘅諗法——已查證真實資料（HKMA官方+Wikipedia，1993洋紫荊系列7種硬幣嘅顏色/大小/形狀，5種紙幣顏色），加做`HK_CURRENCY_REFERENCE`。**特登淨係喺題目提到錢先加呢段資料**（`mentionsMoneyDenomination`檢查），唔會嘥晒每次AI call嘅token錢。
+  講清楚呢個唔係code確定判斷,純粹俾AI多份參考資料,唔保證100%準——同鐘面呢類真正Tier V題型一樣,呢個係輔助,唔係解決方案。
+  409/409測試通過，已push、已deploy。
+
 

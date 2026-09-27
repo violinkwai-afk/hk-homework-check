@@ -1444,3 +1444,32 @@ test("Module 3d: an incomplete Sudoku stays needs_review, never guessed, and is 
     global.fetch = originalFetch;
   }
 });
+
+// Ticket 57 (2026-09-27): real HK currency reference (HKMA + Wikipedia
+// verified facts) added to the AI-fallback judge's prompt, ONLY when a
+// pending item's printed text actually mentions money -- avoids paying
+// extra input-token cost on every unrelated AI-fallback call.
+test("buildAiFallbackPrompt: includes the real HK currency reference when a pending item mentions money", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "How much money is shown? (coins)", studentAnswer: "$3.50" },
+  ]);
+  assert.match(prompt, /洋紫荊/, "the real coin-series reference must be present");
+  assert.match(prompt, /\$20藍色/, "the real banknote colour reference must be present");
+});
+
+test("buildAiFallbackPrompt: omits the currency reference entirely for unrelated questions (no wasted tokens)", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "What 3-D shape has two circular bases?", studentAnswer: "cylinder" },
+  ]);
+  assert.doesNotMatch(prompt, /洋紫荊/);
+  assert.doesNotMatch(prompt, /\$20藍色/);
+});
+
+test("mentionsMoneyDenomination: recognises real Chinese and English money keywords", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsMoneyDenomination([{ printedQuestion: "呢個係咩硬幣？" }]), true);
+  assert.equal(worker.mentionsMoneyDenomination([{ printedQuestion: "How many $2 coins?" }]), true);
+  assert.equal(worker.mentionsMoneyDenomination([{ printedQuestion: "25÷5" }]), false);
+});
