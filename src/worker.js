@@ -1849,17 +1849,17 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
 // homework judgments is UNVALIDATED, not assumed safe, until tested with
 // real data (see TICKETS.md Ticket 27).
 const JEV_MODEL = "typesafe/jev-1.13";
-// Lowered 2026-09-27 (Ticket 27 follow-up, explicit user instruction)
-// from an initial conservative 0.9, after real calibration data: 3 real,
-// ground-truth-confirmed CORRECT answers with full sentence context
-// scored 0.85/0.87/0.88 -- just under the original 0.9 bar, so they fell
-// through as unresolved even though Jev was clearly leaning correct.
-// Real wrong-leaning items in the same batch scored 0.10-0.31, still a
-// wide margin below 0.88, so this doesn't meaningfully risk false
-// positives on the data seen so far. Still only 3 real data points for
-// the "correct" side, though -- keep watching real outcomes, this is a
-// coverage/risk tradeoff, not a settled calibration.
-const JEV_CONFIDENT_CORRECT = 0.88;
+// Lowered again 2026-09-27 (Ticket 31 real data, explicit user
+// instruction) from 0.88 to 0.85. Larger real calibration sample now
+// (26 English/math items sent to Jev in one full-pipeline test): real
+// CORRECT answers scored across a wide 0.87-0.97 range with no clean
+// cutoff -- e.g. a correct "You can read it" scored 0.87, just under
+// the 0.88 bar. No real wrong-leaning item scored anywhere near 0.85
+// (the highest wrong-leaning score seen was 0.43, a large margin below).
+// Still a coverage/risk tradeoff, not a settled calibration -- keep
+// watching real outcomes as more data comes in, especially near this
+// boundary specifically.
+const JEV_CONFIDENT_CORRECT = 0.85;
 const JEV_CONFIDENT_WRONG = 0.1;
 
 function buildJevQuestions(pendingItems) {
