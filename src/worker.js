@@ -154,6 +154,63 @@ export default {
 // one-use routes, checked via the "x-debug-token" header.
 const DEBUG_TOKEN = "hw-debug-20260927";
 
+// Ticket 50 (2026-09-27): Cloudflare Workers CPU-ms billing has NO
+// platform-level hard cap -- past the Paid plan's 30M CPU-ms/month
+// included, it's uncapped pay-as-you-go ($0.02/million extra). Moving
+// off Workers entirely (the only way to get a true hard cap) was
+// already tried once (the pre-Photon Railway proxy, see B2 in
+// TICKETS.md) and reverted for reliability reasons. This is a
+// self-imposed, IN-CODE guard instead: a rough daily CPU-ms estimate
+// (wall-clock timing of Photon calls, a reasonable proxy since Photon
+// work is synchronous CPU-bound WASM, not I/O-bound) accumulated in KV.
+//
+// CRITICAL DESIGN CONSTRAINT: this must NEVER degrade grading accuracy
+// -- that would violate the standing "accuracy is the floor" hard rule.
+// downscaleForCheapTier and rotation-correction stay untouched no matter
+// what (skipping them risks real timeouts/misreads, a functional/
+// accuracy regression, not just a cost tradeoff). The ONLY thing this
+// guard is allowed to degrade is annotateImage's Telegram photo
+// annotation -- purely cosmetic presentation of already-computed
+// verdicts, never the verdicts themselves. Tripping the guard mainly
+// functions as an early-warning alert (surfaced via the existing daily
+// CF-usage cron), not a silent accuracy trade.
+//
+// Threshold: 30M CPU-ms/month included / 30 days ~= 1M ms/day as a
+// conservative "don't let one day alone plausibly burn the WHOLE
+// month's included budget" ceiling -- deliberately not tuned to real
+// observed usage (not yet measured at the time of writing), meant to be
+// revisited once the daily cron has collected real data.
+const CPU_GUARD_DAILY_THRESHOLD_MS = 1_000_000;
+
+function cpuGuardKeyForToday() {
+  return "cpuguard:" + new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Hong_Kong" });
+}
+
+// Best-effort, non-atomic accumulation -- same accepted tradeoff as
+// Ticket 40's jevhealth counter (a monitoring signal, not a billing-
+// grade count; an occasional lost increment under concurrent requests
+// is fine, never worth retry/locking complexity). Never allowed to
+// throw or block the caller.
+async function recordCpuGuardUsage(env, ms) {
+  if (!env.RATE_LIMIT_KV || !Number.isFinite(ms) || ms <= 0) return;
+  try {
+    const key = cpuGuardKeyForToday();
+    const raw = await env.RATE_LIMIT_KV.get(key);
+    const total = (raw ? Number(raw) : 0) + ms;
+    await env.RATE_LIMIT_KV.put(key, String(total), { expirationTtl: 8 * 86400 });
+  } catch (e) { /* monitoring only, never block the real request */ }
+}
+
+async function isCpuGuardTripped(env) {
+  if (!env.RATE_LIMIT_KV) return false;
+  try {
+    const raw = await env.RATE_LIMIT_KV.get(cpuGuardKeyForToday());
+    return !!raw && Number(raw) >= CPU_GUARD_DAILY_THRESHOLD_MS;
+  } catch (e) {
+    return false; // fail open -- a KV read failure must never block/degrade a real request
+  }
+}
+
 async function handleTestVisionOcrLatency(request, env) {
   if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
   const visionKey = !env.GOOGLE_VISION_API_KEY ? null
@@ -5383,6 +5440,7 @@ async function handleTelegramWebhook(request, env) {
     let bytesToAnnotate = photoBytes;
     const rotationDeg = markJson.pageRotations && markJson.pageRotations["0"];
     if (rotationDeg) {
+      const tRotateApply = Date.now();
       const photonImg = PhotonImage.new_from_byteslice(photoBytes);
       try {
         const rotatedImg = rotate(photonImg, rotationDeg);
@@ -5392,22 +5450,53 @@ async function handleTelegramWebhook(request, env) {
       } catch (e) {
         console.log(JSON.stringify({ event: "telegram_rotation_apply_failed", error: String(e && e.message || e) }));
         // best-effort -- annotate the un-rotated original rather than fail the whole submission
-      } finally { photonImg.free(); }
+      } finally {
+        photonImg.free();
+        // Ticket 50: monitoring only -- this physical rotation-apply step
+        // is NOT gated by the CPU guard (it feeds into what the parent
+        // actually sees as "their child's photo", not a cosmetic mark),
+        // just recorded for visibility into total daily Photon CPU use.
+        await recordCpuGuardUsage(env, Date.now() - tRotateApply);
+      }
     }
 
+    // Ticket 50: annotateImage is the one Photon step this guard is
+    // allowed to skip -- grading itself (markJson.results) is already
+    // fully computed by this point and completely unaffected either way,
+    // only the cosmetic marked-up photo is. Checked BEFORE spending the
+    // CPU on annotation, not after.
+    const cpuGuardTripped = await isCpuGuardTripped(env);
     const tAnnotate = Date.now();
-    const annotated = annotateImage(bytesToAnnotate, markJson.results || []);
+    let annotated = null;
+    if (!cpuGuardTripped) {
+      annotated = annotateImage(bytesToAnnotate, markJson.results || []);
+    }
     const annotationMs = Date.now() - tAnnotate;
+    if (annotationMs > 0) await recordCpuGuardUsage(env, annotationMs);
 
     const tSend = Date.now();
-    // "Checked" means only "this photo was processed", NOT "every answer
-    // is correct" -- it is not a correctness verdict and must not be read
-    // as one. needs_review (correct === null) items now get their own "?"
-    // mark (annotateImage's "review" icon kind, drawn via Photon's
-    // draw_text_with_color -- see annotate.js) distinct from the cross, so
-    // an all-correct-looking marked-up photo no longer hides unreviewed
-    // items from the parent.
-    await telegramSendPhoto(botToken, chatId, annotated.data, annotated.mediaType, "Checked");
+    if (annotated) {
+      // "Checked" means only "this photo was processed", NOT "every answer
+      // is correct" -- it is not a correctness verdict and must not be read
+      // as one. needs_review (correct === null) items now get their own "?"
+      // mark (annotateImage's "review" icon kind, drawn via Photon's
+      // draw_text_with_color -- see annotate.js) distinct from the cross, so
+      // an all-correct-looking marked-up photo no longer hides unreviewed
+      // items from the parent.
+      await telegramSendPhoto(botToken, chatId, annotated.data, annotated.mediaType, "Checked");
+    } else {
+      // Ticket 50: CPU-ms guard tripped for today -- fall back to a
+      // plain-text summary instead of the annotated photo. Grading
+      // itself is unaffected (same real results, just not drawn onto
+      // the photo); this only happens on a day CPU usage is already
+      // unusually high, and self-resets the next HK calendar day.
+      const results = markJson.results || [];
+      const correctCount = results.filter((r) => r.correct === true).length;
+      const wrongLines = results.filter((r) => r.correct === false).map((r) => `第${r.question}題：${r.correctAnswer ? `啱嘅答案係「${r.correctAnswer}」` : "錯"}`);
+      const reviewCount = results.filter((r) => r.correct === null).length;
+      const summaryText = `改好喇：${correctCount} / ${results.length}\n${wrongLines.join("\n")}${reviewCount ? `\n（另有${reviewCount}題需要人手覆核）` : ""}\n\n（今日系統較忙，暫時未能提供標圖相片，文字版結果如上）`;
+      await telegramSendMessage(botToken, chatId, summaryText);
+    }
     const sendPhotoMs = Date.now() - tSend;
 
     // I. Observability -- timings and item count only, never chat_id,
@@ -5572,6 +5661,9 @@ export {
   callJevPreCheck,
   buildJevQuestions,
   parseOcrLine,
+  recordCpuGuardUsage,
+  isCpuGuardTripped,
+  CPU_GUARD_DAILY_THRESHOLD_MS,
   extractContinuationMarkers,
   crossCheckPrintedNumbers,
   evalArithmetic,

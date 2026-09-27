@@ -1185,3 +1185,50 @@ test("callJevPreCheck: empty pendingItems returns an empty Map without calling f
     global.fetch = originalFetch;
   }
 });
+
+// Ticket 50 (2026-09-27): self-imposed CPU-ms circuit breaker -- see the
+// standing constraint in worker.js's own comment (this must NEVER
+// degrade grading accuracy, only the cosmetic Telegram photo annotation).
+function fakeGenericKV(initial = {}) {
+  const store = { ...initial };
+  return {
+    get: async (key) => (key in store ? store[key] : null),
+    put: async (key, value) => { store[key] = value; },
+    _store: store,
+  };
+}
+
+test("recordCpuGuardUsage: accumulates across multiple calls under today's key", async () => {
+  const worker = await import(TMP);
+  const kv = fakeGenericKV();
+  await worker.recordCpuGuardUsage({ RATE_LIMIT_KV: kv }, 100);
+  await worker.recordCpuGuardUsage({ RATE_LIMIT_KV: kv }, 250);
+  const key = Object.keys(kv._store).find((k) => k.startsWith("cpuguard:"));
+  assert.ok(key, "should have written a cpuguard:<date> key");
+  assert.equal(kv._store[key], "350");
+});
+
+test("recordCpuGuardUsage: silently no-ops with no RATE_LIMIT_KV binding or a non-positive ms value", async () => {
+  const worker = await import(TMP);
+  await assert.doesNotReject(() => worker.recordCpuGuardUsage({}, 100));
+  const kv = fakeGenericKV();
+  await worker.recordCpuGuardUsage({ RATE_LIMIT_KV: kv }, 0);
+  await worker.recordCpuGuardUsage({ RATE_LIMIT_KV: kv }, -5);
+  assert.equal(Object.keys(kv._store).length, 0, "zero/negative ms must not write anything");
+});
+
+test("isCpuGuardTripped: false under the threshold, true at/over it", async () => {
+  const worker = await import(TMP);
+  const todayKey = "cpuguard:" + new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Hong_Kong" });
+  const underKv = fakeGenericKV({ [todayKey]: String(worker.CPU_GUARD_DAILY_THRESHOLD_MS - 1) });
+  assert.equal(await worker.isCpuGuardTripped({ RATE_LIMIT_KV: underKv }), false);
+  const overKv = fakeGenericKV({ [todayKey]: String(worker.CPU_GUARD_DAILY_THRESHOLD_MS) });
+  assert.equal(await worker.isCpuGuardTripped({ RATE_LIMIT_KV: overKv }), true);
+});
+
+test("isCpuGuardTripped: fails open (false) when RATE_LIMIT_KV is missing or a read throws -- never blocks a real request over a monitoring failure", async () => {
+  const worker = await import(TMP);
+  assert.equal(await worker.isCpuGuardTripped({}), false);
+  const throwingKv = { get: async () => { throw new Error("kv down"); } };
+  assert.equal(await worker.isCpuGuardTripped({ RATE_LIMIT_KV: throwingKv }), false);
+});
