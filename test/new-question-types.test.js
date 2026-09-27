@@ -1706,3 +1706,29 @@ test("classifyAndVerify: real division-with-remainder word problem routes to mat
   assert.equal(verdict.handler, "math_equation");
   assert.equal(verdict.correct, true);
 });
+
+// Ticket 43 (2026-09-27, real production finding, Ticket 42 test): the
+// printed question is a BARE division expression ("87÷6", no "=" in the
+// student's own answer at all) and the student wrote the remainder
+// directly ("14…3") -- a different real shape from the "30÷4=7...2"
+// case above (that one has an "=" inside the student's own sub-answer;
+// this one has none, the whole answer text IS the remainder form).
+// Real bug: this used to be marked WRONG because parseNumericAnswer
+// truncates "14…3" to just 14, compared against evalArithmetic("87÷6")
+// = 14.5.
+test("verifyMath: bare division question with a bare 'quotient…remainder' answer (no '=' anywhere) is verified correctly, not truncated", () => {
+  const correct = mod.verifyMath("87÷6", "14…3");
+  assert.equal(correct.correct, true);
+
+  const alsoCorrect = mod.verifyMath("71÷6", "11…5");
+  assert.equal(alsoCorrect.correct, true);
+
+  // A genuinely wrong remainder must still be caught, not just
+  // rubber-stamped once the format is recognised.
+  const wrong = mod.verifyMath("87÷6", "14…5"); // true remainder is 3, not 5
+  assert.equal(wrong.correct, false);
+
+  // Plain ASCII dots (a common OCR/keyboard variant of the ellipsis) work too.
+  const asciiDots = mod.verifyMath("87÷6", "14...3");
+  assert.equal(asciiDots.correct, true);
+});

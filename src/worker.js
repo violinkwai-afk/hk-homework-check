@@ -2285,6 +2285,31 @@ function trySubstituteBlank(printedQuestion, sub) {
   return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
 }
 
+// HK worksheets write division-with-remainder as "quotient...remainder"
+// (either a real ellipsis "…"/"⋯" or 2-3 plain dots), which
+// evalArithmetic/parseNumericAnswer have no notion of -- e.g.
+// evalArithmetic("87÷6") gives 14.5, and parseNumericAnswer("14…3")
+// silently truncates to just 14 (parseFloat stops at the first
+// non-numeric character), so a genuinely correct remainder answer
+// compared against the float form always mismatches. Shared by both
+// verifyMath shapes that can encounter it: Case 1 ("30÷4=7...2", the
+// student wrote their own full equation, Ticket 27) and Case 2 ("87÷6"
+// printed, student wrote bare "14...3" with no "=" at all, Ticket 43 --
+// same underlying notation, just on opposite sides of an "=" the
+// student may or may not have re-written themselves).
+function verifyDivisionRemainder(divExpr, remainderExpr) {
+  const divMatch = /^\s*(-?\d+)\s*[÷/]\s*(-?\d+)\s*$/.exec(divExpr);
+  const remMatch = /^\s*(-?\d+)\s*(?:[…⋯]|\.{2,3})\s*(-?\d+)\s*$/.exec(remainderExpr);
+  if (!divMatch || !remMatch) return null;
+  const dividend = Number(divMatch[1]);
+  const divisor = Number(divMatch[2]);
+  const quotient = Number(remMatch[1]);
+  const remainder = Number(remMatch[2]);
+  if (divisor === 0) return null;
+  const correct = dividend === divisor * quotient + remainder && remainder >= 0 && remainder < Math.abs(divisor);
+  return { correct, correctAnswer: correct ? "" : `${Math.floor(dividend / divisor)}...${dividend - divisor * Math.floor(dividend / divisor)}` };
+}
+
 // Deterministic verification -- code decides correct/wrong, never the AI.
 // Handles the case real testing showed AI judgment gets wrong (an equation
 // the student rewrote in a different, still-valid order/form) by only
@@ -2344,18 +2369,8 @@ function verifyMath(printedQuestion, studentAnswer) {
       // (dividend = divisor*quotient + remainder, 0 <= remainder < divisor)
       // rather than falling through to a same-shape-different-meaning
       // float comparison.
-      const remainderMatch = /^\s*(-?\d+)\s*[÷/]\s*(-?\d+)\s*$/.exec(lhs);
-      const rhsRemainderMatch = /^\s*(-?\d+)\s*(?:[…⋯]|\.{2,3})\s*(-?\d+)\s*$/.exec(rhs);
-      if (remainderMatch && rhsRemainderMatch) {
-        const dividend = Number(remainderMatch[1]);
-        const divisor = Number(remainderMatch[2]);
-        const quotient = Number(rhsRemainderMatch[1]);
-        const remainder = Number(rhsRemainderMatch[2]);
-        if (divisor !== 0) {
-          const correct = dividend === divisor * quotient + remainder && remainder >= 0 && remainder < Math.abs(divisor);
-          return { correct, correctAnswer: correct ? "" : `${Math.floor(dividend / divisor)}...${dividend - divisor * Math.floor(dividend / divisor)}` };
-        }
-      }
+      const remResult = verifyDivisionRemainder(lhs, rhs);
+      if (remResult) return remResult;
       const lhsVal = evalArithmetic(lhs);
       const rhsVal = parseNumericAnswer(rhs);
       if (lhsVal !== null && !Number.isNaN(rhsVal)) {
@@ -2370,6 +2385,16 @@ function verifyMath(printedQuestion, studentAnswer) {
     // something this deterministic layer can do -- reported as null
     // (needs review) rather than guessed.
     const printedExpr = String(printedQuestion).replace(/=\s*$/, "");
+    // Ticket 43 (2026-09-27, real production finding): printed "87÷6"
+    // with a bare student answer "14…3" (no "=" anywhere -- this is the
+    // OTHER real shape the Ticket 27 remainder fix above didn't cover,
+    // since that one only fires when the student's own sub-answer
+    // contains an "="). Checked before the general evalArithmetic/
+    // parseNumericAnswer path below, which would otherwise truncate
+    // "14…3" to just 14 and wrongly compare it against 87÷6's plain
+    // float value 14.5.
+    const remResult = verifyDivisionRemainder(printedExpr, sub);
+    if (remResult) return remResult;
     const expected = evalArithmetic(printedExpr);
     const studentVal = parseNumericAnswer(sub);
     if (expected !== null && !Number.isNaN(studentVal)) {
