@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-full-flow-v3" && request.method === "POST") {
-      return handleTestFullFlowV3(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1921,113 +1918,6 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
   }
-}
-
-// Temporary diagnostic route (2026-09-27, real user request): the FULL
-// standard test report format going forward (see memory: every stage's
-// own tool/ms/cost, every question's Vision text + Gemini text
-// (printed/handwritten split, already native via printedQuestion/
-// studentAnswer) + code verdict + what reached Jev and its reply).
-// Runs Vision (googleOcr) IN PARALLEL with Gemini OCR, same as real
-// handleMark, then code, then Jev. Remove after use.
-async function handleTestFullFlowV3(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  const visionKey = !env.GOOGLE_VISION_API_KEY ? null
-    : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
-    : await env.GOOGLE_VISION_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
-
-  const perPhoto = [];
-  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
-    const steps = [];
-    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
-    const prompt = OCR_ONLY_PROMPT(1);
-    const ocrBody = {
-      model: OCR_TEXT_MODEL,
-      max_tokens: 2000,
-      temperature: 0,
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
-    };
-    const tParallelStart = Date.now();
-    const ocrPromise = fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-fullflow-v3-test" },
-      body: JSON.stringify(ocrBody),
-    }).then((r) => r.json()).then((data) => ({ ok: true, data })).catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
-    const visionPromise = visionKey
-      ? googleOcr(images[pageIdx].data, visionKey).then((r) => ({ ok: true, data: r })).catch((e) => ({ ok: false, error: String((e && e.message) || e) }))
-      : Promise.resolve({ ok: false, error: "no_vision_key" });
-    const [ocrOutcome, visionOutcome] = await Promise.all([ocrPromise, visionPromise]);
-    const stageMs = Date.now() - tParallelStart;
-
-    const visionText = visionOutcome.ok && visionOutcome.data ? visionOutcome.data.words.map((w) => w.text).join(" ") : null;
-    steps.push({ tool: "Vision (Google Cloud Vision, DOCUMENT_TEXT_DETECTION)", ms: stageMs, cost: null, error: visionOutcome.ok ? undefined : visionOutcome.error });
-
-    let items = [];
-    if (!ocrOutcome.ok) {
-      steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: stageMs, error: ocrOutcome.error });
-      perPhoto.push({ page: pageIdx, steps, visionText, items: [] });
-      continue;
-    }
-    const choice = ocrOutcome.data.choices && ocrOutcome.data.choices[0];
-    const rawText = (choice && choice.message && choice.message.content) || "";
-    items = parseOcrLine(rawText);
-    steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: stageMs, cost: ocrOutcome.data.usage ? ocrOutcome.data.usage.cost : null });
-
-    const tCodeStart = Date.now();
-    const itemResults = items.map((item) => {
-      const verdict = classifyAndVerify(item);
-      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, subject: verdict.subject, codeCorrect: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code", jevSent: null, jevReply: null };
-    });
-    steps.push({ tool: "code (classifyAndVerify)", ms: Date.now() - tCodeStart, cost: 0 });
-
-    // Ticket 27's real production rule, replicated exactly here (a prior
-    // test route forgot this filter, which made Chinese items LOOK like
-    // "Jev can't resolve them" when production never even asks Jev about
-    // them at all): Chinese-subject items never reach Jev.
-    const pendingForJev = [];
-    itemResults.forEach((r, i) => {
-      if (r.codeCorrect === null && r.subject !== "chinese") pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer, subject: r.subject });
-    });
-    if (pendingForJev.length) {
-      const tJevStart = Date.now();
-      const jevQuestions = buildJevQuestions(pendingForJev);
-      const jevState = "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。";
-      try {
-        const jevRes = await fetch("https://openrouter.ai/api/alpha/decisions", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
-          body: JSON.stringify({ model: JEV_MODEL, state: jevState, questions: jevQuestions }),
-        });
-        const jevData = await jevRes.json();
-        const answers = jevData.answers || {};
-        pendingForJev.forEach((pending) => {
-          const idx = pending.resultIndex;
-          itemResults[idx].jevSent = { printedQuestion: pending.printedQuestion, studentAnswer: pending.studentAnswer };
-          const answer = answers[String(idx)];
-          itemResults[idx].jevReply = answer || null;
-          if (answer && typeof answer.noul === "number") {
-            if (answer.noul >= JEV_CONFIDENT_CORRECT) { itemResults[idx].codeCorrect = true; itemResults[idx].resolvedBy = "jev"; }
-            else if (answer.noul <= JEV_CONFIDENT_WRONG) { itemResults[idx].codeCorrect = false; itemResults[idx].resolvedBy = "jev"; }
-          }
-        });
-        steps.push({ tool: `Jev (${JEV_MODEL})`, ms: Date.now() - tJevStart, cost: jevData.usage ? jevData.usage.cost : null, itemsAsked: pendingForJev.length });
-      } catch (e) {
-        steps.push({ tool: `Jev (${JEV_MODEL})`, ms: Date.now() - tJevStart, error: String((e && e.message) || e) });
-      }
-    }
-    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
-
-    perPhoto.push({ page: pageIdx, itemCount: items.length, steps, visionText, items: itemResults });
-  }
-  return json({ ok: true, perPhoto });
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
