@@ -273,4 +273,5 @@
     1. `number_word_conversion`錯誤咁claim咗「and/but/or連接句」呢個題型——因為OCR轉錄嘅printedQuestion淨係得個裸數字標籤（例如"1"），啱啱好撞中「有細數字」嘅偵測條件，加上答案（"but"）啱啱好撞中「有字母」條件，於是將"but"同數字1轉做嘅英文字"one"比較，判做錯——8題全部俾呢個bug錯判。
     2. `grammar_cloze`錯誤咁claim咗safari短文嘅代名詞填充題——因為印刷題目啱啱好有「空格跟住印刷嘅"'s"」（例如"____'s having a shower!"），撞中呢個handler原本淨係為「its定it's」呢種題型而設嘅偵測邏輯，但學生真正答案係代名詞"It"，俾呢個handler攞去做its/it's邏輯判斷，判做錯。
     - **兩個都已修好**：而家兩個handler都要求學生個答案本身真係屬於嗰個handler嘅答案家族（number_word_conversion要答案真係parse到做數字詞；grammar_cloze要答案係am/is/are/has/have/its/it's其中一個）先會claim嗰條題，唔再淨係睇印刷文字嘅表面形狀。加咗5個regression test（2個confirm bug已修好，3個confirm handler原本嘅真正用例仍然work）。346/346測試通過。
-    - **仲搵到但未修嘅**：(a) 數學應用題（photo3第10、11題）嘅除法有餘數答案，俾另一個handler錯誤攔截，判斷邏輯有問題；(b) Jev將一條真係啱嘅中文答案（表姐→表弟）判做錯——同Jev自己官方文件講嘅「CJK準繩度未驗證」完全脗合，確認咗呢個真實風險。兩個都記低咗，未修。
+    - **(D) 兩個都已經跟進修好**：(a) `verifyMath`加咗返專門識別「A÷B=商...餘數」呢種full equation嘅檢查，第11題（30÷4=7...2）而家可以confident咁判做啱；如果答案仲有額外用英文句子覆述嘅部分（例如"She can fold 7 paper cranes..."），呢部分暫時仍然判斷唔到，會安全咁跌返落needs_review（唔會再係false），已加5個regression test。(b) 中文題已經完全排除喺Jev預篩選之外（唔再send去Jev），直接沿用返而家（睇相）嘅AI覆核，同Jev未出現之前一樣安全——呢個係最簡單、零額外風險嘅做法，唔使搵第二個中文model。351/351測試通過。
+- 🔲 **第28項（提出咗，未做）：起一個「交叉碰撞test框架」——攞晒`QUESTION_TYPE_HANDLERS`入面每個handler各自嘅真實例子，逐個餵晒俾其他所有handler嘅`detect()`，確保冇一個handler會錯誤咁claim咗第二個handler嘅嘢。** 呢個係第27項root cause分析嘅跟進建議，目的係將「今次靠真實相先撞到bug」變成一個結構性、自動化嘅防護網，唔使淨係靠好彩先撞到。等用戶話事幾時做。
