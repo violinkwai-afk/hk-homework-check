@@ -5371,6 +5371,7 @@ function json(obj, status) {
 export {
   callJevPreCheck,
   buildJevQuestions,
+  parseOcrLine,
   crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,
