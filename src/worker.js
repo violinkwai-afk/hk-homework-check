@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-real-callqwenocrtext" && request.method === "POST") {
+      return handleTestRealCallQwenOcrText(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1791,6 +1794,33 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
+  }
+}
+
+// Temporary diagnostic route (2026-09-27): a real live /api/mark call
+// against the just-deployed Gemini switch failed with a generic
+// "upstream_error" (502) -- the client-facing message never carries the
+// real detail, and wrangler tail isn't reachable from this environment
+// (no CLOUDFLARE_API_TOKEN). Calls the REAL, unmodified callQwenOcrText
+// (not a copy) and returns the caught error's real detail/status to the
+// client, to find the actual root cause of the failure before deciding
+// whether the switch needs to be rolled back. Remove after use.
+async function handleTestRealCallQwenOcrText(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const startedAt = Date.now();
+  try {
+    const r = await callQwenOcrText(downscaled, openrouterKey);
+    return json({ ok: true, ms: Date.now() - startedAt, items: r.items, usage: r.usage });
+  } catch (e) {
+    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e) });
   }
 }
 
