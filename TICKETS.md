@@ -348,4 +348,8 @@
 - 🟨 **第51項進行中：跟返「work on OCR prompt」呢個要求，接第一個未接嘅handler——`verifyConjunctionFill`（but/and連接句）。** 意外發現：其實唔使改OCR prompt都做到！因為第29項（2026-09-27）嗰個context保留修正,而家一個blank嘅printedQuestion已經帶埋成句嘢（真實例子：「My name is Eric. I have three sisters ____ I don't have any brothers.」），淨係將呢句字用「____」切開做clauseA/clauseB就得，資料一早已經有，之前淨係冇駁埋。377/377測試通過，已push。
   **剩低6個仲要真係改OCR prompt先接到**（word bank、原文段落、價目表、選項A/B/C/D分開、4x4格仔、睇圖format）——呢6個先係真係要動OCR prompt呢個高風險嘅位（歷史上第26/31項都因為改prompt整出過真regression），建議逐個、逐個驗證咁做，唔好一次過全部加。想我揀邊一個先開始？
 
+- ✅ **第52項完成（跟返「一個一個嚟」）：接咗`price_table_lookup`（價目表計數）——第一個真係要改OCR prompt先接到嘅handler。** 加咗一行新指示：如果張相印刷咗價目表，用「PRICE_TABLE: 名稱=價錢;...」格式喺回覆最開始列出，新function`extractPriceTable`負責攞返呢行、清理返OCR文字。價目表屬於成頁共用嘅context，直接掛喺嗰頁每條item度，唔使改`classifyAndVerify`個function signature。382/382測試通過，已push、已deploy。
+  **真實驗證**：用返之前試過嘅相（估算練習，冇印刷任何價目表）直接call真正production /api/mark——結果同之前一致（1、2、3、5題全部仍然code判斷啱），冇因為呢個prompt改動整壞正常讀字，冇誤判任何一條item做price_table_lookup。
+  **未驗證**：手上冇一張真係印刷咗價目表嘅相，所以Gemini真係遇到價目表嗰陣識唔識跟返呢個新格式,仲未實測過。
+
 
