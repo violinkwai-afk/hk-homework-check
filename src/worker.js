@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-raw-ocr-text" && request.method === "POST") {
+      return handleTestRawOcrText(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1779,6 +1782,56 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
+  }
+}
+
+// Temporary diagnostic route (real user request, 2026-09-27): the user
+// noticed a real gap -- when a comparison call returns 0 parsed items
+// (e.g. Gemini on the math-division photo), that ISN'T the same as "the
+// model read nothing" -- it means the model's raw text reply didn't
+// match the expected "label=printed|answer" format, so parseOcrLine
+// extracted nothing from it. Returns the model's raw, unparsed text
+// (plus the parsed items for comparison) so a 0-item result can be
+// distinguished from a genuinely empty model reply. Single-image, single-
+// model only -- narrower than the removed comparison route since this is
+// just closing that one gap. Same token gate. Remove after use.
+async function handleTestRawOcrText(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = env.OPENROUTER_API_KEY && typeof env.OPENROUTER_API_KEY.get === "function"
+    ? await env.OPENROUTER_API_KEY.get()
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images, model } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const allowed = [PRODUCTION_OCR_MODEL, "google/gemini-3.1-flash-lite"];
+  const useModel = model || PRODUCTION_OCR_MODEL;
+  if (!allowed.includes(useModel)) return json({ error: "model_not_allowed", allowed }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const prompt = OCR_ONLY_PROMPT(downscaled.length);
+  const body = {
+    model: useModel,
+    max_tokens: 2000,
+    temperature: 0,
+    provider: { ignore: ["Alibaba"] },
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+  };
+  const startedAt = Date.now();
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-raw-ocr-text-test" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return json({ ok: false, error: `http_${res.status}: ${(await res.text()).slice(0, 300)}` });
+    const data = await res.json();
+    const choice = data.choices && data.choices[0];
+    const rawText = (choice && choice.message && choice.message.content) || "";
+    const items = parseOcrLine(rawText);
+    return json({ ok: true, model: useModel, ms: Date.now() - startedAt, rawText, items, usage: data.usage || null, finishReason: choice && choice.finish_reason });
+  } catch (e) {
+    return json({ ok: false, ms: Date.now() - startedAt, error: String((e && e.message) || e) });
   }
 }
 
