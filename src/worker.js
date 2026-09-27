@@ -158,6 +158,9 @@ export default {
     if (url.pathname === "/api/test-full-flow-v2" && request.method === "POST") {
       return handleTestFullFlowV2(request, env);
     }
+    if (url.pathname === "/api/test-ocr-raw-debug" && request.method === "POST") {
+      return handleTestOcrRawDebug(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -2014,6 +2017,43 @@ async function handleTestFullFlowV2(request, env) {
     perPhoto.push({ page: pageIdx, itemCount: items.length, steps, items: itemResults });
   }
   return json({ ok: true, perPhoto });
+}
+
+// Temporary diagnostic route (2026-09-27): capture Gemini's raw,
+// unparsed text to root-cause the Ticket 29 regression found in the
+// 7-photo v2 test (several photos now merging/garbling items). Remove
+// after use.
+async function handleTestOcrRawDebug(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const prompt = OCR_ONLY_PROMPT(1);
+  const body = {
+    model: OCR_TEXT_MODEL,
+    max_tokens: 2000,
+    temperature: 0,
+    provider: { ignore: ["Alibaba"] },
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+  };
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-rawdebug-test" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    const choice = data.choices && data.choices[0];
+    const rawText = (choice && choice.message && choice.message.content) || "";
+    return json({ ok: true, rawText, items: parseOcrLine(rawText), usage: data.usage || null });
+  } catch (e) {
+    return json({ ok: false, error: String((e && e.message) || e) });
+  }
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
