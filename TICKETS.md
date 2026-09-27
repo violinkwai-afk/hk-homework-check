@@ -275,4 +275,9 @@
     - **兩個都已修好**：而家兩個handler都要求學生個答案本身真係屬於嗰個handler嘅答案家族（number_word_conversion要答案真係parse到做數字詞；grammar_cloze要答案係am/is/are/has/have/its/it's其中一個）先會claim嗰條題，唔再淨係睇印刷文字嘅表面形狀。加咗5個regression test（2個confirm bug已修好，3個confirm handler原本嘅真正用例仍然work）。346/346測試通過。
     - **(D) 兩個都已經跟進修好**：(a) `verifyMath`加咗返專門識別「A÷B=商...餘數」呢種full equation嘅檢查，第11題（30÷4=7...2）而家可以confident咁判做啱；如果答案仲有額外用英文句子覆述嘅部分（例如"She can fold 7 paper cranes..."），呢部分暫時仍然判斷唔到，會安全咁跌返落needs_review（唔會再係false），已加5個regression test。(b) 中文題已經完全排除喺Jev預篩選之外（唔再send去Jev），直接沿用返而家（睇相）嘅AI覆核，同Jev未出現之前一樣安全——呢個係最簡單、零額外風險嘅做法，唔使搵第二個中文model。351/351測試通過。
 - 🔲 **第28項（提出咗，未做）：起一個「交叉碰撞test框架」——攞晒`QUESTION_TYPE_HANDLERS`入面每個handler各自嘅真實例子，逐個餵晒俾其他所有handler嘅`detect()`，確保冇一個handler會錯誤咁claim咗第二個handler嘅嘢。** 呢個係第27項root cause分析嘅跟進建議，目的係將「今次靠真實相先撞到bug」變成一個結構性、自動化嘅防護網，唔使淨係靠好彩先撞到。等用戶話事幾時做。
-- 🔲 **第29項（提出咗，未做）：修OCR prompt——處理「連續多空信件/短文」題型嗰陣，要保留返每個空格附近嘅完整句子context，唔可以淨係得返個孤立標籤（例如"1""2""3"）。** 真實發現：相4(and/but/or)9題、相5(safari短文)6題，Jev/code都解決唔到，根本原因唔係judge唔夠叻，係Gemini個OCR將呢類題目嘅「印刷題目」讀到得返個數字標籤或者零碎殘句，冇留低足夠資訊俾任何judge(code/Jev/真人)判斷。等用戶話事幾時做。
+- ✅ **第29項完成：修OCR prompt——處理「連續多空信件/短文」題型嗰陣，要保留返每個空格附近嘅完整句子context，唔可以淨係得返個孤立標籤或者將答案字照抄當printed。**
+  - **根本原因（用真實資料查證，唔止Gemini）**：Qwen(而家production用緊嗰個)同Gemini兩個都有問題，但錯法唔同——Qwen將成段短文冧埋做一條item，8個答案全部報做「?」（當成未答，實際上學生全部填咗）；Gemini就拆開晒但printedQuestion淨係得返答案字本身或者個標籤，冇埋句子context。兩個都令code/Jev冇足夠資訊判斷。
+  - **修好嘅prompt**：加咗兩條新規則——(1) printedQuestion一定要包含緊貼空格嘅完整句子，唔可以淨係標籤/答案字；(2) 短文入面每個空格一定要拆做獨立item，唔可以因為同一段就冧埋、唔可以因為手寫字讀漏就報做未答。
+  - **真實驗證（用返真實相，Qwen production model）**：相4(and/but/or信件)12條item全部啱——每條都有完整句子context、答案全部正確抽取到，同之前「成段冧埋、全部"?"」相比係質嘅飛躍。相5(代名詞+safari短文)15條item全部啱，同樣結構乾淨、context齊全。
+  - **附帶發現（未深究，唔阻住呢個ticket close）**：相6(中文書信)測試嗰陣，Qwen讀到嘅內容同之前核實過嘅ground truth有出入（例如「親愛的表姐」答案讀成「表姐」而唔係「表弟」）——因為中文題已經喺第27項排除咗Jev、會跌返落而家嘅vision AI覆核安全網，呢個發現冇即時風險，但值得後續留意。
+
