@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-gemini-ocr" && request.method === "POST") {
-      return handleTestGeminiOcr(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1812,46 +1809,6 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
-  }
-}
-
-// Temporary diagnostic route (2026-09-27, Ticket 27): re-verifying the
-// general blank-preservation prompt fix (□ must be preserved for ANY
-// embedded blank, not just division) with Gemini specifically, WITHOUT
-// touching OCR_TEXT_MODEL (still Qwen in production) -- calls Gemini
-// directly via callQwenOcrText's exact logic. Remove after use.
-async function handleTestGeminiOcr(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
-  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
-  const prompt = OCR_ONLY_PROMPT(downscaled.length);
-  const body = {
-    model: "google/gemini-3.1-flash-lite",
-    max_tokens: 2000,
-    temperature: 0,
-    provider: { ignore: ["Alibaba"] },
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
-  };
-  const startedAt = Date.now();
-  try {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-blank-fix-test" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    const choice = data.choices && data.choices[0];
-    const rawText = (choice && choice.message && choice.message.content) || "";
-    const items = parseOcrLine(rawText);
-    return json({ ok: true, ms: Date.now() - startedAt, rawText, items, usage: data.usage || null });
-  } catch (e) {
-    return json({ ok: false, ms: Date.now() - startedAt, error: String((e && e.message) || e) });
   }
 }
 
