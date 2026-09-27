@@ -1762,6 +1762,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁有印刷咗一個「詞語庫」（一組可以填嘅詞語/短語,規定每個淨係用一次,例如"a cup of/a bar of/a bowl of/a piece of/a basket of/a packet of"）**，喺回覆最開始加一行「WORD_BANK: 詞1;詞2;詞3;...」，列晒成組詞語庫嘅每一個詞（用";"分隔）。如果冇呢類詞語庫就完全唔使加呢行。
 
+**如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -1808,6 +1810,34 @@ function extractWordBank(text) {
   if (!m) return { wordBank: null, cleanedText };
   const bank = m[1].split(";").map((s) => s.trim()).filter(Boolean);
   return { wordBank: bank.length ? bank : null, cleanedText };
+}
+
+// Ticket 55 (2026-09-27): extracts 4x4 Sudoku puzzles (see OCR_ONLY_PROMPT's
+// own instruction above) as a completely separate item shape from every
+// other question type -- a puzzle is one 16-cell grid, not a
+// "printedQuestion|studentAnswer" pair, so it can't go through
+// parseOcrLine at all. Multiple puzzles can appear on one page (real
+// example: 5 separate puzzles on one worksheet page), so this returns an
+// ARRAY, unlike the single-value price table/passage/word-bank
+// extractors. Malformed lines (wrong cell count, non-digit content) are
+// silently dropped rather than thrown -- same "fail open to
+// needs_review, never crash the whole page" discipline as everywhere
+// else in this file.
+function extractSudokuPuzzles(text) {
+  const puzzles = [];
+  const cleanedText = text.replace(/^SUDOKU:.*$/gm, (line) => {
+    const parts = line.trim().slice("SUDOKU:".length).trim().split("|");
+    if (parts.length !== 3) return "";
+    const [label, givenCsv, studentCsv] = parts;
+    const parseGrid = (s) => s.split(",").map((v) => v.trim()).map((v) => (v === "0" || v === "" ? null : v));
+    const givenGrid = parseGrid(givenCsv);
+    const studentGrid = parseGrid(studentCsv);
+    if (givenGrid.length === 16 && studentGrid.length === 16) {
+      puzzles.push({ label: label.trim(), givenGrid, studentGrid });
+    }
+    return "";
+  });
+  return { puzzles, cleanedText };
 }
 
 // Shared by literal_keyword_mc (and any future MC-options consumer):
@@ -1921,12 +1951,16 @@ async function callQwenOcrText(images, openrouterKey) {
   const { continuesFromPrevious, continuesToNext, cleanedText: cleanedText1 } = extractContinuationMarkers(text);
   const { priceTable, cleanedText: cleanedText2 } = extractPriceTable(cleanedText1);
   const { passageText, cleanedText: cleanedText3 } = extractPassageText(cleanedText2);
-  const { wordBank, cleanedText } = extractWordBank(cleanedText3);
+  const { wordBank, cleanedText: cleanedText4 } = extractWordBank(cleanedText3);
+  const { puzzles: sudokuPuzzles, cleanedText } = extractSudokuPuzzles(cleanedText4);
   const items = parseOcrLine(cleanedText);
-  if (!items.length) {
+  // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
+  // zero normal items -- only treat this as a real OCR failure when
+  // BOTH are empty, not just items.
+  if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5127,7 +5161,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -5166,7 +5200,7 @@ async function handleMark(request, env) {
     if (qwenOutcome.wordBank) {
       qwenOutcome.items.forEach((item) => { item.wordBank = qwenOutcome.wordBank; });
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null };
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
   const pagesMs = Date.now() - tPages;
 
@@ -5362,6 +5396,41 @@ async function handleMark(request, env) {
           wordBankHint: item.wordBankHint,
         });
       }
+    });
+  });
+
+  // Module 3d, Ticket 55 (2026-09-27): 4x4 Sudoku puzzles -- a
+  // completely different item shape (one 16-cell grid, not a
+  // printedQuestion/studentAnswer pair), so these never went through
+  // classifyAndVerify/QUESTION_TYPE_HANDLERS at all; extractSudokuPuzzles
+  // (called inside callQwenOcrText) already produced clean {label,
+  // givenGrid, studentGrid} records, verified directly against the
+  // existing (already tested) verifySudoku4x4. Per explicit user
+  // decision: no correctAnswer generation yet for a wrong/incomplete
+  // puzzle (a real future addition, not attempted here) -- and,
+  // narrower than every other question type, an unresolved (incomplete)
+  // puzzle is NOT sent to Jev or the AI-image fallback (neither can
+  // usefully judge a 16-cell grid from the current text-only/single-
+  // hint-per-item prompts they're built for) -- it just stays
+  // needs_review, a real, acknowledged scope limit for this first pass.
+  pageResults.forEach((pr, pageIdx) => {
+    if (pr.failed || !pr.sudokuPuzzles || !pr.sudokuPuzzles.length) return;
+    pr.sudokuPuzzles.forEach((puzzle) => {
+      const verdict = verifySudoku4x4(puzzle.givenGrid, puzzle.studentGrid);
+      results.push({
+        question: puzzle.label,
+        studentAnswer: puzzle.studentGrid.map((v) => (v === null ? "_" : v)).join(""),
+        correct: verdict.correct,
+        correctAnswer: "",
+        subject: "math",
+        status: verdict.correct === null ? "needs_review" : "ok",
+        note: verdict.correct === null ? "數獨未填晒，需要人手複核" : "",
+        page: pageIdx,
+        bbox: null,
+        anchor: puzzle.label,
+        riskyDiagram: null,
+        verifiedBy: verdict.correct === null ? "pending" : "code",
+      });
     });
   });
 
@@ -5899,6 +5968,7 @@ export {
   extractPriceTable,
   extractPassageText,
   extractWordBank,
+  extractSudokuPuzzles,
   parseMcOptions,
   crossCheckPrintedNumbers,
   evalArithmetic,

@@ -1326,3 +1326,121 @@ test("Module 2b: two items using the same bank phrase get a cross-item hint pass
     global.fetch = originalFetch;
   }
 });
+
+// Ticket 55 (2026-09-27): 4x4 Sudoku puzzles (Module 3d in handleMark) --
+// a completely separate item shape from every other question type, so
+// this needs its own end-to-end test rather than reusing
+// classifyAndVerify-based assertions. Real fixture shape matches
+// test/new-question-types.test.js's own SUDOKU_GIVEN/SOLUTION.
+test("Module 3d: a correct, complete Sudoku solution is verified via the real verifySudoku4x4, with no AI call at all", async () => {
+  const worker = await import(TMP);
+  const given = "1,0,3,0,0,4,0,2,2,0,4,0,0,3,0,1";
+  const solution = "1,2,3,4,3,4,1,2,2,1,4,3,4,3,2,1";
+  const ocrText = `SUDOKU: 1|${given}|${solution}`;
+  let anyAiCalled = false;
+  const originalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("vision.googleapis.com")) return new Response(JSON.stringify({ responses: [{}] }), { status: 200 });
+    if (u.includes("alpha/decisions")) { anyAiCalled = true; return new Response("should not be called", { status: 502 }); }
+    if (u.includes("openrouter.ai")) {
+      const body = JSON.parse(opts.body);
+      const textBlock = body.messages[0].content.find((c) => c.type === "text");
+      if (textBlock.text.startsWith("你是一位細心的小學老師")) { anyAiCalled = true; return new Response("should not be called", { status: 502 }); }
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: ocrText } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200 });
+    }
+    throw new Error("unexpected fetch: " + u);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: Buffer.from("PAGE0").toString("base64"), mediaType: "image/jpeg" }] }),
+    });
+    const env = { OPENROUTER_API_KEY: "test-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("nf", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const json = await res.json();
+    assert.equal(json.results.length, 1);
+    assert.equal(json.results[0].question, "1");
+    assert.equal(json.results[0].correct, true);
+    assert.equal(json.results[0].verifiedBy, "code");
+    assert.equal(anyAiCalled, false, "a fully code-resolved puzzle needs no Jev/AI call at all");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Module 3d: a Sudoku solution with a row conflict is caught as wrong", async () => {
+  const worker = await import(TMP);
+  const given = "1,0,3,0,0,4,0,2,2,0,4,0,0,3,0,1";
+  const badSolution = "1,1,3,4,3,4,1,2,2,1,4,3,4,3,2,1"; // row 0 now has two 1s
+  const ocrText = `SUDOKU: 1|${given}|${badSolution}`;
+  const originalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("vision.googleapis.com")) return new Response(JSON.stringify({ responses: [{}] }), { status: 200 });
+    if (u.includes("alpha/decisions")) return new Response("should not be called", { status: 502 });
+    if (u.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: ocrText } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200 });
+    }
+    throw new Error("unexpected fetch: " + u);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: Buffer.from("PAGE0").toString("base64"), mediaType: "image/jpeg" }] }),
+    });
+    const env = { OPENROUTER_API_KEY: "test-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("nf", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const json = await res.json();
+    assert.equal(json.results[0].correct, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Module 3d: an incomplete Sudoku stays needs_review, never guessed, and is not sent to Jev/AI", async () => {
+  const worker = await import(TMP);
+  const given = "1,0,3,0,0,4,0,2,2,0,4,0,0,3,0,1";
+  const incomplete = "1,0,3,4,3,4,1,2,2,1,4,3,4,3,2,1"; // cell 1 left blank
+  const ocrText = `SUDOKU: 1|${given}|${incomplete}`;
+  let anyAiCalled = false;
+  const originalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("vision.googleapis.com")) return new Response(JSON.stringify({ responses: [{}] }), { status: 200 });
+    if (u.includes("alpha/decisions")) { anyAiCalled = true; return new Response("should not be called", { status: 502 }); }
+    if (u.includes("openrouter.ai")) {
+      const body = JSON.parse(opts.body);
+      const textBlock = body.messages[0].content.find((c) => c.type === "text");
+      if (textBlock.text.startsWith("你是一位細心的小學老師")) { anyAiCalled = true; return new Response("should not be called", { status: 502 }); }
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: ocrText } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200 });
+    }
+    throw new Error("unexpected fetch: " + u);
+  };
+  try {
+    const req = new Request("https://example.com/api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ images: [{ data: Buffer.from("PAGE0").toString("base64"), mediaType: "image/jpeg" }] }),
+    });
+    const env = { OPENROUTER_API_KEY: "test-key", GOOGLE_VISION_API_KEY: "test-vision-key", ASSETS: { fetch: async () => new Response("nf", { status: 404 }) } };
+    const res = await worker.default.fetch(req, env);
+    const json = await res.json();
+    assert.equal(json.results[0].correct, null);
+    assert.equal(json.results[0].status, "needs_review");
+    assert.equal(anyAiCalled, false, "an incomplete puzzle deliberately isn't sent to Jev/AI in this first pass");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

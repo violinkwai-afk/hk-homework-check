@@ -194,3 +194,44 @@ test("extractWordBank: no bank present returns null and leaves the text untouche
   assert.equal(wordBank, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 55 (2026-09-27): extractSudokuPuzzles pulls 4x4 Sudoku puzzles
+// out of the raw OCR text as a completely separate item shape (a 16-cell
+// grid, not a printedQuestion/studentAnswer pair) -- multiple puzzles
+// can appear on one page, so this returns an array. Real fixture shape
+// matches test/new-question-types.test.js's own SUDOKU_GIVEN/SOLUTION.
+test("extractSudokuPuzzles: parses a real 4x4 grid line and strips it from the item text", () => {
+  const given = "1,0,3,0,0,4,0,2,2,0,4,0,0,3,0,1";
+  const solution = "1,2,3,4,3,4,1,2,2,1,4,3,4,3,2,1";
+  const raw = `SUDOKU: 1|${given}|${solution}\n2=25÷5|5`;
+  const { puzzles, cleanedText } = mod.extractSudokuPuzzles(raw);
+  assert.equal(puzzles.length, 1);
+  assert.equal(puzzles[0].label, "1");
+  assert.equal(puzzles[0].givenGrid[1], null, "a printed 0 must become null (blank), not the string '0'");
+  assert.equal(puzzles[0].studentGrid[0], "1");
+  assert.doesNotMatch(cleanedText, /SUDOKU/);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 1, "the remaining normal item must still parse cleanly");
+});
+
+test("extractSudokuPuzzles: multiple puzzles on one page (real shape: 5 separate puzzles found on one worksheet page)", () => {
+  const raw = "SUDOKU: 1|1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0|1,2,3,4,3,4,1,2,2,1,4,3,4,3,2,1\nSUDOKU: 2|0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0|1,2,3,4,3,4,1,2,2,1,4,3,4,3,2,1";
+  const { puzzles } = mod.extractSudokuPuzzles(raw);
+  assert.equal(puzzles.length, 2);
+  assert.equal(puzzles[0].label, "1");
+  assert.equal(puzzles[1].label, "2");
+});
+
+test("extractSudokuPuzzles: no puzzle present returns an empty array and leaves the text untouched", () => {
+  const raw = "1=25÷5|5";
+  const { puzzles, cleanedText } = mod.extractSudokuPuzzles(raw);
+  assert.deepEqual(puzzles, []);
+  assert.equal(cleanedText, raw);
+});
+
+test("extractSudokuPuzzles: a malformed line (wrong cell count) is silently dropped, never thrown", () => {
+  const raw = "SUDOKU: 1|1,2,3|1,2,3,4,3,4,1,2,2,1,4,3,4,3,2,1";
+  assert.doesNotThrow(() => mod.extractSudokuPuzzles(raw));
+  const { puzzles } = mod.extractSudokuPuzzles(raw);
+  assert.deepEqual(puzzles, []);
+});
