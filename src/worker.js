@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-jev-raw-view" && request.method === "POST") {
-      return handleTestJevRawView(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1896,36 +1893,6 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
     return resolved;
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
-  }
-}
-
-// Temporary diagnostic route (2026-09-27, real user request): show
-// exactly what Jev was sent (the "state" + each item's real "questions"
-// instructions text) AND its raw response for EVERY item, including the
-// mid-confidence ones callJevPreCheck's own Map silently drops. Remove
-// after use.
-async function handleTestJevRawView(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { pendingItems } = await request.json();
-  if (!Array.isArray(pendingItems) || !pendingItems.length) return json({ error: "pendingItems_required" }, 400);
-  const state = "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。";
-  const questions = buildJevQuestions(pendingItems);
-  const body = { model: JEV_MODEL, state, questions };
-  try {
-    const res = await fetch("https://openrouter.ai/api/alpha/decisions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    return json({ ok: res.ok, status: res.status, sentState: state, sentQuestions: questions, rawResponse: data });
-  } catch (e) {
-    return json({ ok: false, error: String((e && e.message) || e) });
   }
 }
 
