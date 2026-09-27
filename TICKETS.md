@@ -302,7 +302,7 @@
 - 🔲 **第35項（提出咗，未做）：網頁版加一個「download已批改相片」按鈕，直接重用Telegram已經起好、已經測試過嘅`annotateImage` function，隨用戶需要生成一張整合埋✓/✗記號嘅完整圖檔。** 分析完Telegram(靜態、可save/轉發/印，但冇互動)vs網頁(即時互動疊圖，但淨係喺開緊個網頁先見到)兩種做法嘅優劣之後嘅建議——唔使二揀一，網頁保留現有互動做主要體驗，加呢個按鈕補埋「攞走保存」呢個Telegram先有嘅用處。等用戶話事幾時做。
 - 🔲 **第36項（提出咗，未做）：幫hk-homework-check加返CPU-ms用量追蹤(同而家已經幫road-closures-uk做緊嗰個一樣)。** 真實查證咗Cloudflare Workers Paid plan嘅計價:包3000萬CPU毫秒，超咗每100萬CPU-ms收$0.02美金——Photon(annotate/rotation/crop)呢啲圖像處理會真實食CPU時間，用戶多咗有可能拉近或者超出呢個包額。而家完全未追蹤過hk-homework-check呢個數字，答唔到實際用緊幾多、仲有幾多空間。等用戶話事幾時做。
 - ✅ **第37項完成：新增`test/ocr-parsing-regression.test.js`，用返4個真實(唔係作嘅)raw OCR文字案例——第31項嗰個換行bug原文、第26項修前嘅「冇pipe」原文(記錄低0條係啱嘅預期結果，唔係parser bug)、第26項修後嘅正確形狀、第29項嘅短文context保留形狀。已export`parseOcrLine`俾test直接call。355/355測試通過(新增4個)，零成本、幾毫秒跑完，已push。
-- 🔲 **第38項（提出咗，未做）：抽走`isWordAnswer`重複嘅邏輯，整做一個共用function。** Code review Standards軸搵到嘅真實重複code——`verifyNumberWordConversion`內部同`number_word_conversion`個handler嘅`detect()`,一模一樣嘅檢查寫咗兩次。等用戶話事幾時做。
+- ✅ **第38項完成：抽走咗`isWordAnswer`重複邏輯，整做共用function`looksLikeNumberWord`，兩處都改用返佢。** 純refactor，行為冇變。355/355測試通過，已push。
 - 🔲 **第39項（提出咗，未做）：修中文排除機制嘅漏洞——而家靠「印刷題目+學生答案有冇CJK字」判斷係咪中文題，如果OCR將中文題讀到完全冇中文字（例如亂碼/誤讀），呢條保護會被繞過，令中文題有機會送咗去Jev，而且冇任何log/警號話你知發生咗。** Challenge-all搵到嘅真實edge case。等用戶話事幾時做。
 - 🔲 **第40項（提出咗，未做）：監察Jev可用性——Jev用緊嘅係OpenRouter alpha階段endpoint，官方明言隨時會變。如果Jev突然大量解決唔到題目，而家冇任何警號，只會靜靜雞將更多負擔推去俾已知唔可靠嘅Qwen/DeepSeek覆核層（第9/19項）。** 建議加一個監察/警號機制。等用戶話事幾時做。
 - 🔲 **第41項（提出咗，未做）：診斷route嘅管理——今日一個session起咗拆咗8-9次臨時診斷route，全部靠人手記得刪，建議諗一個更結構性嘅做法（例如自動過期/統一嘅診斷入口）。** 等用戶話事幾時做。
