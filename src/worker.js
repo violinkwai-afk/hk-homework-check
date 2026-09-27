@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-ocr-context" && request.method === "POST") {
+      return handleTestOcrContext(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1673,6 +1676,13 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 **呢一段對所有「填空喺算式中間」嘅題型都適用，唔止除法**：如果張相印刷嘅題目本身有一個留空嘅位置（例如格仔、底線、方格），並且嗰個留空位置唔係喺條式/句子最尾，而係鑲喺中間（例如「54÷□=6」、「□+5=12」、「3×□=15」、「7□+15=82」呢種），printedQuestion一定要保留返個空格本身，用「□」呢個符號代表個空格喺邊——千祈唔可以將學生手寫填咗嘅數字直接代入去嗰個位，令成條式睇落好似原本已經印刷晒、冚唪唥填晒咁（例如見到學生填咗9，就千祈唔好將printedQuestion寫成「54÷9」，一定要保持「54÷□=6」）。學生實際手寫嘅嗰個數字，先至擺去"|"後面嘅答案度。呢個規矩比起淨係除法更加廣——凡係「印刷嘅式入面有一個空格，空格唔喺最尾」嘅題型，都要跟。例如：
 1=4+6|6+4=10,2=2+5|5+2=7,3=25÷5|5,5=54÷□=6|9,9=make two sums|6+9=15;5+8=13
 
+**一段短文/一封信入面有連續好多個編號嘅空格要填（例如一封信入面有8個標咗①②③...嘅底線位，或者一段短文入面有多個題號嘅空格）**：呢種題型有兩個常見錯處，一定要避免：
+(1) 千祈唔可以將printedQuestion淨係寫成個題號本身（例如淨係寫「1」）或者淨係將學生填嘅答案字照抄多一次當做printedQuestion——兩種做法都令人完全睇唔出原本嗰句話講緊咩、個空格前後文係咩，之後任何人（包括你自己）都冇辦法判斷個答案啱唔啱。printedQuestion一定要包含返個空格所在嗰句完整印刷句子（可以淨係嗰一句，唔使成段抄，但一定要包含緊接空格前後嘅印刷文字，等人淨係睇printedQuestion都知道問緊咩）。
+(2) 千祈唔可以將成段短文/成封信嘅所有空格冧埋做一條item，然之後將全部答案都報做「?」（當成完全冇答到）——如果每個空格實際都有唔同嘅手寫答案，一定要將每個空格拆做獨立一條item（跟返原本印刷嘅編號），每條item嘅studentAnswer要係嗰一個空格實際嘅手寫內容，唔可以因為佢哋喺同一段短文入面就當成一條題目、或者因為睇漏咗手寫字就報做未答。
+例如一封信入面："I have three sisters ① I don't have any brothers."，學生喺①度手寫咗"but"，就要回覆：
+1=I have three sisters ____ I don't have any brothers.|but
+（题号跟返印刷編號轉做普通數字，printedQuestion保留埋緊貼空格嘅完整句子，用"____"代表個空格位置，答案先至係學生真正手寫嘅字）
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Same {parsed, usage} / throw contract as callOpenRouterVisionModel, but
@@ -1893,6 +1903,47 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
     return resolved;
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
+  }
+}
+
+// Temporary diagnostic route (2026-09-27, Ticket 29): verify the new
+// multi-blank-passage context-preservation prompt fix, against BOTH
+// production (Qwen) and Gemini, since production uses Qwen and the bug
+// was independently confirmed on both models (different failure shapes).
+// Remove after use.
+async function handleTestOcrContext(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images, model } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const useModel = model || PRODUCTION_OCR_MODEL;
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const prompt = OCR_ONLY_PROMPT(1);
+  const body = {
+    model: useModel,
+    max_tokens: 2000,
+    temperature: 0,
+    provider: { ignore: ["Alibaba"] },
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+  };
+  const startedAt = Date.now();
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-ocr-context-test" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    const choice = data.choices && data.choices[0];
+    const rawText = (choice && choice.message && choice.message.content) || "";
+    const items = parseOcrLine(rawText);
+    return json({ ok: true, model: useModel, ms: Date.now() - startedAt, rawText, items, usage: data.usage || null });
+  } catch (e) {
+    return json({ ok: false, ms: Date.now() - startedAt, error: String((e && e.message) || e) });
   }
 }
 
