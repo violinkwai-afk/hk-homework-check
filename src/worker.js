@@ -155,109 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    // Ticket 41 (2026-09-27): every temporary diagnostic route lives
-    // under this one prefix + one shared token, so cleanup is a single
-    // grep for "/api/debug/" or DEBUG_TOKEN instead of hunting down
-    // scattered one-off paths by memory. TO DELETE after Ticket 42's
-    // Chinese-math-word-problem Jev test is done (tracked in TICKETS.md).
-    if (url.pathname === "/api/debug/full-flow" && request.method === "POST") {
-      return handleDebugFullFlow(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
-
-const DEBUG_TOKEN = "hw-debug-20260927";
-
-// Ticket 41 point 2: never re-implement production logic here -- every
-// step below calls the exact same function handleMark itself calls
-// (classifyAndVerify, callJevPreCheck, parseOcrLine, googleOcr), so this
-// route's results are guaranteed to match what real production would have
-// done, unlike the earlier v2/v3 test routes which drifted from
-// production behaviour by re-implementing pieces inline (Ticket 27
-// follow-up incident, see TICKETS.md).
-async function handleDebugFullFlow(request, env) {
-  const token = request.headers.get("x-debug-token");
-  if (token !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  const visionKey = !env.GOOGLE_VISION_API_KEY ? null
-    : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
-    : await env.GOOGLE_VISION_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
-
-  const perPhoto = [];
-  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
-    const steps = [];
-    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
-    const prompt = OCR_ONLY_PROMPT(1);
-    const ocrBody = {
-      model: OCR_TEXT_MODEL,
-      max_tokens: 2000,
-      temperature: 0,
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
-    };
-    const tParallelStart = Date.now();
-    const ocrPromise = fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-debug-fullflow" },
-      body: JSON.stringify(ocrBody),
-    }).then((r) => r.json()).then((data) => ({ ok: true, data })).catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
-    const visionPromise = visionKey
-      ? googleOcr(images[pageIdx].data, visionKey).then((r) => ({ ok: true, data: r })).catch((e) => ({ ok: false, error: String((e && e.message) || e) }))
-      : Promise.resolve({ ok: false, error: "no_vision_key" });
-    const [ocrOutcome, visionOutcome] = await Promise.all([ocrPromise, visionPromise]);
-    const stageMs = Date.now() - tParallelStart;
-
-    const visionText = visionOutcome.ok && visionOutcome.data ? visionOutcome.data.words.map((w) => w.text).join(" ") : null;
-    steps.push({ tool: "Vision (Google Cloud Vision, DOCUMENT_TEXT_DETECTION)", ms: stageMs, cost: null, error: visionOutcome.ok ? undefined : visionOutcome.error });
-
-    let items = [];
-    if (!ocrOutcome.ok) {
-      steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: stageMs, error: ocrOutcome.error });
-      perPhoto.push({ page: pageIdx, steps, visionText, items: [] });
-      continue;
-    }
-    const choice = ocrOutcome.data.choices && ocrOutcome.data.choices[0];
-    const rawText = (choice && choice.message && choice.message.content) || "";
-    items = parseOcrLine(rawText);
-    steps.push({ tool: `OCR (${OCR_TEXT_MODEL})`, ms: stageMs, cost: ocrOutcome.data.usage ? ocrOutcome.data.usage.cost : null });
-
-    const tCodeStart = Date.now();
-    const itemResults = items.map((item) => {
-      const verdict = classifyAndVerify(item);
-      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, subject: verdict.subject, codeCorrect: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code", jevSent: null, jevReply: null };
-    });
-    steps.push({ tool: "code (classifyAndVerify)", ms: Date.now() - tCodeStart, cost: 0 });
-
-    // Same real production rule as handleMark (Ticket 27): Chinese-subject
-    // items never reach Jev at all.
-    const pendingForJev = [];
-    itemResults.forEach((r, i) => {
-      if (r.codeCorrect === null && r.subject !== "chinese") pendingForJev.push({ resultIndex: i, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer, subject: r.subject });
-    });
-    if (pendingForJev.length) {
-      const tJevStart = Date.now();
-      const jevResolved = await callJevPreCheck(pendingForJev, openrouterKey);
-      pendingForJev.forEach((pending) => {
-        const idx = pending.resultIndex;
-        itemResults[idx].jevSent = { printedQuestion: pending.printedQuestion, studentAnswer: pending.studentAnswer };
-        const verdict = jevResolved.get(idx);
-        itemResults[idx].jevReply = verdict || null;
-        if (verdict) { itemResults[idx].codeCorrect = verdict.correct; itemResults[idx].resolvedBy = "jev"; }
-      });
-      steps.push({ tool: `Jev (${JEV_MODEL})`, ms: Date.now() - tJevStart, itemsAsked: pendingForJev.length, callStatus: jevResolved.callStatus || "unknown" });
-    }
-    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
-
-    perPhoto.push({ page: pageIdx, itemCount: items.length, steps, visionText, items: itemResults });
-  }
-  return json({ ok: true, perPhoto });
-}
 
 async function handleTestVisionOcrLatency(request, env) {
   const visionKey = !env.GOOGLE_VISION_API_KEY ? null
@@ -5080,17 +4980,23 @@ async function handleMark(request, env) {
   // existing AI-fallback usage, per the same "always know cost after a
   // change" standing rule.
   //
-  // Ticket 27 follow-up, same day: a real 7-photo test found Jev
+  // Ticket 44 (2026-09-27, explicit user decision): the Chinese-subject
+  // exclusion below was REMOVED on purpose. History: Ticket 27 found Jev
   // confidently marking a genuinely correct CHINESE answer (親愛的表姐 ->
-  // 表弟) as wrong -- consistent with Jev's own documented caveat
-  // ("English is the best-supported language; evaluate CJK workloads
-  // separately"). Chinese-subject items are therefore excluded from the
-  // Jev pre-check entirely (never sent to it at all) until CJK accuracy
-  // is separately validated with real data -- they fall straight through
-  // to the existing image-based fallback below, same as before Jev
-  // existed. English/math/uncertain-subject items are unaffected.
+  // 表弟) as wrong, consistent with Jev's own documented caveat ("English
+  // is the best-supported language; evaluate CJK workloads separately"),
+  // so Chinese items were excluded entirely and always fell straight to
+  // the image-based fallback below. User's explicit instruction: let Jev
+  // attempt Chinese items too for now (a wrong Jev verdict on Chinese
+  // still isn't worse than what Chinese items get today -- the AI-image
+  // fallback is ALSO not verified accurate on Chinese, it was just the
+  // pre-existing default), and separately evaluate/add a Chinese-
+  // specialized model later (tracked by the existing weekly Ticket 34
+  // model-watch cron) rather than blocking Jev from ever trying. If a
+  // future real test finds Jev's Chinese verdicts are unreliable again,
+  // re-add `.filter((it) => it.subject !== "chinese")` here.
   const allPendingFlat = [];
-  pendingForAiByPage.forEach((items) => allPendingFlat.push(...items.filter((it) => it.subject !== "chinese")));
+  pendingForAiByPage.forEach((items) => allPendingFlat.push(...items));
   let jevUsageLog = null;
   if (openrouterKey && allPendingFlat.length) {
     const tJev = Date.now();

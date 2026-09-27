@@ -313,9 +313,10 @@
   4. Push前grep一次：`git push`之前用`grep -n "test-\|DEBUG_TOKEN"` src/worker.js 確認冇殘留。
   呢個純粹係做法上嘅紀律，未涉及即時code改動；如果想將第1點（統一dispatch前綴）做成一個可重用嘅helper function，可以而家開始做，等用戶話事。
 
-- 🔲 **第42項（進行中）：測試jev解中文數學題嘅能力。** 用戶想知jev係咪識答用中文寫嘅數學題。已加返`/api/debug/full-flow`（跟第41項新紀律：統一路徑+統一token`DEBUG_TOKEN`+直接call返production嘅`classifyAndVerify`/`callJevPreCheck`/`parseOcrLine`，冇重新抄一份邏輯）。
-  **待刪：`/api/debug/full-flow`（用完第42項呢個test就要刪走）。**
+- 🔲 **第42項（一round做完，暫緩）：測試jev解中文數學題嘅能力。** 用戶想知jev係咪識答用中文寫嘅數學題。第一round測試（3張相：估算練習+容量練習）結果：22條item入面得4條真係問到jev，全部答唔出（唔夠信心），冇一條係真正嘅敘事式中文應用題。意外發現咗第43項個bug。`/api/debug/full-flow`已經完成任務，刪走咗（2026-09-27）。想繼續要真嘅敘事式中文應用題相。
 
-- 🔲 **第43項（新發現，未做）：除法帶餘數嘅答案（例如「14…3」「11…5」）被code判做錯，但其實學生答啱。** 第42項測試意外發現（相1第1、12條）：87÷6學生寫"14…3"（14餘3，啱嘅），code卻話correctAnswer係"14.5"（小數形式），判做錯；71÷6學生寫"11…5"（11餘5，啱嘅），同樣被判錯。懷疑`verifyMath`嗰個「除法帶餘數」檢查（Ticket 27加嘅）冇cover到呢種純粹"A÷B="（無等號右手邊、答案直接寫「商…餘數」格式）嘅shape，同Ticket 37個regression fixture入面嗰種"A÷B=Q...R"格式（等號右邊已經有嘢）唔同。要開code查證。
+- ✅ **第43項完成：除法帶餘數嘅答案（例如「14…3」「11…5」）被code判做錯，但其實學生答啱——已修好。** 根因confirm咗：`verifyMath`嘅Case 2（學生答案本身冇「=」，好似87÷6→"14…3"呢種）一直冇做Ticket 27嗰個除法餘數check（嗰個check淨係喺Case 1、即係學生自己寫埋條完整算式好似"30÷4=7...2"先會做），所以跌落一般路徑，`parseNumericAnswer("14…3")`會靜靜雞截斷做14，同`evalArithmetic("87÷6")`=14.5一比較就唔啱。已經抽咗個共用function`verifyDivisionRemainder`，Case 1同Case 2都call返同一個，唔使再各自維護一份。357/357測試通過，仲live re-verify咗（用真正production嘅`classifyAndVerify`，同一張真相），確認"87÷6"+"14…3"而家判「啱」。
+
+- ✅ **第44項完成：中文題目而家都會送去jev睇，唔再隔開。** 用戶明確指示：「Pls let jev work on everything in chinese from now on- we can add another ai that is good in chinese later.」原因記錄：Ticket 27發現jev試過將啱嘅中文答案（親愛的表姐→表弟）判做錯，先加咗個排除。用戶決定：而家先俾jev試，之後（第34項每週AI巡查）搵到啱嘅中文專用AI先再算。已刪走`allPendingFlat`嗰個`.filter(subject !== "chinese")`，code comment記低咗成個歷史背景，方便日後想返轉頭。357/357測試通過。
 
 
