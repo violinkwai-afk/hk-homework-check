@@ -1841,3 +1841,46 @@ test("classifyAndVerify: price_table_lookup does not fire with no priceTable att
   assert.notEqual(v.handler, "price_table_lookup");
   assert.equal(v.correct, true); // still resolved correctly by math_equation as before
 });
+
+// Ticket 53 (2026-09-27): literal_keyword_mc and select_from_passage now
+// reachable via the real dispatcher, using a passageText extracted from
+// a new OCR_ONLY_PROMPT PASSAGE line and attached to each of that page's
+// items. MC options need no new field -- parseMcOptions reads them
+// straight from the item's own printedQuestion.
+test("classifyAndVerify: literal_keyword_mc now reachable via the real dispatcher (real 'Fun in the Sun' example)", () => {
+  const passage = "The rain has stopped The sun is out Let's have some fun In the sun We start to pack Sweets, buns and cakes For our picnic In the park The soda and tea For you and me It can be hot In the sun Pour out the drinks Lay out the food Eeek! There's a bug In my mug";
+  const printed = "They are packing (___). A. bun and cakes B. sweets and buns C. cakes and sweet D. sweets, buns and cakes";
+  const v = mod.classifyAndVerify({ label: "4", printedQuestion: printed, studentAnswer: "D", passageText: passage });
+  assert.equal(v.handler, "literal_keyword_mc");
+  assert.equal(v.correct, true);
+});
+
+test("classifyAndVerify: literal_keyword_mc catches a wrong MC letter", () => {
+  const passage = "The rain has stopped The sun is out Let's have some fun In the sun We start to pack Sweets, buns and cakes For our picnic In the park The soda and tea For you and me It can be hot In the sun Pour out the drinks Lay out the food Eeek! There's a bug In my mug";
+  const printed = "They are packing (___). A. bun and cakes B. sweets and buns C. cakes and sweet D. sweets, buns and cakes";
+  const v = mod.classifyAndVerify({ label: "4", printedQuestion: printed, studentAnswer: "A", passageText: passage });
+  assert.equal(v.handler, "literal_keyword_mc");
+  assert.equal(v.correct, false);
+  assert.equal(v.correctAnswer, "D");
+});
+
+test("classifyAndVerify: select_from_passage now reachable via the real dispatcher (real Chinese example, answer genuinely in the passage)", () => {
+  const passage = "比賽後，我和媽媽高興地討論剛才比賽的情況。";
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "比賽後，我和媽媽高興地____剛才比賽的情況。", studentAnswer: "討論", passageText: passage });
+  assert.equal(v.handler, "select_from_passage");
+  assert.equal(v.correct, null, "found in the passage -- format check only, never confirms correctness (see the function's own doc)");
+});
+
+test("classifyAndVerify: select_from_passage catches a fabricated word not in the passage at all", () => {
+  const passage = "比賽後，我和媽媽高興地討論剛才比賽的情況。";
+  const v = mod.classifyAndVerify({ label: "1", printedQuestion: "比賽後，我和媽媽高興地____剛才比賽的情況。", studentAnswer: "快樂", passageText: passage });
+  assert.equal(v.handler, "select_from_passage");
+  assert.equal(v.correct, false);
+});
+
+test("classifyAndVerify: select_from_passage does not misfire on an unrelated item that happens to share a page with a passage", () => {
+  const passage = "比賽後，我和媽媽高興地討論剛才比賽的情況。";
+  const v = mod.classifyAndVerify({ label: "9", printedQuestion: "25÷5", studentAnswer: "5", passageText: passage });
+  assert.notEqual(v.handler, "select_from_passage");
+  assert.equal(v.correct, true, "still resolved correctly by math_equation, unaffected by the page-level passage context");
+});

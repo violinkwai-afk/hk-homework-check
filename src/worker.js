@@ -1758,6 +1758,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁有印刷咗一張「價目表」（物品名稱配對價錢,例如「機械人 $48」「跑車 $89」「洋娃娃 $25」）**，喺回覆最開始加一行「PRICE_TABLE: 名稱1=價錢1;名稱2=價錢2;...」，列晒成張表嘅每一項（名稱同價錢之間用"="，唔同項之間用";"分隔），然之後先跟正常格式列每一條題目。如果冇呢類價目表就完全唔使加呢行。
 
+**如果呢頁係一篇閱讀理解，有一段原文（文章/對話/詩歌），學生要根據原文答題（例如喺原文入面揀返啱嘅字填空,或者揀MC選項）**，喺回覆最開始加一行「PASSAGE: <原文全文>」，將成段原文文字全部放喺呢一行（原文入面如果本身有換行,轉做空格,確保成段原文淨係一行）。如果冇呢類原文就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -1778,6 +1780,27 @@ function extractPriceTable(text) {
     if (name && Number.isFinite(price)) table[name] = price;
   }
   return { priceTable: Object.keys(table).length ? table : null, cleanedText };
+}
+
+// Ticket 53 (2026-09-27): extracts an optional printed reading passage
+// (see OCR_ONLY_PROMPT's own instruction above) so verifySelectFromPassage
+// and verifyLiteralKeywordMC -- both written and tested 2026-09-25, never
+// reachable before now -- can finally be registered. Same marker-line
+// pattern as extractPriceTable/extractContinuationMarkers.
+function extractPassageText(text) {
+  const m = /^PASSAGE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PASSAGE:.*$/gm, "");
+  return { passageText: m ? m[1].trim() : null, cleanedText };
+}
+
+// Shared by literal_keyword_mc (and any future MC-options consumer):
+// pulls "A. text B. text C. text..." style MC options straight out of an
+// item's own printedQuestion -- no new OCR field needed, since the
+// printed options are already part of the normal item text. Same regex
+// shape already proven by the existing parity_mc/computation_mc
+// detectors, generalised to arbitrary (non-numeric) option text.
+function parseMcOptions(printed) {
+  return [...String(printed || "").matchAll(/([A-D])[.．]\s*([^A-D]+?)(?=\s*[A-D][.．]|$)/g)].map((m) => ({ letter: m[1], text: m[2].trim() }));
 }
 
 // Extracts the two page-continuation markers (see OCR_ONLY_PROMPT's own
@@ -1879,12 +1902,13 @@ async function callQwenOcrText(images, openrouterKey) {
   }
   const text = (choice.message && choice.message.content) || "";
   const { continuesFromPrevious, continuesToNext, cleanedText: cleanedText1 } = extractContinuationMarkers(text);
-  const { priceTable, cleanedText } = extractPriceTable(cleanedText1);
+  const { priceTable, cleanedText: cleanedText2 } = extractPriceTable(cleanedText1);
+  const { passageText, cleanedText } = extractPassageText(cleanedText2);
   const items = parseOcrLine(cleanedText);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -4663,6 +4687,44 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyGrammarCloze(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 53 (2026-09-27): verifyLiteralKeywordMC was written and
+    // tested 2026-09-25, never registered -- needed a printed reading
+    // passage the OCR step didn't extract separately until now (see
+    // OCR_ONLY_PROMPT's new PASSAGE instruction). The MC options
+    // themselves need no new field -- parseMcOptions pulls them straight
+    // out of the item's own printedQuestion, same as parity_mc/
+    // computation_mc already do inline. Registered near the end (after
+    // every more specific handler) so a passage-bearing page's OTHER,
+    // unrelated MC-shaped items (already claimed above) are never at
+    // risk of this broader catch-all instead.
+    name: "literal_keyword_mc",
+    detect: (item) => {
+      if (!item.passageText) return false;
+      return parseMcOptions(item.printedQuestion).length >= 2;
+    },
+    verify: (item) => verifyLiteralKeywordMC(item.passageText, parseMcOptions(item.printedQuestion), item.studentAnswer),
+  },
+  {
+    // Ticket 53 (2026-09-27): verifySelectFromPassage was written and
+    // tested 2026-09-25, never registered, same PASSAGE field as above.
+    // Can only ever return false/null, never true (see its own comment)
+    // -- narrowed to genuine cloze-blank shapes (a blank in the printed
+    // text, a short word/phrase answer) so it never reaches for an
+    // unrelated item that just happens to share a page with a passage.
+    // Registered LAST of the blank-fill handlers so grammar_cloze/
+    // conjunction_fill/number_word_conversion (all more specific about
+    // which real answer family they expect) keep first claim on any
+    // shape they'd otherwise also match.
+    name: "select_from_passage",
+    detect: (item) => {
+      if (!item.passageText) return false;
+      const answer = String(item.studentAnswer || "").trim();
+      if (!answer || answer.length > 20) return false;
+      return /_{2,}/.test(String(item.printedQuestion || ""));
+    },
+    verify: (item) => verifySelectFromPassage(item.studentAnswer, item.passageText),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -5040,7 +5102,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -5067,6 +5129,10 @@ async function handleMark(request, env) {
     // approach as every other per-item field (subject, handler, etc.).
     if (qwenOutcome.priceTable) {
       qwenOutcome.items.forEach((item) => { item.priceTable = qwenOutcome.priceTable; });
+    }
+    // Ticket 53: same page-level shared-context pattern as priceTable above.
+    if (qwenOutcome.passageText) {
+      qwenOutcome.items.forEach((item) => { item.passageText = qwenOutcome.passageText; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext };
   });
@@ -5744,6 +5810,8 @@ export {
   CPU_GUARD_DAILY_THRESHOLD_MS,
   extractContinuationMarkers,
   extractPriceTable,
+  extractPassageText,
+  parseMcOptions,
   crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,

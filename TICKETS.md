@@ -352,4 +352,9 @@
   **真實驗證**：用返之前試過嘅相（估算練習，冇印刷任何價目表）直接call真正production /api/mark——結果同之前一致（1、2、3、5題全部仍然code判斷啱），冇因為呢個prompt改動整壞正常讀字，冇誤判任何一條item做price_table_lookup。
   **未驗證**：手上冇一張真係印刷咗價目表嘅相，所以Gemini真係遇到價目表嗰陣識唔識跟返呢個新格式,仲未實測過。
 
+- 🟨 **第53項完成code部分（未做真銀驗證）：接埋`literal_keyword_mc`（閱讀理解逐字對照MC）同`select_from_passage`（喺原文揀字填空）。** 兩個都要「原文段落」呢份新資料，加咗一行新指示：如果係閱讀理解就喺回覆最開始加「PASSAGE: <原文>」，新function`extractPassageText`負責攞返嚟。MC選項本身唔使新欄位——寫咗個共用嘅`parseMcOptions`，直接由printedQuestion文字度攞返A/B/C/D選項（同parity_mc/computation_mc做法一致）。兩個handler都擺喺陣列好後面，等所有更精準嘅handler優先攞。
+  select_from_passage只可以判「錯」或者「唔知」，永遠唔會判「啱」（佢自己個function設計本身就係咁——揾到個字喺原文都唔代表填得啱位），已加限制（要有blank記號+短答案）避免誤觸其他唔相關嘅題目。
+  390/390測試通過，已push、已deploy咗code，**但跟返啱啱先犯過嘅教訓，未做真銀live驗證**——要做嘅話（用返之前嘅相確認冇regression，大約$0.001）要問你先做。
+  **仲欠2個未做**：`word_bank_once_each`（詞語庫填空）因為要「成頁所有答案一齊睇」（唔係逐條題判斷，係一次過check晒成頁），同而家個per-item判斷架構唔夾，要開新一種「頁面層面」嘅判斷模組先做到，工程量大好多；`sudoku_4x4`要成個4x4格仔（16格）做一份structured data，同而家「一題一個printedQuestion+studentAnswer」嘅資料形狀完全唔同，唔係加個欄位咁簡單，要另外諗個做法。呢兩個建議開返獨立ticket，唔好同今次一齊匆忙做。
+
 

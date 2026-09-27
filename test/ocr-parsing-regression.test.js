@@ -147,3 +147,31 @@ test("extractPriceTable: no table present returns null and leaves the text untou
   assert.equal(priceTable, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 53 (2026-09-27): extractPassageText pulls an optional printed
+// reading passage out of the raw OCR text (same marker-line pattern as
+// extractPriceTable) so verifySelectFromPassage and verifyLiteralKeywordMC
+// can finally be reached in production.
+test("extractPassageText: parses a real passage line and strips it from the item text", () => {
+  const raw = "PASSAGE: 比賽後，我和媽媽高興地討論剛才比賽的情況。\n1=比賽後，我和媽媽高興地____剛才比賽的情況。|討論";
+  const { passageText, cleanedText } = mod.extractPassageText(raw);
+  assert.equal(passageText, "比賽後，我和媽媽高興地討論剛才比賽的情況。");
+  assert.doesNotMatch(cleanedText, /PASSAGE/);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].studentAnswer, "討論");
+});
+
+test("extractPassageText: no passage present returns null and leaves the text untouched", () => {
+  const raw = "1=25÷5|5";
+  const { passageText, cleanedText } = mod.extractPassageText(raw);
+  assert.equal(passageText, null);
+  assert.equal(cleanedText, raw);
+});
+
+test("parseMcOptions: pulls A/B/C/D options straight out of a real printedQuestion string", () => {
+  const printed = "They are packing (___). A. bun and cakes B. sweets and buns C. cakes and sweet D. sweets, buns and cakes";
+  const options = mod.parseMcOptions(printed);
+  assert.equal(options.length, 4);
+  assert.deepEqual(options[3], { letter: "D", text: "sweets, buns and cakes" });
+});
