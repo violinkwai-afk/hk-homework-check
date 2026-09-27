@@ -291,6 +291,11 @@
   - **真實驗證（兩輪）**：用返已攞到嘅相3原始文字直接驗證，3條題正確拆晒（之前得1條）；再用真銀重跑成套7張相，全部7張結構都啱返（相3=3條、相5=15條、相6=8條、相A=3條、相B=6條），同修改前嘅混亂結果對比，質嘅改善。351/351測試通過，已部署。
   - **真實成本+速度（呢次測試逐步記錄，包含每個工具、每步用幾耐幾錢）**：7張相共$0.006702美金，19.8秒。OCR(Gemini)每張2000-5000毫秒唔等，$0.0008-0.001一張；Jev每張用得幾百毫秒、$0.00003-0.0001唔等；code判斷幾乎零時間零成本。
   - **附帶執漏**：過程入面兩次因為用`git add -A`唔小心夾埋咗唔想要嘅檔案（wrangler帳戶快取、debug暫存檔），都即刻搵到剷走，已經記低做HARD RULE防止再犯。
-- 🔲 **第32項（提出咗，未做）：網頁版統一改用`/api/mark`嘅pipeline，取代而家獨立、未受惠於今日全部修正嘅`/api/check`。** 直接查證確認：網頁上傳相片而家行緊`/api/check`（舊做法，Qwen/DeepSeek/Sonnet直接判斷啱錯），同`/api/mark`（Gemini OCR→code→Jev，今日第25-31項全部修正都喺呢條）係完全分開嘅pipeline——今日所有修正對網頁版一個都冇影響。呼應第22項之前已知嘅「統一backend」方向。等用戶話事幾時做。
+- 🟨 **第32項進行中：網頁版主要提交流程已經由`/api/check`轉咗做`/api/mark`。**
+  - 查證確認response格式本身已經夾得晒(`results[].bbox/correct/correctAnswer/page/question/studentAnswer/subject/verifiedBy`、`pageRotations`)——因為`/api/mark`本身就係跟Telegram嘅annotateImage功能設計，啱啱好同網頁版`fillPageResult`要求嘅format一樣，唔使改render code。
+  - **已知、冇隱藏嘅真實代價**：`pageIndex`/`priorPagesContext`/`requestId`/`deviceId`/`rememberHandwriting`呢幾個欄位`/api/mark`完全唔識、會靜靜雞忽略——即係多頁題目之間嘅context唔會再傳落去、「記住呢種筆跡」功能會停用；`requestId`嘅去重機制轉用返`/api/mark`自己個content-hash去重(第16項)，普通情況下作用類似但唔完全一樣。
+  - **未驗證嘅部分**：而家嘅phase 2 zoom-recheck流程(`/api/verify`，由`needsVerify`觸發)保持原封不動冇改——`/api/mark`都會回返`needsVerify`(俾自己個server-side Jev/AI覆核都判斷唔到嘅題目)，理論上呢個流程仲會觸發，但未end-to-end驗證過同`/api/mark`嘅item格式夾唔夾得埋，明確標低未驗證，唔係假設冇事。
+  - `restitchSplitPages`(跨頁題目合併)刻意保持用返`/api/check`——`/api/mark`完全冇對應嘅跨頁聯合判斷能力，換咗會靜雞雞令呢個功能完全失效。
+  - 351/351後端測試通過(網頁改動冇automated test覆蓋)。等緊用戶自己上傳相片做真實端對端測試。
 
 
