@@ -1840,9 +1840,10 @@ async function handleTestRealCallQwenOcrText(request, env) {
         body: JSON.stringify(body),
       });
       const data2 = await res2.json();
-      rawText = data2.choices && data2.choices[0] && data2.choices[0].message && data2.choices[0].message.content;
+      const choice2 = data2.choices && data2.choices[0];
+      rawText = (choice2 && choice2.message && choice2.message.content) || `NO_CONTENT: status=${res2.status} finish_reason=${choice2 && choice2.finish_reason} body=${JSON.stringify(data2).slice(0, 800)}`;
     } catch (e2) { rawText = `raw_fetch_failed: ${String(e2)}`; }
-    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e), rawText });
+    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e), rawText: rawText || "EMPTY_STRING_OR_FALSY" });
   }
 }
 
