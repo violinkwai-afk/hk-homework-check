@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-gemini-ocr" && request.method === "POST") {
+      return handleTestGeminiOcr(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1668,8 +1671,10 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。「|」呢個符號每一題一定要有、一定唔可以漏——尤其係長除法（例如5)40呢種直式）或者一題有幾個sub-answer嘅情況，都要跟返「題號=印刷題目|答案」呢個format，唔好淨係將啲數字答案接住上一題冧埋一齊列。題號一定要用普通阿拉伯數字或者張相原本印刷嘅英文/中文字母（例如1、2、3或者A、B、三、四），絕對唔可以用①②③呢種圈住嘅數字符號做題號，就算張相本身印刷咗圈裝數字，都要轉返做普通數字嚟做題號。
 
-特別注意：如果印刷題目本身已經係一條計數式（例如「25÷5」呢種除數式），千祈唔好將個算式同答案一齊寫成「25÷5=5」咁樣再擺喺"="後面——嗰個"="會同題號後面嗰個分隔用嘅"="撞埋，令成句都冇晒必需嘅「|」符號。正確做法係將印刷嘅計數式（唔包括答案，例如「25÷5」）放喺"="同"|"之間，然之後"|"後面先至擺學生寫嘅答案（例如「5」）——即係「3=25÷5|5」，唔係「3=25÷5=5」。就算張相仲有直式（例如5)25呢種豎排除法），「|」後面都淨係擺學生最終寫低嘅答案數字（例如「5」）就夠，唔好將直式入面重複出現嘅數字（例如25、25）都加埋做額外sub-answer，會令批改程式誤判。例如：
-1=4+6|6+4=10,2=2+5|5+2=7,3=25÷5|5,9=make two sums|6+9=15;5+8=13
+特別注意：如果印刷題目本身已經係一條計數式（例如「25÷5」呢種除數式），千祈唔好將個算式同答案一齊寫成「25÷5=5」咁樣再擺喺"="後面——嗰個"="會同題號後面嗰個分隔用嘅"="撞埋，令成句都冇晒必需嘅「|」符號。正確做法係將印刷嘅計數式（唔包括答案，例如「25÷5」）放喺"="同"|"之間，然之後"|"後面先至擺學生寫嘅答案（例如「5」）——即係「3=25÷5|5」，唔係「3=25÷5=5」。就算張相仲有直式（例如5)25呢種豎排除法），「|」後面都淨係擺學生最終寫低嘅答案數字（例如「5」）就夠，唔好將直式入面重複出現嘅數字（例如25、25）都加埋做額外sub-answer，會令批改程式誤判。
+
+**呢一段對所有「填空喺算式中間」嘅題型都適用，唔止除法**：如果張相印刷嘅題目本身有一個留空嘅位置（例如格仔、底線、方格），並且嗰個留空位置唔係喺條式/句子最尾，而係鑲喺中間（例如「54÷□=6」、「□+5=12」、「3×□=15」、「7□+15=82」呢種），printedQuestion一定要保留返個空格本身，用「□」呢個符號代表個空格喺邊——千祈唔可以將學生手寫填咗嘅數字直接代入去嗰個位，令成條式睇落好似原本已經印刷晒、冚唪唥填晒咁（例如見到學生填咗9，就千祈唔好將printedQuestion寫成「54÷9」，一定要保持「54÷□=6」）。學生實際手寫嘅嗰個數字，先至擺去"|"後面嘅答案度。呢個規矩比起淨係除法更加廣——凡係「印刷嘅式入面有一個空格，空格唔喺最尾」嘅題型，都要跟。例如：
+1=4+6|6+4=10,2=2+5|5+2=7,3=25÷5|5,5=54÷□=6|9,9=make two sums|6+9=15;5+8=13
 
 唔好加任何其他文字、判斷、JSON。`;
 
@@ -1807,6 +1812,46 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
+  }
+}
+
+// Temporary diagnostic route (2026-09-27, Ticket 27): re-verifying the
+// general blank-preservation prompt fix (□ must be preserved for ANY
+// embedded blank, not just division) with Gemini specifically, WITHOUT
+// touching OCR_TEXT_MODEL (still Qwen in production) -- calls Gemini
+// directly via callQwenOcrText's exact logic. Remove after use.
+async function handleTestGeminiOcr(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
+  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
+  const prompt = OCR_ONLY_PROMPT(downscaled.length);
+  const body = {
+    model: "google/gemini-3.1-flash-lite",
+    max_tokens: 2000,
+    temperature: 0,
+    provider: { ignore: ["Alibaba"] },
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
+  };
+  const startedAt = Date.now();
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-blank-fix-test" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    const choice = data.choices && data.choices[0];
+    const rawText = (choice && choice.message && choice.message.content) || "";
+    const items = parseOcrLine(rawText);
+    return json({ ok: true, ms: Date.now() - startedAt, rawText, items, usage: data.usage || null });
+  } catch (e) {
+    return json({ ok: false, ms: Date.now() - startedAt, error: String((e && e.message) || e) });
   }
 }
 

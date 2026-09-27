@@ -261,3 +261,10 @@
   - **準確度（6張逐張核實）**：Gemini喺4張（中文選詞填充、英文and/but/or連接句、英文代名詞、中文書信格式）明顯讀得準過Qwen；Qwen喺處理「詞語庫/多空信件/長文章格式」題目時反覆出現結構性錯亂——將詞語庫選項當新題目、漏讀成句手寫答案（8個空全答"?"但學生實際全部填咗）、答案字串入面違規加入"|"符號、多讀/少讀項目數量。Qwen淨係喺數學直式除法（第2張）完勝，因為Gemini嗰次完全冇讀到嘢（0條item）。數學應用題（第3張）兩者數字都啱，Gemini內容更完整（有讀齊印刷全文+完整答句）。
   - **穩定性（兩個模型各撞板一次）**：Qwen第1張第一次call撞25秒timeout，重試先成功；Gemini第2張靜靜雞回覆完全空白（0 items，冇報錯但收咗錢）——呢個空白失敗模式，若真係換入production，理論上會觸發`callQwenOcrText`現有嘅「0 items = 失敗」保護（同而家Qwen共用嗰個guard），但呢次診斷route冇行嗰個guard，未喺production環境實測過，只係code邏輯推斷。
   **結論**：呢6張用戶親自揀嘅樣本入面，Gemini整體表現好過Qwen（4勝1負1打和），比上次10張測試更正面，但兩個模型分別撞過一次真嘅失敗（timeout/空白），都未到100%穩。建議下一步：再測多10-20張，專門盯緊Gemini會唔會重複撞到「靜靜雞空白」呢個問題，先可以放心考慮換baseline。
+- ✅ **第26項：用戶決定換Gemini做/api/mark嘅OCR模型 → 真實部署 → 撞板 → 已root cause → 已rollback返Qwen。完整過程：**
+  1. 將`callQwenOcrText`用嘅model獨立分做`OCR_TEXT_MODEL`（Gemini），同`PRODUCTION_OCR_MODEL`（Qwen，繼續俾`callQwen`/Ticket13 AI覆核用）分開，冇一齊換，因為判斷啱錯呢個task今次測試從來冇測試過Gemini。
+  2. 部署後即刻用真實production `/api/mark`測試，撞到502（完全讀唔到嘢）。用診斷route攞到raw text先發現：Gemini讀緊「25÷5」呢種純算式題嗰陣,完全冇打「|」呢個必需符號（唔係圈裝數字嘅問題，呢個係第一次診斷嘅誤判，已更正）。加咗返一個bare算式嘅prompt例子修好。
+  3. 修好之後再測，又發現新問題：prompt入面叫佢加返直式嘅重複數字做sub-answer（例如"4;3)12/12"），令批改程式誤判12÷3=4呢題做錯。移除咗嗰個指示。
+  4. 再測，發現最嚴重嘅一個：喺「A÷□=C」呢種「空格係除數」嘅題型（例如「54÷□=6」，喺HK小學數學好常見），Gemini會將印刷題目同學生手寫答案撈埋、掉轉——印刷題目讀成「54÷9」（將學生寫嘅9塞咗入去），學生答案反而讀成「6」（其實嗰個係印刷嘅商數）。呢個令批改程式將學生本身答啱嘅嘢（例如第7題學生寫"6"，42÷6=7係啱嘅）判做錯（correctAnswer顯示做7，即係程式諗錯咗邊個先係啱嘅答案）。同已知嘅「printed/answer swap」係同一個failure class，但呢次係喺Gemini度、喺呢個特定題型度確認。
+  5. **即刻rollback返Qwen**（`OCR_TEXT_MODEL = PRODUCTION_OCR_MODEL`），真實再驗證過：同一張相,第5、6、7題（全部都係「A÷□=C」格式）而家全部batch返做`correct:true`，同真相脗合。
+  **結論**：Gemini喺純OCR-only測試(Ticket23/24/25)表現靠近甚至優於Qwen，但一旦接落真正嘅批改判斷邏輯，就暴露咗一個之前純OCR測試冇撞到嘅結構性bug——呢個正正證明咗「淨係做OCR-only比較唔夠，一定要跑埋真正production判斷邏輯先可以話個switch安全」。**呢次rollback證明咗architecture本身設計得好**：因為OCR model獨立成一個constant，rollback只係改一行code、重新deploy，唔使動judge model嗰層，全程冇影響過Ticket13嘅AI覆核安全網。要再考慮換Gemini，一定要先response prompt專門修返「A÷□=C」呢種題型，然後用真正/api/mark（唔淨係OCR-only診斷route）重新驗證過，先可以話安全。
