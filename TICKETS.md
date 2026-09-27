@@ -305,6 +305,12 @@
 - ✅ **第38項完成：抽走咗`isWordAnswer`重複邏輯，整做共用function`looksLikeNumberWord`，兩處都改用返佢。** 純refactor，行為冇變。355/355測試通過，已push。
 - 🔲 **第39項（提出咗，未做）：修中文排除機制嘅漏洞——而家靠「印刷題目+學生答案有冇CJK字」判斷係咪中文題，如果OCR將中文題讀到完全冇中文字（例如亂碼/誤讀），呢條保護會被繞過，令中文題有機會送咗去Jev，而且冇任何log/警號話你知發生咗。** Challenge-all搵到嘅真實edge case。等用戶話事幾時做。
 - ✅ **第40項完成：監察Jev可用性。** `callJevPreCheck`而家會將真實call結果（成功/timeout/http error/exception）標記喺個返回值上（`.callStatus`），`handleMark`每次都會將今日嘅call數同fail數寫入`RATE_LIMIT_KV`（key: `jevhealth:<HK日期>`，8日TTL，best-effort非原子性寫入，純粹做監察用）。每日cron（528766cd，9:37am）已經擴充成同時check CF usage同jev health，如果今日call數>=5且fail率>20%就會喺報告最頂flag出嚟。純監察，唔影響改功課本身（fail-open）。354/354測試通過。
-- 🔲 **第41項（提出咗，未做）：診斷route嘅管理——今日一個session起咗拆咗8-9次臨時診斷route，全部靠人手記得刪，建議諗一個更結構性嘅做法（例如自動過期/統一嘅診斷入口）。** 等用戶話事幾時做。
+- 🔲 **第41項（有plan，未做code）：診斷route嘅管理——今日一個session起咗拆咗8-9次臨時診斷route，全部靠人手記得刪，建議諗一個更結構性嘅做法。**
+  2026-09-27訂立嘅prevention plan（4點）：
+  1. 統一入口：以後所有臨時診斷route應該行同一個dispatch前綴（例如`/api/debug/*`），共用同一個token check（一個`DEBUG_TOKEN`常數），而唔係好似今日咁每次自己開新path+自己set token字串——咁樣淨係grep一個關鍵字就搵晒全部，一齊刪。
+  2. 唔可以重新實作production邏輯：diagnostic route必須直接call production嘅同一個function（例如`classifyAndVerify`、`callJevPreCheck`），唔可以自己抄一份邏輯——今日就係因為v2/v3 route自己set `subject: null`，冇用返production個Chinese-exclusion filter，令報告一開始唔準確，呢個係今日真實發生過嘅bug。
+  3. 加返即用即刪嘅紀律：每次開一條temp route嘅同時，即刻喺呢個TICKETS.md度加一行「待刪：/api/xxx」，投入debug用完即刻對返呢張清單刪、確認冇漏。
+  4. Push前grep一次：`git push`之前用`grep -n "test-\|DEBUG_TOKEN"` src/worker.js 確認冇殘留。
+  呢個純粹係做法上嘅紀律，未涉及即時code改動；如果想將第1點（統一dispatch前綴）做成一個可重用嘅helper function，可以而家開始做，等用戶話事。
 
 
