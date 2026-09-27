@@ -93,3 +93,36 @@ test("Real shape: multi-blank passage with context-preserving printedQuestion (T
   assert.equal(items[3].studentAnswer, "but");
   assert.match(items[3].printedQuestion, /____/, "the blank marker must survive parsing intact");
 });
+
+// Ticket 48 (2026-09-27): /api/mark never carried the page-continuation
+// markers /api/check has always had, so the website's cross-page-stitch
+// trigger has been silently unreachable since Ticket 32. This tests the
+// new extractContinuationMarkers() helper that restores them for the
+// plain-text OCR_ONLY_PROMPT format.
+test("extractContinuationMarkers: recognises both markers and strips them from the item text", () => {
+  const raw = "CONTINUES_FROM_PREVIOUS\n1=25÷5|5,2=12÷3|4\nCONTINUES_TO_NEXT";
+  const { continuesFromPrevious, continuesToNext, cleanedText } = mod.extractContinuationMarkers(raw);
+  assert.equal(continuesFromPrevious, true);
+  assert.equal(continuesToNext, true);
+  assert.doesNotMatch(cleanedText, /CONTINUES_/);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 2, "stripping the markers must not swallow real items");
+});
+
+test("extractContinuationMarkers: defaults both to false when neither marker is present (the common case)", () => {
+  const raw = "1=25÷5|5,2=12÷3|4";
+  const { continuesFromPrevious, continuesToNext, cleanedText } = mod.extractContinuationMarkers(raw);
+  assert.equal(continuesFromPrevious, false);
+  assert.equal(continuesToNext, false);
+  assert.equal(cleanedText, raw, "text with no markers must pass through unchanged");
+});
+
+test("extractContinuationMarkers: only CONTINUES_TO_NEXT present, item text still parses cleanly", () => {
+  const raw = "1=A teacher divides 53 bookmarks equally among 7 pupils.|53÷7=7...4\nCONTINUES_TO_NEXT";
+  const { continuesFromPrevious, continuesToNext, cleanedText } = mod.extractContinuationMarkers(raw);
+  assert.equal(continuesFromPrevious, false);
+  assert.equal(continuesToNext, true);
+  const items = mod.parseOcrLine(cleanedText);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].studentAnswer, "53÷7=7...4");
+});

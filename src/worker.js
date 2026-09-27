@@ -1697,7 +1697,26 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 1=I have three sisters ____ I don't have any brothers.|but
 （题号跟返印刷編號轉做普通數字，printedQuestion保留埋緊貼空格嘅完整句子，用"____"代表個空格位置，答案先至係學生真正手寫嘅字）
 
+**呢張相可能只係一份多頁功課入面嘅其中一頁。**留意張相嘅最頂同最底：如果最頂一開始就係一題嘅中間部分（冇題號、冇上文，好似接住上一頁未完嘅嘢），喺回覆最後面加多一行單獨嘅"CONTINUES_FROM_PREVIOUS"；如果最底最後一題睇落未完（例如題目敘述好似仲未問完、冇答題位置、圖表被切斷），加多一行單獨嘅"CONTINUES_TO_NEXT"。呢兩行如果唔適用就完全唔使加，唔好預設加埋佢哋——要真係見到明顯線索先加，寧願漏報都好過亂報。呢兩行唔算題目item，唔使跟「題號=...|...」個format。
+
 唔好加任何其他文字、判斷、JSON。`;
+
+// Extracts the two page-continuation markers (see OCR_ONLY_PROMPT's own
+// instruction above) from the raw OCR text and strips them out, so
+// parseOcrLine never sees them as stray unparseable content. Returns
+// {continuesFromPrevious, continuesToNext, cleanedText}. Ticket 48
+// (2026-09-27): /api/mark never carried these flags at all (unlike
+// /api/check, which has always had them) -- the website's own
+// cross-page-stitch trigger (`if (data.continuesFromPrevious)`) has
+// therefore been silently unreachable ever since Ticket 32 switched
+// normal page submission from /api/check to /api/mark. This restores
+// parity so that trigger can fire again.
+function extractContinuationMarkers(text) {
+  const continuesFromPrevious = /^CONTINUES_FROM_PREVIOUS\s*$/m.test(text);
+  const continuesToNext = /^CONTINUES_TO_NEXT\s*$/m.test(text);
+  const cleanedText = text.replace(/^CONTINUES_FROM_PREVIOUS\s*$/gm, "").replace(/^CONTINUES_TO_NEXT\s*$/gm, "");
+  return { continuesFromPrevious, continuesToNext, cleanedText };
+}
 
 // Same {parsed, usage} / throw contract as callOpenRouterVisionModel, but
 // the model replies with plain "label=printed|answer" lines rather than
@@ -1780,11 +1799,12 @@ async function callQwenOcrText(images, openrouterKey) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
   }
   const text = (choice.message && choice.message.content) || "";
-  const items = parseOcrLine(text);
+  const { continuesFromPrevious, continuesToNext, cleanedText } = extractContinuationMarkers(text);
+  const items = parseOcrLine(cleanedText);
   if (!items.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -4811,7 +4831,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -4831,7 +4851,7 @@ async function handleMark(request, env) {
       console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
       return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext };
   });
   const pagesMs = Date.now() - tPages;
 
@@ -5127,11 +5147,27 @@ async function handleMark(request, env) {
   const pageRotations = {};
   images.forEach((img, i) => { if (rotationApplied[i]) pageRotations[i] = rotationApplied[i]; });
 
+  // Ticket 48 (2026-09-27): restores parity with /api/check's own
+  // top-level continuesFromPrevious/continuesToNext fields, which the
+  // website's cross-page-stitch trigger (`if (data.continuesFromPrevious)`)
+  // has needed all along but /api/mark never produced -- silently
+  // unreachable since Ticket 32 moved normal page submission here. A
+  // caller sends 1 image per call in practice (the website always does),
+  // but this stays correct for a genuine multi-image call too: the FIRST
+  // page's own continuesFromPrevious (does THIS call's content open
+  // mid-question) and the LAST page's own continuesToNext (does it end
+  // mid-question) are what describe this call's own boundaries -- an
+  // internal page-to-page join, if any, is handled by pageResults being
+  // adjacent, not this flag pair.
+  const firstOkPage = pageResults.find((pr) => !pr.failed);
+  const lastOkPage = [...pageResults].reverse().find((pr) => !pr.failed);
   const responseBody = {
     results,
     score: `${correctCount} / ${results.length}`,
     needsVerify: results.filter((r) => r.correct === null).map((r) => ({ page: r.page, question: r.question })),
     pageRotations,
+    continuesFromPrevious: firstOkPage ? firstOkPage.continuesFromPrevious : false,
+    continuesToNext: lastOkPage ? lastOkPage.continuesToNext : false,
     ...(pageErrors.length ? { pageErrors } : {}),
   };
   if (dedupKey && env.RATE_LIMIT_KV) {
@@ -5454,6 +5490,7 @@ export {
   callJevPreCheck,
   buildJevQuestions,
   parseOcrLine,
+  extractContinuationMarkers,
   crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,
