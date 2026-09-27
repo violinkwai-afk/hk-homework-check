@@ -155,6 +155,9 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
+    if (url.pathname === "/api/test-full-flow" && request.method === "POST") {
+      return handleTestFullFlow(request, env);
+    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1894,6 +1897,72 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
   } catch (e) {
     return resolved; // fail open -- Jev being unavailable never blocks grading
   }
+}
+
+// Temporary diagnostic route (2026-09-27, real user request): run the
+// REAL flow -- OCR (Gemini, forced for this test only, production stays
+// on Qwen via OCR_TEXT_MODEL untouched) -> classifyAndVerify (real code
+// verifiers, text-only -- no bbox/crop in this test) -> callJevPreCheck
+// for whatever code can't resolve -- and report each item's outcome.
+// Remove after use.
+async function handleTestFullFlow(request, env) {
+  const token = request.headers.get("x-compare-token");
+  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { images } = await request.json();
+  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
+
+  const perPhoto = [];
+  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
+    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
+    const prompt = OCR_ONLY_PROMPT(1);
+    const body = {
+      model: "google/gemini-3.1-flash-lite",
+      max_tokens: 2000,
+      temperature: 0,
+      provider: { ignore: ["Alibaba"] },
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
+    };
+    let items = [];
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-fullflow-test" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const choice = data.choices && data.choices[0];
+      const rawText = (choice && choice.message && choice.message.content) || "";
+      items = parseOcrLine(rawText);
+    } catch (e) {
+      perPhoto.push({ page: pageIdx, error: String((e && e.message) || e) });
+      continue;
+    }
+
+    const itemResults = items.map((item) => {
+      const verdict = classifyAndVerify(item);
+      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, correct: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code" };
+    });
+
+    const pendingForJev = [];
+    itemResults.forEach((r, i) => {
+      if (r.correct === null) pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer });
+    });
+    if (pendingForJev.length) {
+      const jevResolved = await callJevPreCheck(pendingForJev, openrouterKey);
+      jevResolved.forEach((verdict, idx) => {
+        itemResults[idx].correct = verdict.correct;
+        itemResults[idx].resolvedBy = "jev";
+      });
+    }
+    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
+
+    perPhoto.push({ page: pageIdx, itemCount: items.length, items: itemResults });
+  }
+  return json({ ok: true, perPhoto });
 }
 
 // A real handwritten sub-answer is short; anything wildly longer than that
