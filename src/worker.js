@@ -1984,13 +1984,17 @@ async function handleTestFullFlowV3(request, env) {
     const tCodeStart = Date.now();
     const itemResults = items.map((item) => {
       const verdict = classifyAndVerify(item);
-      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, codeCorrect: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code", jevSent: null, jevReply: null };
+      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, subject: verdict.subject, codeCorrect: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code", jevSent: null, jevReply: null };
     });
     steps.push({ tool: "code (classifyAndVerify)", ms: Date.now() - tCodeStart, cost: 0 });
 
+    // Ticket 27's real production rule, replicated exactly here (a prior
+    // test route forgot this filter, which made Chinese items LOOK like
+    // "Jev can't resolve them" when production never even asks Jev about
+    // them at all): Chinese-subject items never reach Jev.
     const pendingForJev = [];
     itemResults.forEach((r, i) => {
-      if (r.codeCorrect === null) pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer, subject: null });
+      if (r.codeCorrect === null && r.subject !== "chinese") pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer, subject: r.subject });
     });
     if (pendingForJev.length) {
       const tJevStart = Date.now();
