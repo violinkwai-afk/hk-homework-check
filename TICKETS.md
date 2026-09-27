@@ -324,4 +324,6 @@
 
 - 🔲 **第46項（新發現，未做）：3條舊式公開、冇驗證嘅診斷route，任何人都可以trigger真銀call。** `/api/test-deepseek-latency`（GET，call DeepSeek 2次）、`/api/test-rotation-latency`（POST，call Qwen+Vision）、`/api/test-vision-ocr-latency`（POST，call Vision）——3條都冇任何token/密碼check，淨係要知網址就用得，同而家第41項嘅`DEBUG_TOKEN`紀律完全唔同級數。真實風險：任何人可以不斷call呢啲route，用戶嘅OpenRouter/Google Vision quota同銀包會被人消耗。建議：跟返第41項紀律，加`DEBUG_TOKEN`check，或者直接刪走（佢哋自己個comment都話「一查到原因就刪」，而原因已經查到咗好耐）。等用戶話事幾時做。
 
+- 🟨 **第47項（免費部分做咗，真OCR驗證未做）：相片壓縮改用快啲嘅filter。** 用真實3張相本地benchmark咗Photon嘅5種resize filter（免費，冇call任何AI）：而家用緊嘅`Lanczos3`每次resize要52ms左右，`Triangle`得23-34ms（快接近一倍），而且輸出檔案仲細啲（例如35.2KB vs 39.6KB）。`Nearest`最快但輸出檔案反而最大（鋸齒令JPEG壓縮率變差），唔建議。**未做嘅部分**：冇驗證過用`Triangle`會唔會影響Gemini讀字（OCR）嘅準繩度——resize快得嚟畫質糙咗，有機會令細字/手寫字模糊咗，跟返「換嘢要用真正pipeline驗證，唔淨係睇跑得快唔快」呢個規矩（Ticket 26教訓），要用真銀做幾張相嘅OCR準繩度對比先可以放心轉。真銀成本好細（3張相×2種filter×Gemini OCR≈$0.006）。等用戶話事想唔想做呢個驗證。
+
 
