@@ -319,4 +319,9 @@
 
 - ✅ **第44項完成：中文題目而家都會送去jev睇，唔再隔開。** 用戶明確指示：「Pls let jev work on everything in chinese from now on- we can add another ai that is good in chinese later.」原因記錄：Ticket 27發現jev試過將啱嘅中文答案（親愛的表姐→表弟）判做錯，先加咗個排除。用戶決定：而家先俾jev試，之後（第34項每週AI巡查）搵到啱嘅中文專用AI先再算。已刪走`allPendingFlat`嗰個`.filter(subject !== "chinese")`，code comment記低咗成個歷史背景，方便日後想返轉頭。357/357測試通過。
 
+- ✅ **第45項完成：模型名寫死喺兩個地方（舊筆記提出）——查證Qwen嗰個已經喺之前嘅refactor度修好咗（`PRODUCTION_OCR_MODEL`/`OCR_TEXT_MODEL`/`JEV_MODEL`，各自淨係出現一次），但發現DeepSeek有一模一樣嘅問題，重複咗3次（`callDeepSeek`本身+2個connectivity self-test route），已修好。** 抽咗一個`DEEPSEEK_MODEL`共用constant，3個地方都改用返佢。357/357測試通過。
+  **附帶發現（未做，另開ticket）：查呢個嗰陣搵到`/api/test-deepseek-latency`、`/api/test-rotation-latency`、`/api/test-vision-ocr-latency`呢3條舊式「TEMPORARY diagnostic route」（第41項紀律之前留低嘅），自己個comment都寫住「Remove once the real cause is found」但從來冇刪過，而且完全冇token驗證——即係任何人知道網址都可以free咁trigger真銀call（DeepSeek/OpenRouter/Vision）。見第46項。**
+
+- 🔲 **第46項（新發現，未做）：3條舊式公開、冇驗證嘅診斷route，任何人都可以trigger真銀call。** `/api/test-deepseek-latency`（GET，call DeepSeek 2次）、`/api/test-rotation-latency`（POST，call Qwen+Vision）、`/api/test-vision-ocr-latency`（POST，call Vision）——3條都冇任何token/密碼check，淨係要知網址就用得，同而家第41項嘅`DEBUG_TOKEN`紀律完全唔同級數。真實風險：任何人可以不斷call呢啲route，用戶嘅OpenRouter/Google Vision quota同銀包會被人消耗。建議：跟返第41項紀律，加`DEBUG_TOKEN`check，或者直接刪走（佢哋自己個comment都話「一查到原因就刪」，而原因已經查到咗好耐）。等用戶話事幾時做。
+
 

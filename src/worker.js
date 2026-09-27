@@ -248,7 +248,7 @@ async function handleTestDeepSeekLatency(env) {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
-        body: JSON.stringify({ model: "deepseek/deepseek-v4.1-flash", max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: "Say OK and nothing else." }] }),
+        body: JSON.stringify({ model: DEEPSEEK_MODEL, max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: "Say OK and nothing else." }] }),
       });
       const data = await res.json();
       attempts.push({ label: "text_only", ms: Date.now() - t0, status: res.status, ok: res.ok, content: data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content });
@@ -265,7 +265,7 @@ async function handleTestDeepSeekLatency(env) {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
-        body: JSON.stringify({ model: "deepseek/deepseek-v4.1-flash", max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: [{ type: "text", text: "What color is this image? One word." }, { type: "image_url", image_url: { url: `data:image/png;base64,${tinyPng}` } }] }] }),
+        body: JSON.stringify({ model: DEEPSEEK_MODEL, max_tokens: 100, provider: { ignore: ["Alibaba"] }, messages: [{ role: "user", content: [{ type: "text", text: "What color is this image? One word." }, { type: "image_url", image_url: { url: `data:image/png;base64,${tinyPng}` } }] }] }),
       });
       const data = await res.json();
       attempts.push({ label: "tiny_image", ms: Date.now() - t0, status: res.status, ok: res.ok, content: data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content });
@@ -1638,6 +1638,14 @@ async function callQwen(images, prompt, openrouterKey) {
   });
 }
 
+// Ticket 45 (2026-09-27): same "model name hardcoded in more than one
+// place" gap already fixed for Qwen/Gemini/Jev (PRODUCTION_OCR_MODEL /
+// OCR_TEXT_MODEL / JEV_MODEL) -- this one had spread to 3 separate
+// literal copies of the DeepSeek model string (the real callDeepSeek()
+// below, plus 2 connectivity self-test routes). One shared constant so a
+// future DeepSeek version bump/swap is a one-line change.
+const DEEPSEEK_MODEL = "deepseek/deepseek-v4.1-flash";
+
 // Reasoning-based second look, tried when Qwen fails/gives up. Real
 // testing 2026-09-20: most pages succeed in a few seconds for a few
 // cents; occasionally a reasoning-heavy page (dense grammar/visual-logic
@@ -1647,7 +1655,7 @@ async function callQwen(images, prompt, openrouterKey) {
 // max_tokens noticeably reduces but does not eliminate this.
 async function callDeepSeek(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
-    model: "deepseek/deepseek-v4.1-flash",
+    model: DEEPSEEK_MODEL,
     maxTokens: 20000,
     timeoutMs: 12000,
     providerFilter: { ignore: ["Alibaba"] },
