@@ -1617,3 +1617,47 @@ test("sort fractions ascending: student answer missing one value, declines (null
   const r = mod.verifySortFractionsAscending(candidates, "7又2/3 < 7又7/9");
   assert.equal(r.correct, null);
 });
+
+// --- Ticket 27 (2026-09-27) regression tests: two real handler misfires
+// found via a real 7-photo Gemini-OCR->code->Jev pipeline test. Both
+// wrongly claimed items belonging to a completely different exercise,
+// confidently marking genuinely correct student answers as wrong.
+
+test("number_word_conversion: does NOT claim an and/but/or sentence-connector item (bare digit label + conjunction answer)", () => {
+  // Real shape from a real photo's OCR: Gemini transcribed each letter-fill
+  // blank's printedQuestion as just its own bare number label ("1", "2"...)
+  // with the student's real conjunction word as studentAnswer. The old
+  // detect() ("any letter in the answer") trivially matched this and then
+  // compared "but" against numberToEnglishWord(1) ("one"), reporting a
+  // correct answer as wrong.
+  const verdict = mod.classifyAndVerify({ printedQuestion: "1", studentAnswer: "but" });
+  assert.notEqual(verdict.handler, "number_word_conversion", "must not misfire on a conjunction answer");
+});
+
+test("number_word_conversion: still correctly claims a real number<->word item (quoted form)", () => {
+  const verdict = mod.classifyAndVerify({ printedQuestion: "課文入面「七」呢個字係邊個數字？", studentAnswer: "7" });
+  assert.equal(verdict.handler, "number_word_conversion");
+  assert.equal(verdict.correct, true);
+});
+
+test("grammar_cloze: does NOT claim a pronoun-fill item just because a blank is followed by printed \"'s\"", () => {
+  // Real shape from a real photo: "____'s having a shower!" with the
+  // student's real answer being the pronoun "It" (the "'s" is already
+  // printed, not part of the blank). The old detect() ("blank followed by
+  // any letters") matched this and judged "It" against its/it's rules
+  // (expected "its"), reporting a correct pronoun answer as wrong.
+  const verdict = mod.classifyAndVerify({ printedQuestion: "____'s having a shower!", studentAnswer: "It" });
+  assert.notEqual(verdict.handler, "grammar_cloze", "must not misfire on a pronoun-fill answer");
+});
+
+test("grammar_cloze: still correctly claims a real its/it's item", () => {
+  const verdict = mod.classifyAndVerify({ printedQuestion: "The bird is ____ beautiful.", studentAnswer: "it's" });
+  assert.equal(verdict.handler, "grammar_cloze");
+  assert.equal(verdict.correct, true);
+});
+
+test("grammar_cloze: still correctly claims a real subject+be-verb item", () => {
+  const verdict = mod.classifyAndVerify({ printedQuestion: "I ____ happy.", studentAnswer: "am" });
+  assert.equal(verdict.handler, "grammar_cloze");
+  assert.equal(verdict.correct, true);
+});

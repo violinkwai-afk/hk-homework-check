@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-full-flow" && request.method === "POST") {
-      return handleTestFullFlow(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1899,72 +1896,6 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
   }
 }
 
-// Temporary diagnostic route (2026-09-27, real user request): run the
-// REAL flow -- OCR (Gemini, forced for this test only, production stays
-// on Qwen via OCR_TEXT_MODEL untouched) -> classifyAndVerify (real code
-// verifiers, text-only -- no bbox/crop in this test) -> callJevPreCheck
-// for whatever code can't resolve -- and report each item's outcome.
-// Remove after use.
-async function handleTestFullFlow(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || !images.length) return json({ error: "images_required" }, 400);
-
-  const perPhoto = [];
-  for (let pageIdx = 0; pageIdx < images.length; pageIdx++) {
-    const downscaled = downscaleForCheapTier(images[pageIdx], 640);
-    const prompt = OCR_ONLY_PROMPT(1);
-    const body = {
-      model: "google/gemini-3.1-flash-lite",
-      max_tokens: 2000,
-      temperature: 0,
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } }] }],
-    };
-    let items = [];
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-fullflow-test" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      const choice = data.choices && data.choices[0];
-      const rawText = (choice && choice.message && choice.message.content) || "";
-      items = parseOcrLine(rawText);
-    } catch (e) {
-      perPhoto.push({ page: pageIdx, error: String((e && e.message) || e) });
-      continue;
-    }
-
-    const itemResults = items.map((item) => {
-      const verdict = classifyAndVerify(item);
-      return { label: item.label, printedQuestion: item.printedQuestion, studentAnswer: item.studentAnswer, handler: verdict.handler, correct: verdict.correct, correctAnswer: verdict.correctAnswer, resolvedBy: verdict.correct === null ? null : "code" };
-    });
-
-    const pendingForJev = [];
-    itemResults.forEach((r, i) => {
-      if (r.correct === null) pendingForJev.push({ resultIndex: i, question: r.label, printedQuestion: r.printedQuestion, studentAnswer: r.studentAnswer });
-    });
-    if (pendingForJev.length) {
-      const jevResolved = await callJevPreCheck(pendingForJev, openrouterKey);
-      jevResolved.forEach((verdict, idx) => {
-        itemResults[idx].correct = verdict.correct;
-        itemResults[idx].resolvedBy = "jev";
-      });
-    }
-    itemResults.forEach((r) => { if (r.resolvedBy === null) r.resolvedBy = "unresolved"; });
-
-    perPhoto.push({ page: pageIdx, itemCount: items.length, items: itemResults });
-  }
-  return json({ ok: true, perPhoto });
-}
-
 // A real handwritten sub-answer is short; anything wildly longer than that
 // is a signal that an item boundary was missed and several items' content
 // bled into one -- see MAX_ANSWER_LEN below. Printed questions are NOT
@@ -2412,7 +2343,16 @@ function verifyNumberWordConversion(printedQuestion, studentAnswer) {
   }
 
   const digitMatch = printed.match(/\b(\d{1,2})\b/);
-  const isWordAnswer = /[a-zA-Z]/.test(answer) || /[一二三四五六七八九十零]/.test(answer);
+  // Ticket 27 (2026-09-27, real data finding): the old check ("any
+  // letter or CN numeral in the answer") misfired on a real "and/but/or
+  // sentence-connector" exercise -- printedQuestion was just a bare
+  // digit label ("1", "2"...) from OCR, which trivially matched
+  // digitMatch, and studentAnswer ("but") trivially matched "contains a
+  // letter", so this handler compared "but" against numberToEnglishWord(1)
+  // ("one") and confidently reported a real, correct answer as wrong.
+  // Now the answer itself must actually PARSE as a number word (not
+  // just contain letters) before this branch claims the item.
+  const isWordAnswer = parseEnglishNumberWord(answer) !== null || parseChineseNumberWord(answer) !== null;
   if (digitMatch && isWordAnswer) {
     const target = parseInt(digitMatch[1], 10);
     const expectedEn = numberToEnglishWord(target);
@@ -4192,7 +4132,12 @@ const QUESTION_TYPE_HANDLERS = [
       // it in the registry have first claim.
       if (/(共|總共|一共|合共|相差|每[^，,。？?]{0,6}(售|得|獲|分得|需))/.test(printed)) return false;
       const hasSmallDigit = /\b\d{1,2}\b/.test(printed);
-      const isWordAnswer = /[a-zA-Z]/.test(answer) || /[一二三四五六七八九十零]/.test(answer);
+      // Ticket 27 (2026-09-27, real data finding): "any letter/CN-numeral
+      // in the answer" was still too loose -- misfired on an "and/but/or
+      // sentence connector" exercise whose OCR'd printedQuestion was just
+      // a bare digit label. See verifyNumberWordConversion's matching
+      // comment -- the answer must actually PARSE as a number word.
+      const isWordAnswer = parseEnglishNumberWord(answer) !== null || parseChineseNumberWord(answer) !== null;
       return hasSmallDigit && isWordAnswer;
     },
     verify: (item) => verifyNumberWordConversion(item.printedQuestion, item.studentAnswer),
@@ -4339,9 +4284,29 @@ const QUESTION_TYPE_HANDLERS = [
   },
   {
     name: "grammar_cloze",
+    // Ticket 27 (2026-09-27, real data finding): a 7-photo real-pipeline
+    // test found this handler wrongly claiming a completely different
+    // exercise -- "safari passage, fill in it/them/him/her" items whose
+    // printedQuestion happens to have "____" immediately followed by a
+    // printed "'s" (e.g. "____'s having a shower!"). This handler covers
+    // exactly 2 real sub-patterns (see verifyGrammarCloze's own
+    // comment): (1) subject pronoun + blank -> expects am/is/are/has/have,
+    // (2) blank + word -> its vs it's. A pronoun-fill answer like "It"/
+    // "They"/"them" matches NEITHER real sub-pattern's expected answer
+    // shape, yet the old detect() let it through purely on the printed
+    // SHAPE (a blank followed by letters), then judged it against
+    // unrelated its/it's rules. Real confirmed harm: marked "It"/"They"
+    // (genuinely correct pronoun fills) as wrong. Now requires the
+    // STUDENT'S OWN answer to plausibly belong to one of this handler's
+    // two real answer families before claiming the item at all.
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      if (!String(item.studentAnswer || "").trim()) return false;
+      const answer = String(item.studentAnswer || "").trim();
+      if (!answer) return false;
+      const norm = answer.toLowerCase().replace(/[.\s]/g, "");
+      const looksLikeBeVerbFamily = ["am", "is", "are", "has", "have"].includes(norm);
+      const looksLikeItsItsFamily = norm === "its" || norm === "it's" || norm === "itis";
+      if (!looksLikeBeVerbFamily && !looksLikeItsItsFamily) return false;
       if (/\b(I|He|She|They|We|You|His\s+sister|Her\s+brother)\s+_{2,}/i.test(printed)) return true;
       return /_{2,}\s*[a-zA-Z']+/.test(printed);
     },
