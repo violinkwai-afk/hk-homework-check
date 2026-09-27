@@ -316,4 +316,6 @@
 - 🔲 **第42項（進行中）：測試jev解中文數學題嘅能力。** 用戶想知jev係咪識答用中文寫嘅數學題。已加返`/api/debug/full-flow`（跟第41項新紀律：統一路徑+統一token`DEBUG_TOKEN`+直接call返production嘅`classifyAndVerify`/`callJevPreCheck`/`parseOcrLine`，冇重新抄一份邏輯）。
   **待刪：`/api/debug/full-flow`（用完第42項呢個test就要刪走）。**
 
+- 🔲 **第43項（新發現，未做）：除法帶餘數嘅答案（例如「14…3」「11…5」）被code判做錯，但其實學生答啱。** 第42項測試意外發現（相1第1、12條）：87÷6學生寫"14…3"（14餘3，啱嘅），code卻話correctAnswer係"14.5"（小數形式），判做錯；71÷6學生寫"11…5"（11餘5，啱嘅），同樣被判錯。懷疑`verifyMath`嗰個「除法帶餘數」檢查（Ticket 27加嘅）冇cover到呢種純粹"A÷B="（無等號右手邊、答案直接寫「商…餘數」格式）嘅shape，同Ticket 37個regression fixture入面嗰種"A÷B=Q...R"格式（等號右邊已經有嘢）唔同。要開code查證。
+
 
