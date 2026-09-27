@@ -1070,3 +1070,118 @@ test("Ticket 22 Stage A: a visual handler with NO crop available (getImageCrop o
     worker.QUESTION_TYPE_HANDLERS.shift();
   }
 });
+
+// Ticket 27 (2026-09-27): Jev TEXT-ONLY pre-check, mocked fetch only --
+// no real OpenRouter/Jev spend, per the standing "mock before real API
+// cost" rule. These prove the LOGIC (request shape, confidence
+// thresholds, fail-open behavior) is correct; they are not a substitute
+// for a real-data accuracy test (see TICKETS.md Ticket 27).
+
+test("buildJevQuestions: one noul question per pending item, keyed by resultIndex, embeds the real question/answer text", async () => {
+  const worker = await import(TMP);
+  const pendingItems = [
+    { resultIndex: 0, question: "1", printedQuestion: "3+4", studentAnswer: "7" },
+    { resultIndex: 3, question: "4", printedQuestion: "5+5", studentAnswer: "9" },
+  ];
+  const questions = worker.buildJevQuestions(pendingItems);
+  assert.deepEqual(Object.keys(questions), ["0", "3"]);
+  assert.equal(questions["0"].type, "noul");
+  assert.match(questions["0"].instructions, /3\+4/);
+  assert.match(questions["0"].instructions, /7/);
+  assert.match(questions["3"].instructions, /5\+5/);
+});
+
+test("callJevPreCheck: resolves items with high confidence (>=0.9 or <=0.1), leaves mid-confidence items unresolved", async () => {
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    assert.equal(url, "https://openrouter.ai/api/alpha/decisions");
+    const body = JSON.parse(opts.body);
+    assert.equal(body.model, "typesafe/jev-1.13");
+    assert.equal(typeof body.state, "string");
+    return {
+      ok: true,
+      json: async () => ({
+        answers: {
+          "0": { type: "noul", noul: 0.97 }, // confident correct
+          "1": { type: "noul", noul: 0.02 }, // confident wrong
+          "2": { type: "noul", noul: 0.5 },  // genuinely uncertain -- must NOT resolve
+        },
+        usage: { input_tokens: 100, output_tokens: 0, cost: 0.0000042 },
+      }),
+    };
+  };
+  try {
+    const pendingItems = [
+      { resultIndex: 0, question: "1", printedQuestion: "3+4", studentAnswer: "7" },
+      { resultIndex: 1, question: "2", printedQuestion: "3+4", studentAnswer: "8" },
+      { resultIndex: 2, question: "3", printedQuestion: "unclear handwriting", studentAnswer: "?" },
+    ];
+    const resolved = await worker.callJevPreCheck(pendingItems, "fake-key");
+    assert.equal(resolved.size, 2, "only the two high-confidence items resolve");
+    assert.deepEqual(resolved.get(0), { correct: true });
+    assert.deepEqual(resolved.get(1), { correct: false });
+    assert.equal(resolved.has(2), false, "mid-confidence item must stay unresolved, not guessed");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("callJevPreCheck: fails open to an empty Map on a non-ok HTTP response (never blocks the real fallback)", async () => {
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
+  try {
+    const pendingItems = [{ resultIndex: 0, question: "1", printedQuestion: "3+4", studentAnswer: "7" }];
+    const resolved = await worker.callJevPreCheck(pendingItems, "fake-key");
+    assert.equal(resolved.size, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("callJevPreCheck: fails open to an empty Map when fetch itself throws (network error)", async () => {
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  global.fetch = async () => { throw new Error("network down"); };
+  try {
+    const pendingItems = [{ resultIndex: 0, question: "1", printedQuestion: "3+4", studentAnswer: "7" }];
+    const resolved = await worker.callJevPreCheck(pendingItems, "fake-key");
+    assert.equal(resolved.size, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("callJevPreCheck: ignores a malformed answer (missing/non-numeric noul) rather than guessing", async () => {
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ answers: { "0": { type: "noul" }, "1": { type: "noul", noul: "high" } } }),
+  });
+  try {
+    const pendingItems = [
+      { resultIndex: 0, question: "1", printedQuestion: "3+4", studentAnswer: "7" },
+      { resultIndex: 1, question: "2", printedQuestion: "3+4", studentAnswer: "7" },
+    ];
+    const resolved = await worker.callJevPreCheck(pendingItems, "fake-key");
+    assert.equal(resolved.size, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("callJevPreCheck: empty pendingItems returns an empty Map without calling fetch at all", async () => {
+  const worker = await import(TMP);
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = async () => { fetchCalled = true; return { ok: true, json: async () => ({ answers: {} }) }; };
+  try {
+    const resolved = await worker.callJevPreCheck([], "fake-key");
+    assert.equal(resolved.size, 0);
+    assert.equal(fetchCalled, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

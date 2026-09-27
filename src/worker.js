@@ -1812,6 +1812,90 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
   }
 }
 
+// Ticket 27 (2026-09-27, real user request): a fast, cheap TEXT-ONLY
+// pre-check before the real (image-based) AI fallback above -- TypeSafe
+// Jev, a structured-decision model (not a general LLM), accessed via
+// OpenRouter's alpha Decisions endpoint. Deliberately kept as its own
+// isolated constant/function (same discipline that made the Gemini
+// OCR_TEXT_MODEL rollback a one-line change, Ticket 25/26) so this can
+// be removed or swapped without touching callAiFallbackJudge at all.
+//
+// Real, load-bearing limitation: Jev is TEXT-ONLY -- "Jev only sees the
+// text/JSON you supply; it does not see screenshots or URLs by itself"
+// (skill docs). It can therefore only ever be a PRE-check that narrows
+// what still needs the real vision-based fallback, never a replacement
+// for it -- any item Jev doesn't resolve with high confidence must still
+// go through callAiFallbackJudge exactly as before. Also per the skill's
+// own docs: "English is the best-supported language; evaluate CJK
+// workloads separately" -- Jev's real accuracy on Chinese-subject
+// homework judgments is UNVALIDATED, not assumed safe, until tested with
+// real data (see TICKETS.md Ticket 27).
+const JEV_MODEL = "typesafe/jev-1.13";
+// Calibration is untested on this exact task -- these are conservative
+// starting thresholds (only trust Jev when it's very confident either
+// way), not derived from real data. Must be checked against real
+// production outcomes before being treated as final -- see Ticket 27.
+const JEV_CONFIDENT_CORRECT = 0.9;
+const JEV_CONFIDENT_WRONG = 0.1;
+
+function buildJevQuestions(pendingItems) {
+  const questions = {};
+  pendingItems.forEach((item) => {
+    questions[String(item.resultIndex)] = {
+      type: "noul",
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？`,
+      criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
+    };
+  });
+  return questions;
+}
+
+// Returns a Map<resultIndex(number), {correct: boolean}> for items Jev
+// answered with high confidence either way -- every other pending item
+// (low confidence, malformed answer, or the call failing entirely) is
+// simply absent from the returned Map, so the caller's existing
+// fall-through to callAiFallbackJudge needs no special-casing. Never
+// throws -- fails open to an empty Map, exactly like callAiFallbackJudge
+// returning null, so a Jev outage costs nothing but the (skipped)
+// speed/cost saving it would have provided.
+async function callJevPreCheck(pendingItems, openrouterKey) {
+  const resolved = new Map();
+  if (!pendingItems.length) return resolved;
+  try {
+    const body = {
+      model: JEV_MODEL,
+      state: "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。",
+      questions: buildJevQuestions(pendingItems),
+    };
+    const controller = new AbortController();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => { controller.abort(); reject(new Error("jev_timeout")); }, 10000);
+    });
+    const res = await Promise.race([
+      fetch("https://openrouter.ai/api/alpha/decisions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!res.ok) return resolved;
+    const data = await res.json();
+    const answers = data.answers || {};
+    for (const [key, answer] of Object.entries(answers)) {
+      if (!answer || typeof answer.noul !== "number" || !Number.isFinite(answer.noul)) continue;
+      if (answer.noul >= JEV_CONFIDENT_CORRECT) resolved.set(Number(key), { correct: true });
+      else if (answer.noul <= JEV_CONFIDENT_WRONG) resolved.set(Number(key), { correct: false });
+      // otherwise: genuinely uncertain -- deliberately left unresolved,
+      // falls through to the real vision-based fallback.
+    }
+    return resolved;
+  } catch (e) {
+    return resolved; // fail open -- Jev being unavailable never blocks grading
+  }
+}
+
 // A real handwritten sub-answer is short; anything wildly longer than that
 // is a signal that an item boundary was missed and several items' content
 // bled into one -- see MAX_ANSWER_LEN below. Printed questions are NOT
@@ -4735,6 +4819,38 @@ async function handleMark(request, env) {
     });
   });
 
+  // Module 3c, Ticket 27 (2026-09-27): Jev TEXT-ONLY pre-check, strictly
+  // BEFORE Ticket 13's real (image-based) AI fallback below. One single
+  // call across every pending item on every page (Jev needs no image, so
+  // there's no per-page reason to split it) -- items it resolves with
+  // high confidence are written straight into `results` and removed from
+  // `pendingForAiByPage`; every other item is untouched and flows into
+  // the existing Qwen/DeepSeek fallback exactly as before. Real
+  // per-call cost/timing logged below (mark_usage) alongside the
+  // existing AI-fallback usage, per the same "always know cost after a
+  // change" standing rule.
+  const allPendingFlat = [];
+  pendingForAiByPage.forEach((items) => allPendingFlat.push(...items));
+  let jevUsageLog = null;
+  if (openrouterKey && allPendingFlat.length) {
+    const tJev = Date.now();
+    const jevResolved = await callJevPreCheck(allPendingFlat, openrouterKey);
+    jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev };
+    if (jevResolved.size) {
+      jevResolved.forEach((verdict, resultIndex) => {
+        const r = results[resultIndex];
+        r.correct = verdict.correct;
+        r.correctAnswer = ""; // Jev is a yes/no judge, not a content generator -- never fabricates a corrected answer
+        r.status = "ok";
+        r.note = "";
+        r.verifiedBy = "jev";
+      });
+      pendingForAiByPage.forEach((items, pageIdx) => {
+        pendingForAiByPage.set(pageIdx, items.filter((it) => !jevResolved.has(it.resultIndex)));
+      });
+    }
+  }
+
   // Module 4, Ticket 13 (2026-09-26): AI judges what code couldn't.
   // Ticket 15 (2026-09-26, real production finding): a single 10-item
   // batch made BOTH tiers (Qwen 8s, DeepSeek 12s) time out -- confirmed
@@ -4797,6 +4913,7 @@ async function handleMark(request, env) {
     needsReview: needsReviewCount,
     totalMs, pagesMs, verifyMs, mapMs,
     perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
+    jevPreCheck: jevUsageLog,
     aiFallback: aiFallbackUsage,
   }));
 
@@ -5144,6 +5261,8 @@ function json(obj, status) {
 // verifiers above -- test-only surface, does not change the module's
 // default export or any existing behavior.
 export {
+  callJevPreCheck,
+  buildJevQuestions,
   crossCheckPrintedNumbers,
   evalArithmetic,
   parseNumericAnswer,
