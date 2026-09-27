@@ -322,7 +322,7 @@
 - ✅ **第45項完成：模型名寫死喺兩個地方（舊筆記提出）——查證Qwen嗰個已經喺之前嘅refactor度修好咗（`PRODUCTION_OCR_MODEL`/`OCR_TEXT_MODEL`/`JEV_MODEL`，各自淨係出現一次），但發現DeepSeek有一模一樣嘅問題，重複咗3次（`callDeepSeek`本身+2個connectivity self-test route），已修好。** 抽咗一個`DEEPSEEK_MODEL`共用constant，3個地方都改用返佢。357/357測試通過。
   **附帶發現（未做，另開ticket）：查呢個嗰陣搵到`/api/test-deepseek-latency`、`/api/test-rotation-latency`、`/api/test-vision-ocr-latency`呢3條舊式「TEMPORARY diagnostic route」（第41項紀律之前留低嘅），自己個comment都寫住「Remove once the real cause is found」但從來冇刪過，而且完全冇token驗證——即係任何人知道網址都可以free咁trigger真銀call（DeepSeek/OpenRouter/Vision）。見第46項。**
 
-- 🔲 **第46項（新發現，未做）：3條舊式公開、冇驗證嘅診斷route，任何人都可以trigger真銀call。** `/api/test-deepseek-latency`（GET，call DeepSeek 2次）、`/api/test-rotation-latency`（POST，call Qwen+Vision）、`/api/test-vision-ocr-latency`（POST，call Vision）——3條都冇任何token/密碼check，淨係要知網址就用得，同而家第41項嘅`DEBUG_TOKEN`紀律完全唔同級數。真實風險：任何人可以不斷call呢啲route，用戶嘅OpenRouter/Google Vision quota同銀包會被人消耗。建議：跟返第41項紀律，加`DEBUG_TOKEN`check，或者直接刪走（佢哋自己個comment都話「一查到原因就刪」，而原因已經查到咗好耐）。等用戶話事幾時做。
+- ✅ **第46項完成：3條舊式公開、冇驗證嘅診斷route，已加返`DEBUG_TOKEN`密碼保護。** 用戶明確選擇「加密碼」（唔係刪走，因為呢3條route仲有用，想保留返日後debug用）。`/api/test-deepseek-latency`、`/api/test-rotation-latency`、`/api/test-vision-ocr-latency`而家都要header `x-debug-token: hw-debug-20260927`先用得，冇password直接401。`test/no-unguarded-paid-routes.test.js`（Ticket46附帶加嘅自動check）確認轉綠。358/358測試通過，已push。
 
 - 🟨 **第47項（免費部分做咗，真OCR驗證未做）：相片壓縮改用快啲嘅filter。** 用真實3張相本地benchmark咗Photon嘅5種resize filter（免費，冇call任何AI）：而家用緊嘅`Lanczos3`每次resize要52ms左右，`Triangle`得23-34ms（快接近一倍），而且輸出檔案仲細啲（例如35.2KB vs 39.6KB）。`Nearest`最快但輸出檔案反而最大（鋸齒令JPEG壓縮率變差），唔建議。**未做嘅部分**：冇驗證過用`Triangle`會唔會影響Gemini讀字（OCR）嘅準繩度——resize快得嚟畫質糙咗，有機會令細字/手寫字模糊咗，跟返「換嘢要用真正pipeline驗證，唔淨係睇跑得快唔快」呢個規矩（Ticket 26教訓），要用真銀做幾張相嘅OCR準繩度對比先可以放心轉。真銀成本好細（3張相×2種filter×Gemini OCR≈$0.006）。等用戶話事想唔想做呢個驗證。
 

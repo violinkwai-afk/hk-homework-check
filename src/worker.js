@@ -113,31 +113,20 @@ export default {
     if (url.pathname === "/api/test-noai-check" && request.method === "POST") {
       return handleTestNoAiCheck(request, env);
     }
-    // TEMPORARY diagnostic route -- isolating why a real /api/check request's
-    // DeepSeek call reliably times out (~30s) from this Worker when the same
-    // image/prompt consistently returns in a few seconds from a plain Node
-    // script. Makes a minimal, imageless OpenRouter call and reports how
-    // long THAT alone takes, to tell apart "OpenRouter itself is slow from
-    // this Worker/colo" from "something about the image payload specifically
-    // is the problem". Remove once the real cause is found.
+    // Ticket 46 (2026-09-27): these 3 latency-diagnostic routes are KEPT
+    // (not deleted -- explicit user decision, "加密碼", not "刪走") since
+    // they're genuinely reusable tools for future infra debugging, unlike
+    // Ticket 41's one-use-then-delete temp routes. They predate the
+    // DEBUG_TOKEN discipline and were found to have NO auth at all --
+    // anyone who knew the URL could trigger real DeepSeek/Vision spend for
+    // free. Now gated by the same DEBUG_TOKEN convention (checked inside
+    // each handler, via the "x-debug-token" header).
     if (url.pathname === "/api/test-deepseek-latency" && request.method === "GET") {
-      return handleTestDeepSeekLatency(env);
+      return handleTestDeepSeekLatency(request, env);
     }
-    // TEMPORARY diagnostic route -- isolating whether detectAndCorrectRotation
-    // (Google Vision OCR + Photon, only exercised for real in this live
-    // environment, never in local Node testing) is what's slow/failing for
-    // a real ~400KB photo, separately from timing the Qwen call on the same
-    // real image with rotation-detection skipped entirely. Remove once the
-    // real cause is found.
     if (url.pathname === "/api/test-rotation-latency" && request.method === "POST") {
       return handleTestRotationLatency(request, env);
     }
-    // TEMPORARY diagnostic route -- OCR engine benchmark. Calls the existing
-    // googleOcr() (Google Cloud Vision DOCUMENT_TEXT_DETECTION, already used
-    // for rotation/bbox-refinement) directly on a real photo and reports
-    // real round-trip latency plus the raw extracted text/word count, to
-    // compare against Qwen's OCR-only latency for the same real worksheet.
-    // Remove once the benchmark is done.
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
@@ -159,7 +148,14 @@ export default {
   },
 };
 
+// Ticket 46: shared token gating the 3 kept-permanently latency-diagnostic
+// routes below (test-deepseek-latency/test-rotation-latency/
+// test-vision-ocr-latency) -- same DEBUG_TOKEN convention as Ticket 41's
+// one-use routes, checked via the "x-debug-token" header.
+const DEBUG_TOKEN = "hw-debug-20260927";
+
 async function handleTestVisionOcrLatency(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
   const visionKey = !env.GOOGLE_VISION_API_KEY ? null
     : typeof env.GOOGLE_VISION_API_KEY === "string" ? env.GOOGLE_VISION_API_KEY
     : await env.GOOGLE_VISION_API_KEY.get();
@@ -188,6 +184,7 @@ async function handleTestVisionOcrLatency(request, env) {
 }
 
 async function handleTestRotationLatency(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
     : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
     : await env.OPENROUTER_API_KEY.get();
@@ -234,7 +231,8 @@ async function handleTestRotationLatency(request, env) {
   return json(results);
 }
 
-async function handleTestDeepSeekLatency(env) {
+async function handleTestDeepSeekLatency(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
   const openrouterKey = !env.OPENROUTER_API_KEY ? null
     : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
     : await env.OPENROUTER_API_KEY.get();
