@@ -328,6 +328,8 @@
 
 - 🟨 **第46項跟進：加咗一個自動測試`test/no-unguarded-paid-routes.test.js`，會自動搵晒成個worker.js入面所有call真銀AI嘅route，check佢哋有冇保護（rate limit/DEBUG_TOKEN/webhook密碼）。** 用戶問「有冇工具可以確保呢類security風險唔再發生」，答案係：冇工具可以100%保證「全部」風險消除（呢個講法本身唔誠實），但可以將已知嗰類風險（冇保護嘅route）變做自動、持續嘅check。已經實測confirm：呢個新測試準確咁淨係flag到第46項嗰3條真係有問題嘅route，冇flag錯（例如`/api/check`本身有rate limit但淨係喺個inner function度，test識得跟埋去check，冇誤報）。**呢個測試而家會fail**——因為第46項本身仲未修，呢個係故意嘅：測試會一直紅住提醒你，直至你決定點做（加token定刪走）先會轉綠。想我而家就手修埋第46項（加DEBUG_TOKEN），令個新測試都轉綠？
 
-- 🔲 **第48項（新發現，真regression，未做）：跨頁題目偵測（`continuesFromPrevious`/`continuesToNext`）自從第32項轉用`/api/mark`之後，其實已經完全失效，唔會再自動偵測到。** 用戶問「10張相入面5張有跨頁題會點」時查到：呢兩個flag淨係`/api/check`（舊pipeline）嘅prompt先有輸出，`/api/mark`（而家網頁主要用緊嗰套）嘅回應入面完全冇呢兩個欄位。前端`restitchSplitPages`嘅觸發條件（`if(data.continuesFromPrevious)`）而家一定係false——即係成個跨頁偵測+自動合併機制，code仲喺度,但事實上而家一條都唔會觸發。真實影響：如果一條題橫跨兩張相,兩頁會各自獨立判斷,大機會兩邊都停留喺「?」需要人手覆核,唔會好似之前諗住咁自動合併判斷。**呢個係第32項轉流程帶嚟嘅真regression，之前冇明確意識到觸發條件本身都轉唔到。** 等用戶話事想幾時修（做法：喺`OCR_ONLY_PROMPT`都加返呢兩個flag嘅偵測指示,等Gemini都識報）。
+- 🟨 **第48項進行中：跨頁題目偵測已經整返好、真實部署咗，但真正嘅「觸發到會點」路徑未有真實split相試過。** 根因（第32項轉用`/api/mark`之後，呢個flag機制完全冧咗）已經修好：`OCR_ONLY_PROMPT`加咗兩個標記（`CONTINUES_FROM_PREVIOUS`/`CONTINUES_TO_NEXT`），新function`extractContinuationMarkers`負責攞返呢兩個flag同清理返OCR文字，一路傳到`handleMark`個response，網頁版嗰個觸發條件（`if(data.continuesFromPrevious)`）而家終於再有得郁。361/361測試通過，已push。
+  **真實驗證（已做）**：用返一張正常、完整（唔係split）嘅相直接call真正`/api/mark`——`continuesFromPrevious`/`continuesToNext`都啱啱好係false（冇亂報），12條item全部正確解析（同prompt改動之前一樣，冇regression）。
+  **未驗證（老實講清楚）**：手上冇一張真係「橫跨兩頁」嘅相，所以未實測過個flag喺真正split情況會唔會啱啱好報做true、跟住個stitch會唔會真係觸發到。如果你有呢類相，可以send俾我測到正嘅positive case。
 
 
