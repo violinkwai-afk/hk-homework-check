@@ -14,9 +14,9 @@
 // /api/check is public/unauthenticated -- same per-IP rate limit pattern as
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
-import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/photon/workerd";
+import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/photon/node";
 import { parseTelegramUpdate, telegramGetFile, telegramDownloadFile, telegramSendPhoto, telegramSendMessage, constantTimeEqual } from "./telegram.js";
-import { annotateImage } from "./annotate.js";
+import { annotateImage } from "./annotate_dbg4.mjs";
 
 // 2026-09-23, explicit instruction: "At the testing stage, do NOT use
 // Sonnet/Opus to solve any questions." Claude Sonnet/Opus are meaningfully
