@@ -4876,6 +4876,7 @@ async function handleMark(request, env) {
           question: item.label,
           printedQuestion: item.printedQuestion || "",
           studentAnswer: item.studentAnswer,
+          subject: verdict.subject,
         });
       }
     });
@@ -4891,8 +4892,18 @@ async function handleMark(request, env) {
   // per-call cost/timing logged below (mark_usage) alongside the
   // existing AI-fallback usage, per the same "always know cost after a
   // change" standing rule.
+  //
+  // Ticket 27 follow-up, same day: a real 7-photo test found Jev
+  // confidently marking a genuinely correct CHINESE answer (親愛的表姐 ->
+  // 表弟) as wrong -- consistent with Jev's own documented caveat
+  // ("English is the best-supported language; evaluate CJK workloads
+  // separately"). Chinese-subject items are therefore excluded from the
+  // Jev pre-check entirely (never sent to it at all) until CJK accuracy
+  // is separately validated with real data -- they fall straight through
+  // to the existing image-based fallback below, same as before Jev
+  // existed. English/math/uncertain-subject items are unaffected.
   const allPendingFlat = [];
-  pendingForAiByPage.forEach((items) => allPendingFlat.push(...items));
+  pendingForAiByPage.forEach((items) => allPendingFlat.push(...items.filter((it) => it.subject !== "chinese")));
   let jevUsageLog = null;
   if (openrouterKey && allPendingFlat.length) {
     const tJev = Date.now();
