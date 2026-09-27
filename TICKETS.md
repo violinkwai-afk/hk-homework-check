@@ -313,4 +313,7 @@
   4. Push前grep一次：`git push`之前用`grep -n "test-\|DEBUG_TOKEN"` src/worker.js 確認冇殘留。
   呢個純粹係做法上嘅紀律，未涉及即時code改動；如果想將第1點（統一dispatch前綴）做成一個可重用嘅helper function，可以而家開始做，等用戶話事。
 
+- 🔲 **第42項（進行中）：測試jev解中文數學題嘅能力。** 用戶想知jev係咪識答用中文寫嘅數學題。已加返`/api/debug/full-flow`（跟第41項新紀律：統一路徑+統一token`DEBUG_TOKEN`+直接call返production嘅`classifyAndVerify`/`callJevPreCheck`/`parseOcrLine`，冇重新抄一份邏輯）。
+  **待刪：`/api/debug/full-flow`（用完第42項呢個test就要刪走）。**
+
 
