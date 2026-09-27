@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-real-callqwenocrtext" && request.method === "POST") {
-      return handleTestRealCallQwenOcrText(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1599,7 +1596,21 @@ const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 // Ticket 25 and memory/project_ai_model_watch.md for the full real data
 // and the real failure modes found in BOTH models -- neither is
 // error-free, this is a relative-improvement call, not a "solved" one.
-const OCR_TEXT_MODEL = "google/gemini-3.1-flash-lite";
+//
+// ROLLED BACK same day (2026-09-27), Ticket 26: live verification after
+// the switch found a CONFIRMED, systematic accuracy bug specific to
+// Gemini on "blank-is-the-divisor" division questions (e.g. "54÷□=6",
+// very common in HK P2-3 math) -- Gemini collapses the printed clue and
+// the student's handwritten answer into one computed expression
+// (printedQuestion "54÷9", studentAnswer "6") instead of preserving the
+// blank (Qwen correctly keeps "54÷□=6" / studentAnswer "9"). This is the
+// exact "printed/answer swap" failure mode already flagged elsewhere in
+// this file for a different model -- it makes the deterministic checker
+// grade a CORRECT student answer as wrong. A real child could see a
+// wrong mark on correct work. Reverted to Qwen until this is specifically
+// fixed and re-verified (not just re-tested on the layouts that already
+// passed) -- see TICKETS.md Ticket 26.
+const OCR_TEXT_MODEL = PRODUCTION_OCR_MODEL;
 
 async function callQwen(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
@@ -1796,56 +1807,6 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
-  }
-}
-
-// Temporary diagnostic route (2026-09-27): a real live /api/mark call
-// against the just-deployed Gemini switch failed with a generic
-// "upstream_error" (502) -- the client-facing message never carries the
-// real detail, and wrangler tail isn't reachable from this environment
-// (no CLOUDFLARE_API_TOKEN). Calls the REAL, unmodified callQwenOcrText
-// (not a copy) and returns the caught error's real detail/status to the
-// client, to find the actual root cause of the failure before deciding
-// whether the switch needs to be rolled back. Remove after use.
-async function handleTestRealCallQwenOcrText(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images } = await request.json();
-  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
-  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
-  const startedAt = Date.now();
-  try {
-    const r = await callQwenOcrText(downscaled, openrouterKey);
-    return json({ ok: true, ms: Date.now() - startedAt, items: r.items, usage: r.usage });
-  } catch (e) {
-    // Also fetch the raw completion text directly (same model/prompt as
-    // callQwenOcrText) so a "qwen_ocr_empty" failure can be distinguished
-    // from a genuine API failure -- the thrown error only carries a
-    // detail code, not the text that failed to parse.
-    let rawText = null;
-    try {
-      const prompt = OCR_ONLY_PROMPT(downscaled.length);
-      const body = {
-        model: OCR_TEXT_MODEL,
-        max_tokens: 2000,
-        temperature: 0,
-        provider: { ignore: ["Alibaba"] },
-        messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
-      };
-      const res2 = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-rootcause" },
-        body: JSON.stringify(body),
-      });
-      const data2 = await res2.json();
-      const choice2 = data2.choices && data2.choices[0];
-      rawText = (choice2 && choice2.message && choice2.message.content) || `NO_CONTENT: status=${res2.status} finish_reason=${choice2 && choice2.finish_reason} body=${JSON.stringify(data2).slice(0, 800)}`;
-    } catch (e2) { rawText = `raw_fetch_failed: ${String(e2)}`; }
-    return json({ ok: false, ms: Date.now() - startedAt, detail: e && e.detail, status: e && e.status, uiMessage: e && e.uiMessage, raw: String(e), rawText: rawText || "EMPTY_STRING_OR_FALSY" });
   }
 }
 
