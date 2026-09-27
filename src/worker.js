@@ -155,9 +155,6 @@ export default {
     if (url.pathname === "/api/report-wrong" && request.method === "POST") {
       return handleReportWrong(request, env);
     }
-    if (url.pathname === "/api/test-raw-ocr-text" && request.method === "POST") {
-      return handleTestRawOcrText(request, env);
-    }
     return env.ASSETS.fetch(request);
   },
 };
@@ -1575,18 +1572,31 @@ function downscaleForCheapTier(img, maxDim) {
 }
 
 // Single source of truth for the production OCR/vision model -- both
-// callQwen (used by /api/check) and callQwenOcrText (used by /api/mark)
-// used to hardcode this string independently (flagged 2026-09-22 in
-// [[project_hk_homework_check_code_notes]], never acted on until now,
-// per the user's 2026-09-25 request that a future model swap be easy).
-// A swap now only means changing this one line. (2026-09-25 real-data
-// comparison against 3 candidates -- Claude Haiku 4.5, Gemini 3.7 Flash,
-// Qwen3.6-flash -- concluded this baseline stays: all 3 candidates were
-// both less accurate on real worksheet photos AND more expensive, one
-// (Qwen3.6-flash) was effectively unusable, a reasoning model that burns
-// its token budget "thinking" before ever producing OCR output. See
-// benchmark/ or ask for the numbers if this needs re-litigating later.)
+// callQwen (used by /api/check's legacy pipeline AND Ticket 13's
+// AI-fallback JUDGE, callAiFallbackJudge) and callQwenOcrText (the pure
+// OCR-transcription step used by /api/mark) used to share one hardcoded
+// model string (flagged 2026-09-22, unified 2026-09-25 for easy swapping).
+// Ticket 25 (2026-09-27) SPLIT them back into two constants on purpose:
+// every real comparison this session (Tickets 23/24/25) only ever tested
+// Gemini 3.1 Flash Lite on the OCR-transcription task, never on the
+// JUDGMENT task callQwen also serves (deciding correct/incorrect from a
+// cropped image + question context) -- that's a different capability,
+// untested, and this project's 100%-accuracy-floor rule means an
+// untested swap doesn't ride along just because the code used to share
+// one line. So: OCR_TEXT_MODEL (below) is now Gemini, used only by
+// callQwenOcrText; PRODUCTION_OCR_MODEL stays Qwen, still used by
+// callQwen for /api/check and the AI-fallback judge.
 const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
+// Ticket 25 (2026-09-27): switched from PRODUCTION_OCR_MODEL to Gemini
+// 3.1 Flash Lite for the OCR-transcription step specifically, after two
+// rounds of real comparison (Tickets 23/24, 3+10 photos; Ticket 25, 6
+// user-curated photos) showed Gemini clearly more accurate on complex
+// layouts (word banks, multi-blank letters, embedded passages) where
+// Qwen repeatedly broke down, and consistently faster. See TICKETS.md
+// Ticket 25 and memory/project_ai_model_watch.md for the full real data
+// and the real failure modes found in BOTH models -- neither is
+// error-free, this is a relative-improvement call, not a "solved" one.
+const OCR_TEXT_MODEL = "google/gemini-3.1-flash-lite";
 
 async function callQwen(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
@@ -1642,7 +1652,7 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 如果呢張相根本唔似一份實體功課/練習卷——例如係手機或電腦嘅screenshot（有瀏覽器工具列、App介面、滑鼠標、按鈕、hyperlink）——就當呢頁冇任何題目，回覆空結果，唔好老作內容出嚟砌題目。但一張乾淨嘅掃描相（冇反光、冇陰影、冇摺痕）都算正常嘅功課相，唔好單純因為冇呢啲影相特徵就當佢唔係真嘅功課。
 
-呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。「|」呢個符號每一題一定要有、一定唔可以漏——尤其係長除法（例如5)40呢種直式）或者一題有幾個sub-answer嘅情況，都要跟返「題號=印刷題目|答案」呢個format，唔好淨係將啲數字答案接住上一題冧埋一齊列。例如：
+呢張相有${pageCount}頁。每一題回覆「題號=印刷題目文字|學生手寫答案」，用逗號分隔唔同題。題號跟返張相印刷嘅題號/標籤，搵唔到印刷編號就用簡短描述代替（例如題目嘅前幾個字）。如果一條題目入面學生寫咗多過一個答案（例如兩條算式），呢啲sub-answer之間用分號";"分隔，唔好用逗號（逗號淨係用嚟分隔唔同題目）。「|」呢個符號每一題一定要有、一定唔可以漏——尤其係長除法（例如5)40呢種直式）或者一題有幾個sub-answer嘅情況，都要跟返「題號=印刷題目|答案」呢個format，唔好淨係將啲數字答案接住上一題冧埋一齊列。題號一定要用普通阿拉伯數字或者張相原本印刷嘅英文/中文字母（例如1、2、3或者A、B、三、四），絕對唔可以用①②③呢種圈住嘅數字符號做題號，就算張相本身印刷咗圈裝數字，都要轉返做普通數字嚟做題號。例如：
 1=4+6|6+4=10,2=2+5|5+2=7,9=make two sums|6+9=15;5+8=13
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1661,12 +1671,11 @@ async function callQwenOcrText(images, openrouterKey) {
     // layouts, and a confirmed false positive on "blank-in-the-middle"
     // division questions where the model restructures which value
     // counts as "printed" vs "answer" -- see test/mark.test.js's
-    // "printed/answer swap" regression test). 235B remains the most
-    // reliable model for this task; latency is being addressed by
-    // other means (downscale, already applied; see the ongoing
-    // latency-audit findings in memory/commit history) rather than by
-    // continuing to swap models.
-    model: PRODUCTION_OCR_MODEL,
+    // "printed/answer swap" regression test). 235B was the most
+    // reliable model for this task at the time, before Gemini 3.1 Flash
+    // Lite was tried -- latency was addressed by other means (downscale,
+    // already applied) rather than by swapping models, until Ticket 25.
+    model: OCR_TEXT_MODEL,
     // 2026-09-22 latency audit #1 result: provider:{sort:"latency"} was
     // tried and rejected -- real benchmark showed it made every case
     // SLOWER (not faster) and one case notably LESS accurate (matching
@@ -1782,56 +1791,6 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     } catch (e2) {
       return null;
     }
-  }
-}
-
-// Temporary diagnostic route (real user request, 2026-09-27): the user
-// noticed a real gap -- when a comparison call returns 0 parsed items
-// (e.g. Gemini on the math-division photo), that ISN'T the same as "the
-// model read nothing" -- it means the model's raw text reply didn't
-// match the expected "label=printed|answer" format, so parseOcrLine
-// extracted nothing from it. Returns the model's raw, unparsed text
-// (plus the parsed items for comparison) so a 0-item result can be
-// distinguished from a genuinely empty model reply. Single-image, single-
-// model only -- narrower than the removed comparison route since this is
-// just closing that one gap. Same token gate. Remove after use.
-async function handleTestRawOcrText(request, env) {
-  const token = request.headers.get("x-compare-token");
-  if (token !== "hw-ocr-cmp-20260925") return json({ error: "unauthorized" }, 401);
-  const openrouterKey = env.OPENROUTER_API_KEY && typeof env.OPENROUTER_API_KEY.get === "function"
-    ? await env.OPENROUTER_API_KEY.get()
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { images, model } = await request.json();
-  if (!Array.isArray(images) || images.length !== 1) return json({ error: "exactly_one_image_required" }, 400);
-  const allowed = [PRODUCTION_OCR_MODEL, "google/gemini-3.1-flash-lite"];
-  const useModel = model || PRODUCTION_OCR_MODEL;
-  if (!allowed.includes(useModel)) return json({ error: "model_not_allowed", allowed }, 400);
-  const downscaled = images.map((img) => downscaleForCheapTier(img, 640));
-  const prompt = OCR_ONLY_PROMPT(downscaled.length);
-  const body = {
-    model: useModel,
-    max_tokens: 2000,
-    temperature: 0,
-    provider: { ignore: ["Alibaba"] },
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...downscaled.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` } }))] }],
-  };
-  const startedAt = Date.now();
-  try {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check-raw-ocr-text-test" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return json({ ok: false, error: `http_${res.status}: ${(await res.text()).slice(0, 300)}` });
-    const data = await res.json();
-    const choice = data.choices && data.choices[0];
-    const rawText = (choice && choice.message && choice.message.content) || "";
-    const items = parseOcrLine(rawText);
-    return json({ ok: true, model: useModel, ms: Date.now() - startedAt, rawText, items, usage: data.usage || null, finishReason: choice && choice.finish_reason });
-  } catch (e) {
-    return json({ ok: false, ms: Date.now() - startedAt, error: String((e && e.message) || e) });
   }
 }
 
