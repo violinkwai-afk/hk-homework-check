@@ -2535,3 +2535,103 @@ test("chained_vertical_arithmetic handler: registered and reachable", async () =
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 141 (2026-09-28 REGRESSION, real citation: "列出34的所有因數。
+// (全對才給分)" -> {1,2,17,34}): confirms the EXISTING verifyListFactors
+// already solves this, no new code needed.
+test("verifyListFactors: real citation (list all factors of 34)", async () => {
+  const worker = await import(TMP);
+  const printed = "列出34的所有因數。(全對才給分)";
+  assert.equal(worker.verifyListFactors(printed, "1,2,17,34").correct, true);
+  assert.equal(worker.verifyListFactors(printed, "1,2,17,34,7,4").correct, false, "7 and 4 are not real factors of 34");
+});
+
+// Ticket 159 (2026-09-28 REGRESSION, real citation: "用四捨五入法把
+// 1584湊整至百位" -> 1600): confirms the EXISTING
+// verifyRoundToNearestHundred already solves this per-item shape.
+test("verifyRoundToNearestHundred: real citation numbers from the rounding table", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyRoundToNearestHundred("用四捨五入法把1584湊整至百位", "1600").correct, true);
+  assert.equal(worker.verifyRoundToNearestHundred("用四捨五入法把1733湊整至百位", "1700").correct, true);
+  assert.equal(worker.verifyRoundToNearestHundred("用四捨五入法把1930湊整至百位", "1900").correct, true);
+});
+
+// Ticket 143 (real citation): composite min-factor-count.
+test("verifyMinFactorsOfComposite: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyMinFactorsOfComposite("一個合成數最少有多少個因數？", "3");
+  assert.equal(r.correct, true);
+  assert.equal(worker.verifyMinFactorsOfComposite("一個合成數最少有多少個因數？", "4").correct, false);
+});
+test("min_factors_of_composite handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "min_factors_of_composite"));
+});
+
+// Ticket 144 (real citation): largest-factor-implies-number.
+test("verifyLargestFactorImpliesNumber: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyLargestFactorImpliesNumber("某數的最大因數是28，某數共有多少個因數？", "6");
+  assert.equal(r.correct, true, "factors of 28: 1,2,4,7,14,28 = 6");
+});
+test("largest_factor_implies_number handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "largest_factor_implies_number"));
+});
+
+// Ticket 148 (real citation): common factors count.
+test("verifyCommonFactorsCount: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCommonFactorsCount("20和32共有多少個公因數？", "3");
+  assert.equal(r.correct, true, "common factors of 20,32: 1,2,4 = 3");
+});
+test("common_factors_count handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "common_factors_count"));
+});
+
+// Ticket 150 (real citation): min-add-to-prime.
+test("verifyMinAddToPrime: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyMinAddToPrime("63最少要加上多少，才是一個質數？", "4");
+  assert.equal(r.correct, true, "63+4=67 is prime");
+});
+test("min_add_to_prime handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "min_add_to_prime"));
+});
+
+// Ticket 152 (real citation): factor/multiple definition MC.
+test("verifyFactorMultipleDefinitionMC: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "以下哪一句句子是正確的？A.1是26的倍數 B.13是26的倍數 C.26是26的因數 D.26是2的因數";
+  assert.equal(worker.verifyFactorMultipleDefinitionMC(printed, "C").correct, true);
+  assert.equal(worker.verifyFactorMultipleDefinitionMC(printed, "A").correct, false);
+});
+test("factor_multiple_definition_mc handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "factor_multiple_definition_mc"));
+});
+
+// Ticket 174 (real citation): price decimal split.
+test("verifyPriceDecimalSplit: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyPriceDecimalSplit("$3.80 -> ___ dollars and ___ cents", "3;80");
+  assert.equal(r.correct, true);
+});
+test("price_decimal_split handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "price_decimal_split"));
+});
+
+// Ticket 175 (real citation): price list max-min difference.
+test("verifyPriceListMaxMinDifference: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "$47.00/$51.00/$63.00/$48.00 difference between most expensive and cheapest = A. 15 dollars B. 16 dollars C. 17 dollars";
+  const r = worker.verifyPriceListMaxMinDifference(printed, "B");
+  assert.equal(r.correct, true);
+});
+test("price_list_max_min_difference handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "price_list_max_min_difference"));
+});

@@ -5649,6 +5649,144 @@ function verifyReverseFactorSum(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Ticket 143 (2026-09-28, real citation: "一個合成數最少有多少個因數？"
+// -> 3, since a composite number's factors always include 1, itself, and
+// at least one more): static-fact constant check, no arithmetic at all.
+function verifyMinFactorsOfComposite(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/合成數.{0,6}最少.{0,6}因數|composite.{0,10}(?:least|minimum|fewest).{0,10}factors/i.test(printed)) {
+    return { correct: null, correctAnswer: "" };
+  }
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = studentNum === 3;
+  return { correct, correctAnswer: correct ? "" : "3" };
+}
+
+// Ticket 144 (2026-09-28, real citation: "某數的最大因數是28，某數共有
+// 多少個因數？" -> 6): a number's own largest factor is ALWAYS itself, so
+// "the largest factor is 28" directly means the number IS 28 -- then
+// just count 28's own factors.
+function verifyLargestFactorImpliesNumber(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/最大因數是\s*(\d+)[\s\S]*?共有多少個因數/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1]);
+  let count = 0;
+  for (let i = 1; i <= n; i++) if (n % i === 0) count++;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
+}
+
+// Ticket 148 (2026-09-28, real citation: "20和32共有多少個公因數？" -> 3):
+// count of common factors between two numbers.
+function verifyCommonFactorsCount(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)和(\d+)共有多少個公因數/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const a = Number(m[1]), b = Number(m[2]);
+  const smaller = Math.min(a, b);
+  let count = 0;
+  for (let i = 1; i <= smaller; i++) if (a % i === 0 && b % i === 0) count++;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
+}
+
+// Ticket 150 (2026-09-28, real citation: "63最少要加上多少，才是一個
+// 質數？" -> 4, since 63+4=67 is prime): minimum addition to reach the
+// next prime.
+function isPrimeNumber(n) {
+  if (n < 2) return false;
+  for (let i = 2; i * i <= n; i++) if (n % i === 0) return false;
+  return true;
+}
+function verifyMinAddToPrime(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)最少要加上多少.{0,6}(?:才是|先係).{0,3}質數/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1]);
+  let add = 0;
+  while (!isPrimeNumber(n + add)) add++;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === add, correctAnswer: studentNum === add ? "" : String(add) };
+}
+
+// Ticket 152 (2026-09-28, real citation: "以下哪一句句子是正確的？
+// A.1是26的倍數 B.13是26的倍數 C.26是26的因數 D.26是2的因數" -> C):
+// evaluates each MC option as a small "X是Y的倍數/因數" true/false
+// statement, finds the unique true one.
+function verifyFactorMultipleDefinitionMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const evalStatement = (text) => {
+    let m = text.match(/(\d+)是(\d+)的倍數/);
+    if (m) return Number(m[1]) % Number(m[2]) === 0;
+    m = text.match(/(\d+)是(\d+)的因數/);
+    if (m) return Number(m[2]) % Number(m[1]) === 0;
+    return null;
+  };
+  const evaluated = options.map((o) => ({ ...o, isTrue: evalStatement(o.text) }));
+  if (evaluated.some((o) => o.isTrue === null)) return { correct: null, correctAnswer: "" };
+  const trueOnes = evaluated.filter((o) => o.isTrue);
+  if (trueOnes.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = trueOnes[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Ticket 174 (2026-09-28, real citation: "$3.80 → 3 dollars and 80
+// cents"): decimal price split into dollars+cents.
+function verifyPriceDecimalSplit(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/dollars? and .{0,10}cents?/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/\$(\d+)\.(\d{2})/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const dollars = Number(m[1]), cents = Number(m[2]);
+  const nums = (answer.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const correct = nums[0] === dollars && nums[1] === cents;
+  return { correct, correctAnswer: correct ? "" : `${dollars};${cents}` };
+}
+
+// Ticket 175 (2026-09-28, real citation: "$47.00/$51.00/$63.00/$48.00 →
+// difference between most expensive and cheapest = B 16 dollars"):
+// max-min difference over a printed price list.
+function verifyPriceListMaxMinDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/most expensive.{0,15}cheapest|cheapest.{0,15}most expensive/i.test(printed)) {
+    return { correct: null, correctAnswer: "" };
+  }
+  const prices = [...printed.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+  if (prices.length < 2) return { correct: null, correctAnswer: "" };
+  const expected = Math.max(...prices) - Math.min(...prices);
+  const options = parseMcOptions(printed);
+  if (options.length >= 2) {
+    const matching = options.filter((o) => o.text.includes(String(expected)));
+    if (matching.length === 1) {
+      const correct = answer === matching[0].letter;
+      return { correct, correctAnswer: correct ? "" : matching[0].letter };
+    }
+  }
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // =======================================================================
 // Question-type registry (2026-09-22) -- built specifically so a future
 // question type is added by inserting ONE new entry, never by editing an
@@ -6548,6 +6686,54 @@ const QUESTION_TYPE_HANDLERS = [
     name: "list_factors",
     detect: (item) => /(?:寫出|列出)\s*\d+\s*(?:嘅|的)所有因數|list all (?:the )?factors of\s*\d+/i.test(String(item.printedQuestion || "")),
     verify: (item) => verifyListFactors(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 143 (2026-09-28): composite-number min-factor-count static fact.
+    name: "min_factors_of_composite",
+    detect: (item) => /合成數.{0,6}最少.{0,6}因數|composite.{0,10}(?:least|minimum|fewest).{0,10}factors/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyMinFactorsOfComposite(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 144 (2026-09-28): "largest factor is N" implies the number is N.
+    name: "largest_factor_implies_number",
+    detect: (item) => /最大因數是\s*\d+[\s\S]*?共有多少個因數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyLargestFactorImpliesNumber(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 148 (2026-09-28): common-factor count between two numbers.
+    name: "common_factors_count",
+    detect: (item) => /\d+和\d+共有多少個公因數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCommonFactorsCount(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 150 (2026-09-28): minimum addition to reach the next prime.
+    name: "min_add_to_prime",
+    detect: (item) => /\d+最少要加上多少.{0,6}(?:才是|先係).{0,3}質數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyMinAddToPrime(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 152 (2026-09-28): factor/multiple definition true/false MC.
+    name: "factor_multiple_definition_mc",
+    detect: (item) => {
+      const options = parseMcOptions(String(item.printedQuestion || ""));
+      return options.length >= 2 && options.every((o) => /\d+是\d+的(?:倍數|因數)/.test(o.text));
+    },
+    verify: (item) => verifyFactorMultipleDefinitionMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 174 (2026-09-28): decimal price -> dollars+cents split.
+    name: "price_decimal_split",
+    detect: (item) => /\$\d+\.\d{2}/.test(String(item.printedQuestion || "")) && /dollars? and .{0,10}cents?/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyPriceDecimalSplit(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 175 (2026-09-28): max-min difference over a printed price list.
+    name: "price_list_max_min_difference",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return (printed.match(/\$\d+(?:\.\d+)?/g) || []).length >= 2 && /most expensive.{0,15}cheapest|cheapest.{0,15}most expensive/i.test(printed);
+    },
+    verify: (item) => verifyPriceListMaxMinDifference(item.printedQuestion, item.studentAnswer),
   },
   {
     name: "count_primes_below",
@@ -8125,6 +8311,13 @@ export {
   verifyDurationSumWordProblem,
   verifyTwoStageAffordabilityChain,
   verifyChainedVerticalArithmetic,
+  verifyMinFactorsOfComposite,
+  verifyLargestFactorImpliesNumber,
+  verifyCommonFactorsCount,
+  verifyMinAddToPrime,
+  verifyFactorMultipleDefinitionMC,
+  verifyPriceDecimalSplit,
+  verifyPriceListMaxMinDifference,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,
