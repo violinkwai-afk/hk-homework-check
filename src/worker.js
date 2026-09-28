@@ -130,6 +130,17 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // TEMPORARY debug route (2026-09-28) -- one-use, calls the real Jev
+    // decisions endpoint the same way callJevPreCheck does (same
+    // buildJevQuestions shape) but returns the RAW noul confidence score
+    // per item instead of the post-threshold true/false/null verdict --
+    // callJevPreCheck itself discards the raw score once it applies
+    // JEV_CONFIDENT_CORRECT/JEV_CONFIDENT_WRONG, so this is a separate,
+    // isolated diagnostic rather than a change to production code.
+    // Remove after this is done, same convention as Ticket 41's routes.
+    if (url.pathname === "/api/test-jev-raw-scores" && request.method === "POST") {
+      return handleTestJevRawScores(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -209,6 +220,34 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
+}
+
+// TEMPORARY (2026-09-28) -- see the route registration's own comment.
+async function handleTestJevRawScores(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { items } = await request.json();
+  const body = {
+    model: JEV_MODEL,
+    state: "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。",
+    questions: buildJevQuestions(items),
+  };
+  const res = await fetch("https://openrouter.ai/api/alpha/decisions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return json({ error: "jev_http_" + res.status, detail: await res.text() }, 502);
+  const data = await res.json();
+  const answers = data.answers || {};
+  const results = items.map((it) => ({
+    resultIndex: it.resultIndex,
+    noul: answers[String(it.resultIndex)] ? answers[String(it.resultIndex)].noul : null,
+  }));
+  return json({ results });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
