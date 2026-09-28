@@ -2635,3 +2635,88 @@ test("price_list_max_min_difference handler registered", async () => {
   const worker = await import(TMP);
   assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "price_list_max_min_difference"));
 });
+
+// Ticket 169 (real citations, closes a 3x-confirmed gap): select-two-
+// numbers-sum-target now validates the operands actually came from the
+// printed candidate set.
+test("verifySelectTwoNumbersSumTargetFromText: real citations", async () => {
+  const worker = await import(TMP);
+  const r1 = worker.verifySelectTwoNumbersSumTargetFromText("6 [ ] 9 [ ] 4 → __+__=10", "6+4");
+  assert.equal(r1.correct, true);
+  const r2 = worker.verifySelectTwoNumbersSumTargetFromText("6 [ ] 5 [ ] 12 → __+__=18", "6+12");
+  assert.equal(r2.correct, true);
+  const bad = worker.verifySelectTwoNumbersSumTargetFromText("6 [ ] 9 [ ] 4 → __+__=10", "3+7");
+  assert.equal(bad.correct, false, "3 and 7 are not from the given card set {6,9,4}, even though 3+7=10");
+});
+test("select_two_numbers_sum_target_from_text handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "select_two_numbers_sum_target_from_text"));
+});
+
+// Ticket 142 (real citation).
+test("verifyFirstNMultiples: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyFirstNMultiples("列出11的最初三個倍數。(全對才給分)", "11,22,33");
+  assert.equal(r.correct, true);
+});
+test("first_n_multiples handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "first_n_multiples"));
+});
+
+// Ticket 145 (real citation).
+test("verifyReverseBaseFromMultipleDifference: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyReverseBaseFromMultipleDifference("某數的第8個和第10個倍數相差14，求某數。", "7");
+  assert.equal(r.correct, true);
+});
+test("reverse_base_from_multiple_difference handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "reverse_base_from_multiple_difference"));
+});
+
+// Ticket 146 (real citation).
+test("verifyMissingFactorInOrderedList: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyMissingFactorInOrderedList("70的所有因數是1、2、☆、7、10、14、35和70，☆代表的數是甚麼？", "5");
+  assert.equal(r.correct, true);
+});
+test("missing_factor_in_ordered_list handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "missing_factor_in_ordered_list"));
+});
+
+// Ticket 147 (real citation).
+test("verifyDualConstraintNumberFilter: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "他的球衣上的數字是5的倍數，又是40的因數 A.15 B.10 C.4 D.12";
+  const r = worker.verifyDualConstraintNumberFilter(printed, "B");
+  assert.equal(r.correct, true);
+});
+test("dual_constraint_number_filter handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "dual_constraint_number_filter"));
+});
+
+// Ticket 149 (real citation).
+test("verifyNthCommonMultiple: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyNthCommonMultiple("4和10的第一個公倍數是20，第三個公倍數是甚麼？", "60");
+  assert.equal(r.correct, true);
+});
+test("nth_common_multiple handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "nth_common_multiple"));
+});
+
+// Ticket 151 (real citation).
+test("verifyCoprimeProductEqualsLcmMC: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "以下哪一組數的積就是它們的L.C.M.? A.9,12 B.10,15 C.9,16 D.18,36";
+  const r = worker.verifyCoprimeProductEqualsLcmMC(printed, "C");
+  assert.equal(r.correct, true);
+});
+test("coprime_product_equals_lcm_mc handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "coprime_product_equals_lcm_mc"));
+});

@@ -5186,6 +5186,147 @@ function verifySelectTwoNumbersSumTarget(candidateNums, target, studentAnswer) {
 // list, matching the real "全對才給分" (all-or-nothing) grading note
 // found alongside this type in the source paper -- listing the right
 // numbers in any order is correct, a missing or extra factor is not.
+// Ticket 169 (2026-09-28, real citations: "6 [ ] 9 [ ] 4 → __+__=10" and
+// "6 [ ] 5 [ ] 12 → __+__=18"): closes a real, 3-times-confirmed gap in
+// verifySelectTwoNumbersSumTarget (documented above) -- that function
+// already validates the student's two numbers came from the real
+// candidate set when GIVEN one, but was never wired to extract that set
+// from printed text because no real OCR-observable format had been seen
+// before. These two citations show the actual real shape: 3 numbers
+// separated by blank-card markers, followed by an explicit
+// "__+__=target" template -- parseable directly.
+function verifySelectTwoNumbersSumTargetFromText(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const m = printed.match(/(\d+)[^\d+\-=]+(\d+)[^\d+\-=]+(\d+)[^\d]*?_+\s*\+\s*_+\s*=\s*(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const candidates = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const target = Number(m[4]);
+  return verifySelectTwoNumbersSumTarget(candidates, target, studentAnswer);
+}
+
+// Ticket 142 (2026-09-28, real citation: "列出11的最初三個倍數。
+// (全對才給分)" -> 11,22,33): first-N-multiples list, same all-or-
+// nothing set-comparison discipline as verifyListFactors.
+function verifyFirstNMultiples(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/列出(\d+)的最初(\d+|[一二三四五六七八九十]+)個倍數/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1]);
+  const count = /^\d+$/.test(m[2]) ? Number(m[2]) : chineseNumeralToArabicSmall(m[2]);
+  if (!count) return { correct: null, correctAnswer: "" };
+  const expected = Array.from({ length: count }, (_, i) => n * (i + 1));
+  const studentNums = (answer.match(/\d+/g) || []).map(Number);
+  const correct = studentNums.length === expected.length && studentNums.every((v, i) => v === expected[i]);
+  return { correct, correctAnswer: correct ? "" : expected.join(", ") };
+}
+
+// Ticket 145 (2026-09-28, real citation: "某數的第8個和第10個倍數相差
+// 14，求某數。" -> 7): reverses the difference-between-two-multiples
+// relationship to solve for the base number itself.
+function verifyReverseBaseFromMultipleDifference(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/第(\d+)個和第(\d+)個倍數相差(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const gap = Math.abs(Number(m[2]) - Number(m[1]));
+  const diff = Number(m[3]);
+  if (!gap || diff % gap !== 0) return { correct: null, correctAnswer: "" };
+  const expected = diff / gap;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 146 (2026-09-28, real citation: "70的所有因數是1、2、☆、7、
+// 10、14、35和70，☆代表的數是甚麼？" -> 5): missing factor in an
+// otherwise-complete ordered factor list.
+function verifyMissingFactorInOrderedList(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)的所有因數是([\d、和☆]+)/);
+  if (!m || !m[2].includes("☆")) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1]);
+  const listed = m[2].replace(/和/g, "、").split("、").filter(Boolean);
+  const factors = [];
+  for (let i = 1; i <= n; i++) if (n % i === 0) factors.push(i);
+  if (listed.length !== factors.length) return { correct: null, correctAnswer: "" };
+  const idx = listed.indexOf("☆");
+  const expected = factors[idx];
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 147 (2026-09-28, real citation: "他的球衣上的數字是5的倍數，
+// 又是40的因數" MC options {15,10,4,12} -> 10): dual-constraint (is a
+// multiple of X AND a factor of Y) filter over MC options.
+function verifyDualConstraintNumberFilter(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/是(\d+)的倍數.{0,6}又是(\d+)的因數/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [mult, fact] = [Number(m[1]), Number(m[2])];
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const candidates = options.filter((o) => {
+    const n = Number(o.text.trim());
+    return Number.isFinite(n) && n % mult === 0 && fact % n === 0;
+  });
+  if (candidates.length !== 1) return { correct: null, correctAnswer: "" };
+  const correct = answer === candidates[0].letter;
+  return { correct, correctAnswer: correct ? "" : candidates[0].letter };
+}
+
+// Ticket 149 (2026-09-28, real citation: "4和10的第一個公倍數是20，
+// 第三個公倍數是甚麼？" -> 60): Nth common multiple, forward direction
+// (multiply the given 1st common multiple, which is always the LCM, by N).
+function verifyNthCommonMultiple(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/第一個公倍數是(\d+)[\s\S]{0,10}第(\d+|[一二三四五六七八九十]+)個公倍數是甚麼/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const lcm = Number(m[1]);
+  const n = /^\d+$/.test(m[2]) ? Number(m[2]) : chineseNumeralToArabicSmall(m[2]);
+  if (!n) return { correct: null, correctAnswer: "" };
+  const expected = lcm * n;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 151 (2026-09-28, real citation: "以下哪一組數的積就是它們的
+// L.C.M.?" options 9·12/10·15/9·16/18·36 -> C(9,16), since LCM(a,b)=a×b
+// iff a,b are coprime): evaluates each MC option's coprimality.
+function gcdOfTwo(a, b) { while (b) { [a, b] = [b, a % b]; } return a; }
+function verifyCoprimeProductEqualsLcmMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/L\.C\.M\.|LCM/i.test(printed)) return { correct: null, correctAnswer: "" };
+  // "L.C.M." itself contains a "C." substring that parseMcOptions'
+  // generic [A-D][.．] regex misreads as a spurious leading option C
+  // (found via a real test failure) -- strip the term's periods before
+  // parsing options, since this function no longer needs the literal
+  // text once the trigger check above has already run.
+  const options = parseMcOptions(printed.replace(/L\.C\.M\./gi, "LCM"));
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const evaluated = options.map((o) => {
+    const m = o.text.match(/(\d+)\D+(\d+)/);
+    return m ? { ...o, isCoprime: gcdOfTwo(Number(m[1]), Number(m[2])) === 1 } : { ...o, isCoprime: null };
+  });
+  if (evaluated.some((o) => o.isCoprime === null)) return { correct: null, correctAnswer: "" };
+  const trueOnes = evaluated.filter((o) => o.isCoprime);
+  if (trueOnes.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = trueOnes[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 function verifyListFactors(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -6686,6 +6827,50 @@ const QUESTION_TYPE_HANDLERS = [
     name: "list_factors",
     detect: (item) => /(?:寫出|列出)\s*\d+\s*(?:嘅|的)所有因數|list all (?:the )?factors of\s*\d+/i.test(String(item.printedQuestion || "")),
     verify: (item) => verifyListFactors(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 169 (2026-09-28): closes a 3x-confirmed real gap -- extracts
+    // the candidate number set from printed text before delegating to the
+    // already-written-but-never-wired verifySelectTwoNumbersSumTarget.
+    name: "select_two_numbers_sum_target_from_text",
+    detect: (item) => /(\d+)[^\d+\-=]+(\d+)[^\d+\-=]+(\d+)[^\d]*?_+\s*\+\s*_+\s*=\s*(\d+)/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySelectTwoNumbersSumTargetFromText(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 142 (2026-09-28): first-N-multiples list.
+    name: "first_n_multiples",
+    detect: (item) => /列出\d+的最初(?:\d+|[一二三四五六七八九十]+)個倍數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyFirstNMultiples(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 145 (2026-09-28): reverse-solve base from multiple-difference.
+    name: "reverse_base_from_multiple_difference",
+    detect: (item) => /第\d+個和第\d+個倍數相差\d+/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyReverseBaseFromMultipleDifference(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 146 (2026-09-28): missing factor in an ordered factor list.
+    name: "missing_factor_in_ordered_list",
+    detect: (item) => /\d+的所有因數是[\d、和☆]*☆/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyMissingFactorInOrderedList(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 147 (2026-09-28): dual-constraint (multiple+factor) MC filter.
+    name: "dual_constraint_number_filter",
+    detect: (item) => /是\d+的倍數.{0,6}又是\d+的因數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDualConstraintNumberFilter(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 149 (2026-09-28): Nth common multiple, forward direction.
+    name: "nth_common_multiple",
+    detect: (item) => /第一個公倍數是\d+[\s\S]{0,10}第(?:\d+|[一二三四五六七八九十]+)個公倍數是甚麼/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyNthCommonMultiple(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 151 (2026-09-28): coprime-product-equals-LCM MC.
+    name: "coprime_product_equals_lcm_mc",
+    detect: (item) => /L\.C\.M\.|LCM/i.test(String(item.printedQuestion || "")) && parseMcOptions(String(item.printedQuestion || "")).length >= 2,
+    verify: (item) => verifyCoprimeProductEqualsLcmMC(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 143 (2026-09-28): composite-number min-factor-count static fact.
@@ -8318,6 +8503,13 @@ export {
   verifyFactorMultipleDefinitionMC,
   verifyPriceDecimalSplit,
   verifyPriceListMaxMinDifference,
+  verifySelectTwoNumbersSumTargetFromText,
+  verifyFirstNMultiples,
+  verifyReverseBaseFromMultipleDifference,
+  verifyMissingFactorInOrderedList,
+  verifyDualConstraintNumberFilter,
+  verifyNthCommonMultiple,
+  verifyCoprimeProductEqualsLcmMC,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,
