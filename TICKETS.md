@@ -400,4 +400,10 @@
 - ✅ **第62項完成：跟用戶自己嘅諗法——硬幣插圖其實通常自己印咗面額數字，教AI直接讀嗰個數字，唔好淨係靠形狀/顏色估。** 查返本project之前做過嘅PDF survey（`question-type-library.md`），真係搵到confirm：「Coin denomination recognition... '$5' coin drawn with small print」——即係用戶個判斷啱,呢個真係一個讀字問題,唔係圖案分類問題。已經加返一句具體指示「搵嗰個印刷嘅數字直接讀」，同第57項嘅參考資料共存（讀唔到先靠參考資料估）。
   1個新測試,419/419測試通過，已push、已deploy。
 
+- ✅ **第63項完成：跟用戶明確指示「Pls use the method for clock in the production for now」——將第58項嘅鐘面讀時間prototype正式接入生產環境。** 加咗新嘅`clock_reading` `verifyVisual` handler（喺`math_equation`萬用handler之前）：`detect()`要同時見到「clock/時鐘/鐘面/What time」關鍵字**同埋**學生答案要係一個可以解讀嘅時間格式（「4:15」「4.15pm」「7 o'clock」「7時」），特登排除咗「畫出時針分針」呢類作圖題（out of scope）。
+  **測試期間（用返已有嘅3張合成測試相：3:40、7:05、11:50）自己捉到一個真bug**：11:50嗰個case讀出嚟係null（唔敢答），同之前Python prototype驗證過嘅結果唔一致。查到原因：個計算用咗`Math.floor`,但量度出嚟嘅角度會有零點幾度嘅誤差,啱啱好落喺11.0望落係10.977咁,`floor`會錯誤咁quat落10,應該用`Math.round`先啱。改咗之後3個合成測試全部啱返。**呢個係一個真實例子,證明咗用戶嗰條「一定要用真實例子驗證」嘅規矩係啱嘅**——如果冇跟呢個11:50嘅測試,呢個bug會直接帶落生產環境。
+  已將3張合成測試相+1張真實課本相（p.56）存做`test/fixtures/clocks/`永久測試資料,寫咗9個新測試（`test/clock-reading.test.js`，包括3張合成相個別驗證、錯答案偵測、fail-open on壞相/壞答案、真實相嘅自洽性檢查、handler `detect()`嘅正確性）。
+  428/428測試通過，已push、已deploy。
+  **老實講清楚未驗證嘅部分**：跟返第58項舊有更嚴謹嘅research標準（7張唔同真實鐘面相、零容忍判錯），今次淨係有1張真實相（自洽,冇獨立答案key confirm），未達到嗰個標準。但係跟返「fail-open,只會加分唔會扣分」呢個設計——判斷唔到就同而家一樣跌落AI覆核,唔會有回歸——所以先照用戶指示而家就用落生產。**跟進**：如果之後可以搵到更多真實鐘面相（尤其係唔同款式/角度嘅），應該繼續用嚟驗證,擴闊呢個方法嘅可信範圍。
+
 

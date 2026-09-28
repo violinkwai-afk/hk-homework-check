@@ -4449,6 +4449,205 @@ function verifyReverseFactorSum(printedQuestion, studentAnswer) {
 // clauses, or a price table) -- wiring those in needs an OCR-prompt/
 // pipeline change first, not just a registry entry, and is deliberately
 // left out rather than forced with guessed/absent data.
+// Ticket 63 (2026-09-27): analog clock-hand reading, Photon-based.
+// Real history this session: an earlier, more rigorous OpenCV-based
+// attempt (see benchmark/question-type-library.md) tested against 7
+// diverse real clock images with a strict zero-confidently-wrong bar,
+// and only cleared it at 2/6 real coverage (33%) even after adding a
+// hand-length signal and a hour/minute angle-consistency residual
+// check -- concluding "NOT currently trustworthy enough to build for
+// real, stay on AI". That work also found Photon has NO true Hough-
+// line-transform (only 4 fixed-angle line detectors), so that specific
+// OpenCV technique could never port here anyway.
+//
+// This is a DIFFERENT technique (connected-component blob tracking by
+// angular-ring continuity, not line detection) validated today against
+// 3 synthetic clocks with known ground truth (all within ~1 degree) and
+// one real textbook clock (self-consistent, no independent answer key
+// available). It carries the SAME safety guards the prior research
+// found necessary -- hand-length-ratio ambiguity decline, hour/minute
+// angle-consistency residual check -- plus its own (seed only from
+// beyond the inner 45% radius, require 3 consecutive stable rings)
+// found today. Wired in as a FAIL-OPEN, ADDITIVE layer only: whenever
+// it can't confidently resolve a clock (which, per the prior research,
+// may be MOST real clocks), it returns null exactly like today's
+// behaviour, falling through to Jev/the AI-image judge completely
+// unchanged -- this can only ever IMPROVE on today's baseline, never
+// regress it, so it is safe to enable now despite not yet clearing the
+// same 7-example bar the prior research used. That broader validation
+// (Ticket 58) remains open follow-up work, not a precondition for this
+// fail-open wiring.
+function readClockHandsFromPixels(pixels, w, h) {
+  const cx0 = w / 2, cy0 = h / 2;
+  const radiusEst = Math.min(w, h) * 0.44;
+  const luminance = (x, y) => {
+    const i = (y * w + x) * 4;
+    return 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+  };
+  const isDarkInner = (x, y) => {
+    const d = Math.hypot(x - cx0, y - cy0);
+    return d < radiusEst * 0.8 && luminance(x, y) < 150;
+  };
+  // Connected-component BFS over dark pixels within the inner disk (the
+  // outer ~20% is the bezel ring + printed numbers, which would
+  // otherwise swamp the real hand signal -- see the prior OpenCV
+  // research's own diagnosis of the same problem for line-based
+  // detection).
+  const visited = new Uint8Array(w * h);
+  let biggest = null, biggestSize = 0;
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (visited[idx0] || !isDarkInner(x0, y0)) continue;
+      const stack = [[x0, y0]];
+      visited[idx0] = 1;
+      const pts = [];
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        pts.push([x, y]);
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (visited[nidx] || !isDarkInner(nx, ny)) continue;
+            visited[nidx] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (pts.length > biggestSize) { biggestSize = pts.length; biggest = pts; }
+    }
+  }
+  if (!biggest || biggest.length < 10) return null;
+
+  let maxR = 0;
+  const withPolar = biggest.map(([x, y]) => {
+    const r = Math.hypot(x - cx0, y - cy0);
+    const ang = (Math.atan2(x - cx0, -(y - cy0)) * 180 / Math.PI + 360) % 360;
+    if (r > maxR) maxR = r;
+    return { r, ang };
+  });
+
+  // Ring-based angular clustering (ring width 2px, gap threshold 12deg,
+  // with 0/360 wraparound merge).
+  const rings = [];
+  for (let ringR = 5; ringR <= maxR; ringR += 2) {
+    const inRing = withPolar.filter((p) => p.r >= ringR && p.r < ringR + 2).map((p) => p.ang).sort((a, b) => a - b);
+    if (!inRing.length) continue;
+    const clusters = [[inRing[0]]];
+    for (let i = 1; i < inRing.length; i++) {
+      const cur = clusters[clusters.length - 1];
+      if (inRing[i] - cur[cur.length - 1] > 12) clusters.push([inRing[i]]);
+      else cur.push(inRing[i]);
+    }
+    if (clusters.length >= 2) {
+      const first = clusters[0], last = clusters[clusters.length - 1];
+      const wrapGap = (360 - last[last.length - 1]) + first[0];
+      if (wrapGap <= 12) { clusters[0] = last.concat(first); clusters.pop(); }
+    }
+    const means = clusters.map((c) => (c.reduce((a, b) => a + b, 0) / c.length + 360) % 360);
+    rings.push({ r: ringR, means });
+  }
+  if (!rings.length) return null;
+
+  // Seed: first ring (beyond the inner 45% of max radius) whose 2-cluster
+  // split stays stable (<6deg drift) for 3 consecutive sampled rings --
+  // avoids the wide-overlapping-hand-base ambiguity near the pivot.
+  const candidateRings = rings.filter((rr) => rr.r >= maxR * 0.45 && rr.means.length === 2);
+  const angDist = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+  let seedRing = null;
+  for (let i = 0; i < candidateRings.length - 2; i++) {
+    const [a0, a1] = candidateRings[i].means;
+    let stable = true;
+    for (const j of [i + 1, i + 2]) {
+      const [b0, b1] = candidateRings[j].means;
+      if (angDist(a0, b0) > 6 || angDist(a1, b1) > 6) { stable = false; break; }
+    }
+    if (stable) { seedRing = candidateRings[i]; break; }
+  }
+  if (!seedRing) seedRing = candidateRings[candidateRings.length - 1];
+  if (!seedRing) return null;
+
+  const trackA = [seedRing.means[0]], trackB = [seedRing.means[1]];
+  let maxA = seedRing.r, maxB = seedRing.r;
+  for (const ring of rings) {
+    if (ring.r < seedRing.r) continue;
+    for (const m of ring.means) {
+      const dA = angDist(m, trackA[trackA.length - 1]);
+      const dB = angDist(m, trackB[trackB.length - 1]);
+      if (dA <= dB && dA < 15) { trackA.push(m); maxA = Math.max(maxA, ring.r); }
+      else if (dB < 15) { trackB.push(m); maxB = Math.max(maxB, ring.r); }
+    }
+  }
+
+  // Safety guard 1 (from the prior OpenCV research): if the two hands'
+  // reach lengths are too close to call, decline rather than guess which
+  // is the (longer) minute hand.
+  const lo = Math.min(maxA, maxB), hi = Math.max(maxA, maxB);
+  if (hi === 0 || lo / hi > 0.85) return null;
+
+  const minuteAngle = maxA >= maxB ? trackA[trackA.length - 1] : trackB[trackB.length - 1];
+  const hourAngle = maxA >= maxB ? trackB[trackB.length - 1] : trackA[trackA.length - 1];
+  const minuteVal = Math.round(minuteAngle / 6) % 60;
+  // Math.round, not Math.floor: the measured hourAngle carries a few
+  // tenths of a degree of noise, and a true hour boundary (e.g. 11.0)
+  // can measure as 10.977 -- flooring that truncates to the WRONG hour
+  // (10) where rounding correctly recovers 11. Found via a real 11:50
+  // synthetic-fixture test failure (Ticket 63), not a hypothetical.
+  const rawHour = Math.round((hourAngle - minuteVal * 0.5) / 30);
+  let hourVal = ((rawHour % 12) + 12) % 12;
+  if (hourVal === 0) hourVal = 12;
+
+  // Safety guard 2 (from the prior OpenCV research): the hour hand's
+  // measured angle must be geometrically consistent with the derived
+  // hour/minute reading -- if not, the reading is unreliable, decline
+  // rather than report a plausible-looking but wrong time.
+  const expectedHourAngle = ((hourVal % 12) * 30 + minuteVal * 0.5) % 360;
+  if (angDist(hourAngle, expectedHourAngle) > 8) return null;
+
+  return { hour: hourVal, minute: minuteVal };
+}
+
+// Parses a real handwritten/printed time-of-day answer into {hour,
+// minute} -- deliberately tolerant of the real shapes seen across this
+// project's OCR output ("4:15", "4.15", "4:15pm", "4 o'clock"), never
+// guessing when the text doesn't clearly state a time.
+function parseTimeAnswer(text) {
+  const s = String(text || "").trim().toLowerCase();
+  let m = /^(\d{1,2})[:.](\d{2})\s*(am|pm|a\.m\.|p\.m\.)?$/.exec(s);
+  if (m) {
+    let hour = Number(m[1]) % 12;
+    if (m[3] && m[3].startsWith("p")) hour += 12;
+    else if (!m[3] && Number(m[1]) === 12) hour = 0; // bare "12:xx" with no am/pm treated as 12-hour-clock noon/midnight ambiguity -- compared mod 12 below anyway
+    return { hour: hour % 12 === 0 ? 12 : hour % 12, minute: Number(m[2]) };
+  }
+  m = /^(\d{1,2})\s*(?:o'?clock|時|點)$/.exec(s);
+  if (m) return { hour: Number(m[1]) % 12 === 0 ? 12 : Number(m[1]) % 12, minute: 0 };
+  return null;
+}
+
+function verifyClockReading(item, crop) {
+  let photonImg;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const reading = readClockHandsFromPixels(pixels, w, h);
+    if (!reading) return { correct: null, correctAnswer: "" };
+    const studentTime = parseTimeAnswer(item.studentAnswer);
+    if (!studentTime) return { correct: null, correctAnswer: "" };
+    const correct = studentTime.hour === reading.hour && studentTime.minute === reading.minute;
+    return { correct, correctAnswer: correct ? "" : `${reading.hour}:${String(reading.minute).padStart(2, "0")}` };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" }; // fails open -- any decode/processing error is treated as "can't verify", never a guess
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 const QUESTION_TYPE_HANDLERS = [
   {
     name: "multi_blank_math",
@@ -4969,6 +5168,23 @@ const QUESTION_TYPE_HANDLERS = [
       return /_{2,}/.test(String(item.printedQuestion || ""));
     },
     verify: (item) => verifySelectFromPassage(item.studentAnswer, item.passageText),
+  },
+  {
+    // Ticket 63 (2026-09-27): see readClockHandsFromPixels's own long
+    // comment above for the full real history/safety design. Narrow
+    // detect(): only fires when the printed question is clearly asking
+    // to READ a pre-printed clock (not "draw the hands", a production
+    // task this doesn't attempt) AND the student's own answer already
+    // parses as a real time value -- both real, cheap-to-check signals
+    // that this is genuinely the "read the clock" shape, not a guess.
+    name: "clock_reading",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/\bclock\b|o'clock|時鐘|鐘面|What time/i.test(printed)) return false;
+      if (/draw|畫/i.test(printed)) return false; // production task, not a reading task -- out of scope here
+      return !!parseTimeAnswer(item.studentAnswer);
+    },
+    verifyVisual: (item, crop) => verifyClockReading(item, crop),
   },
   {
     name: "math_equation",
@@ -6152,6 +6368,9 @@ export {
   mentionsShapeGeometry,
   mentionsShape2D,
   buildTierVGuidance,
+  readClockHandsFromPixels,
+  parseTimeAnswer,
+  verifyClockReading,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
