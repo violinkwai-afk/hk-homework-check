@@ -2203,6 +2203,32 @@ test("verifyScheduleTableQuery: shape 2 -- day-shift (yesterday of stated day) t
   assert.equal(r.correct, true, "tomorrow=Friday -> today=Thursday -> 中文班");
 });
 
+// Ticket 186 (2026-09-28, real citation: 餐廳每天午餐附送的甜品).
+const DESSERT_SCHEDULE = { "星期日": "蛋卷", "星期一": "紙杯蛋糕", "星期二": "兩粒朱古力", "星期三": "紙杯蛋糕", "星期四": "蛋卷", "星期五": "紙杯蛋糕", "星期六": "雪糕" };
+
+test("verifyScheduleTableQuery: shape 3 -- cycle repeat, shortest gap between occurrences", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyScheduleTableQuery(DESSERT_SCHEDULE, "如果今天的甜品是蛋卷，最快在___天後會再吃到蛋卷。", "3");
+  assert.equal(r.correct, true, "蛋卷 appears 星期日/星期四, min cyclic gap is 四->日 = 3");
+  const wrong = worker.verifyScheduleTableQuery(DESSERT_SCHEDULE, "如果今天的甜品是蛋卷，最快在___天後會再吃到蛋卷。", "4");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "3");
+});
+
+test("verifyScheduleTableQuery: shape 4 -- yesterday's value -> tomorrow's value (offset +2)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyScheduleTableQuery(DESSERT_SCHEDULE, "如果昨天的甜品是雪糕，明天的甜品是*(蛋卷/紙杯蛋糕/兩粒朱古力)。", "紙杯蛋糕");
+  assert.equal(r.correct, true, "昨天=雪糕(星期六) -> 明天=星期一=紙杯蛋糕");
+});
+
+test("schedule_table_query handler: shape 3/4 reachable through real classifyAndVerify dispatch, not just the isolated function", async () => {
+  const worker = await import(TMP);
+  const item1 = { printedQuestion: "如果今天的甜品是蛋卷，最快在___天後會再吃到蛋卷。", studentAnswer: "3", scheduleTable: DESSERT_SCHEDULE };
+  const item2 = { printedQuestion: "如果昨天的甜品是雪糕，明天的甜品是*(蛋卷/紙杯蛋糕/兩粒朱古力)。", studentAnswer: "紙杯蛋糕", scheduleTable: DESSERT_SCHEDULE };
+  assert.equal(worker.classifyAndVerify(item1, null).correct, true);
+  assert.equal(worker.classifyAndVerify(item2, null).correct, true);
+});
+
 test("verifyScheduleTableQuery: declines (null) with no scheduleTable or unmatched phrasing", async () => {
   const worker = await import(TMP);
   assert.equal(worker.verifyScheduleTableQuery(null, "小怡在星期___有游泳班。", "一").correct, null);

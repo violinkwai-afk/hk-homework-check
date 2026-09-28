@@ -1766,7 +1766,7 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個完整月份嘅日曆表格(有日一二三四五六做欄標題,逐個格仔填住日子數字)**，喺回覆最開始加一行「CALENDAR_GRID: 月份=<幾月>;首日星期=<日/一/二/三/四/五/六,即係呢個月1號係星期幾>;日數=<呢個月總共幾多日>」。如果冇呢類完整日曆表格就完全唔使加呢行。
 
-**如果呢頁印刷咗一個「星期時間表」(逐日星期配對一個活動/科目，例如「星期日=英文班,星期一=游泳班...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果冇呢類時間表就完全唔使加呢行。
+**如果呢頁印刷咗一個「星期時間表」(逐日星期配對一樣嘢，可以係活動/科目，都可以係甜品/食物/其他規律配對，例如「星期日=英文班,星期一=游泳班...」或者「星期日=蛋卷,星期一=紙杯蛋糕...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果表下面嘅問題入面又見到同一組圖示（例如問題度話「如果今天的甜品是[圖示]」而個圖示同上面個表其中一格一樣），要將個圖示換做同上面表入面完全一樣嘅文字寫入printedQuestion（例如寫做「如果今天的甜品是蛋卷」），唔好淨係寫「圖示」兩個字。如果冇呢類時間表就完全唔使加呢行。
 
 **如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右/右上/右下/左下/左上,即係個指北針實際指緊邊個畫面方向——如果個箭嘴唔係啱啱指住正上/正下/正左/正右,而係指住斜角(例如45度左下),就要老實揀返最貼近嘅斜角選項,唔好將佢當成最近嘅正方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
 
@@ -4218,6 +4218,57 @@ function verifyScheduleTableQuery(scheduleTable, printedQuestion, studentAnswer)
       const dayName = dayKey.replace("星期", "");
       const correct = answer === dayName || answer.includes(dayName);
       return { correct, correctAnswer: correct ? "" : dayName };
+    }
+  }
+
+  // Ticket 186 (2026-09-28, real citation, 甜品星期循環): "如果今天的
+  // 甜品是<value>，最快在___天後會再吃到<value>。" -- the value repeats
+  // on more than one day in the week, and "最快" means the SHORTEST gap
+  // between any two consecutive (cyclic) occurrences, not a fixed day
+  // tied to a specific "today". Hand-verified against the real table
+  // (星期日=蛋卷, 星期四=蛋卷 also, gaps 四→日=3, 日→四=4, min=3,
+  // matches the real citation's answer of 3) before writing this.
+  const repeatMatch = printed.match(/最快.{0,10}天後.{0,15}(?:再|又).{0,10}(?:吃到|食到|見到)/);
+  if (repeatMatch) {
+    const mentionedActivity = Object.values(scheduleTable).find((a) => printed.includes(a));
+    if (mentionedActivity) {
+      const occurrenceIdxs = WEEKDAY_NAMES_ZH
+        .map((d, i) => (scheduleTable[`星期${d}`] === mentionedActivity ? i : -1))
+        .filter((i) => i !== -1);
+      if (occurrenceIdxs.length < 2) return { correct: null, correctAnswer: "" };
+      let minGap = 7;
+      for (let k = 0; k < occurrenceIdxs.length; k++) {
+        const from = occurrenceIdxs[k];
+        const to = occurrenceIdxs[(k + 1) % occurrenceIdxs.length];
+        const gap = ((to - from) % 7 + 7) % 7 || 7;
+        minGap = Math.min(minGap, gap);
+      }
+      const correct = Number(answer) === minGap;
+      return { correct, correctAnswer: correct ? "" : String(minGap) };
+    }
+  }
+
+  // Ticket 186 (2026-09-28, real citation): "如果昨天的甜品是<value>，
+  // 明天的甜品是<A>/<B>/<C>。" -- yesterday's value -> today = yesterday+1
+  // -> tomorrow(明天) = yesterday+2. Hand-verified: 昨天=雪糕(星期六) ->
+  // 明天 = 星期一 = cupcake, matches the real citation's answer.
+  const yesterdayMatch = printed.match(/(?:昨天|尋日|琴日).{0,6}是(.{0,20}?)明天.{0,6}是/);
+  if (yesterdayMatch) {
+    // Search only within the captured "yesterday" segment, not the whole
+    // printed text -- the MC options after the second "是" (today's
+    // choices) can themselves literally contain other scheduleTable
+    // values (e.g. the real citation's own answer "蛋卷" also appears as
+    // one of the MC options), which would otherwise be picked up first
+    // by object key order and silently answer the wrong sub-question.
+    const mentionedActivity = Object.values(scheduleTable).find((a) => yesterdayMatch[1].includes(a));
+    if (mentionedActivity) {
+      const yesterdayIdx = WEEKDAY_NAMES_ZH.findIndex((d) => scheduleTable[`星期${d}`] === mentionedActivity);
+      if (yesterdayIdx === -1) return { correct: null, correctAnswer: "" };
+      const tomorrowIdx = (yesterdayIdx + 2) % 7;
+      const expectedActivity = scheduleTable[`星期${WEEKDAY_NAMES_ZH[tomorrowIdx]}`];
+      if (!expectedActivity) return { correct: null, correctAnswer: "" };
+      const correct = answer === expectedActivity || answer.includes(expectedActivity);
+      return { correct, correctAnswer: correct ? "" : expectedActivity };
     }
   }
 
@@ -7410,7 +7461,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "schedule_table_query",
     detect: (item) => {
       if (!item.scheduleTable || typeof item.scheduleTable !== "object") return false;
-      return /星期/.test(String(item.printedQuestion || ""));
+      const printed = String(item.printedQuestion || "");
+      // Ticket 186: shape 3 ("最快...天後...再食到") and shape 4
+      // ("昨天...明天...") phrase their questions with relative-day
+      // words (今天/昨天/明天), not a literal "星期" weekday name --
+      // the original /星期/ check alone missed both real citations.
+      return /星期/.test(printed) || /(?:今天|今日|昨天|尋日|琴日|明天|聽日)/.test(printed);
     },
     verify: (item) => verifyScheduleTableQuery(item.scheduleTable, item.printedQuestion, item.studentAnswer),
   },
