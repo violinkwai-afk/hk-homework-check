@@ -812,3 +812,10 @@
 - ✅ **194. 遠近排序(2種子類型),已接落生產環境。** 真實citation(P1樂思"Distance"頁):(a)「(Tigger/Nina/Billy) is nearest to Micky」MC(Nina喺張圖入面根本冇出現,只有Tigger/Billy有實際距離);(b)飛鏢題「Yan's dart nearest, Mike's farthest, Sally's dart nearer than Ken's, Ken's dart is Dart___」四方消去。
   ⚠️呢兩個真實citation都係未填答案嘅練習頁(冇老師批改，冇答案key)——同185-189唔同，冇獨立核實嚟源。extraction+比較邏輯本身風險低(淨係min/max/兩兩比較，冇好似185嘅Dijkstra咁複雜嘅演算法)，但測試用嘅係乾淨構造數值(跟返187嘅做法)，唔係真實圖入面精確讀出嚟嘅數。
   新增`DISTANCE_VALUES`標記、`extractDistanceValues`、`verifyDistanceRanking`(Shape A: MC最近/最遠,淨係計圖入面真係存在嘅選項;Shape B: 4方消去鏈)。過程中揭發1個真bug:relM嘅regex用`\S+`淨係夾到一個word嘅reference(例如"the"),夾唔到"the center"呢種多字reference,改用`[\s\S]+?`先啱。7個新測試,679/679測試通過,已push。
+
+- ✅ **195. 跨子題共享數值(植物高度),已接落生產環境。** 真實citation(躍思P1:子君、美兒、小文各種一棵植物,用「磚」疊住量度高度):(a)「美兒的植物高___個磚」直接讀取,答案6(呢個數真實可讀);(b)「小文的植物比子君的高,又比美兒的矮,可能高*2/5/7個磚」——需要子君同美兒兩個數值,喺選項入面揀啱啱好夾喺兩者之間嗰個。
+  呢個係「一組子題入面,前面題目確立咗嘅數值,後面題目要攞嚟用」呢類共享context嘅結構化實現——用marker傳遞精準數值,唔係將其他題目原文塞埋一齊(避免引入偏見/洩漏其他答案)。
+  ⚠️子君嘅植物冇印刷數字,淨係得個小嫩芽圖案,呢個解像度數唔到準確格數——(b)嘅測試用構造嘅子君=3做placeholder,同194嘅做法一樣老實披露。
+  新增`OBJECT_HEIGHTS`標記、`extractObjectHeights`、`verifyObjectHeights`(Shape A直接讀取;Shape B between-range MC)。7個新測試,684/684測試通過,已push。
+
+  【今晚總結:185-195一共11個新ticket全部接落生產環境】

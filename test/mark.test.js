@@ -2476,6 +2476,56 @@ test("distance_ranking handler: registered and reachable through real classifyAn
   assert.equal(worker.classifyAndVerify(item, null).correct, true);
 });
 
+// Ticket 195 (2026-09-28, real citation, 躍思P1: 子君、美兒和小文每人各種
+// 一棵植物). Shape A's value (美兒=6) is real and directly read from the
+// photo. Shape B's constraint logic is real ("小文...比子君的高,又比美兒
+// 的矮,可能高2/5/7個磚") but 子君's own height wasn't confidently
+// readable from the photo (a small sprout icon, no printed number) --
+// this test uses a constructed placeholder for 子君, same disclosed gap
+// as Ticket 194's darts test.
+test("verifyObjectHeights: shape A -- direct lookup (real citation, 美兒=6)", async () => {
+  const worker = await import(TMP);
+  const objectHeights = { "美兒": 6 };
+  const r = worker.verifyObjectHeights(objectHeights, "美兒的植物高___個磚。", "6");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyObjectHeights(objectHeights, "美兒的植物高___個磚。", "5");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "6");
+});
+
+test("verifyObjectHeights: shape B -- between-two-values MC (constructed 子君 placeholder)", async () => {
+  const worker = await import(TMP);
+  const objectHeights = { "子君": 3, "美兒": 6 };
+  const printed = "小文的植物比子君的高，又比美兒的矮，小文的植物可能高*2/5/7個磚。";
+  const r = worker.verifyObjectHeights(objectHeights, printed, "5");
+  assert.equal(r.correct, true, "only 5 is strictly between 子君=3 and 美兒=6 (2 fails >3, 7 fails <6)");
+  const wrong = worker.verifyObjectHeights(objectHeights, printed, "2");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "5");
+});
+
+test("verifyObjectHeights: declines (null) with no objectHeights, missing referenced names, or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyObjectHeights(null, "美兒的植物高___個磚。", "6").correct, null);
+  assert.equal(worker.verifyObjectHeights({ "美兒": 6 }, "9 + 4 = ?", "13").correct, null);
+  assert.equal(worker.verifyObjectHeights({ "子君": 3 }, "小文的植物比子君的高，又比美兒的矮，小文的植物可能高*2/5/7個磚。", "5").correct, null, "美兒 missing from objectHeights");
+});
+
+test("extractObjectHeights: parses the OBJECT_HEIGHTS marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { objectHeights, cleanedText } = worker.extractObjectHeights("OBJECT_HEIGHTS: 子君=3;美兒=6\n1. 題目|6");
+  assert.deepEqual(objectHeights, { "子君": 3, "美兒": 6 });
+  assert.ok(!cleanedText.includes("OBJECT_HEIGHTS"));
+});
+
+test("object_heights handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const item = { printedQuestion: "美兒的植物高___個磚。", studentAnswer: "6", objectHeights: { "美兒": 6 } };
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "object_heights");
+  assert.ok(handler);
+  assert.equal(worker.classifyAndVerify(item, null).correct, true);
+});
+
 // Ticket 190 (2026-09-28): give Jev the same OCR-extracted diagram
 // markers code uses, so it has a second (text-only) chance before an
 // item falls through to the real image-based AI-fallback.

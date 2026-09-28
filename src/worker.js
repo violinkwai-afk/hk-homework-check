@@ -1822,6 +1822,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖有幾個物件(用名/字母標住),同一個共同參考點(或者互相之間)用線連接住,要判斷邊個離參考點最近/最遠,或者要逐個排先後次序**，喺回覆最開始加一行「DISTANCE_VALUES: 參考點=<名/留空>;物件1=<相對距離數字,由近到遠用細到大嘅數表示,唔使係真實cm,淨係要順序啱>;物件2=<同上>;...」(細心逐條線目測邊條長啲邊條短啲,由最短嗰條開始編1、2、3...)。如果冇呢類遠近排序圖就完全唔使加呢行。
 
+**如果幅圖有幾個物件(例如植物/動物/建築物),每個物件旁邊都有一疊代用單位(例如一疊磚/積木/格仔)用嚟表示佢實際嘅高度/長度**，喺回覆最開始加一行「OBJECT_HEIGHTS: 物件1=<疊咗幾多格/塊,冇印刷數字就自己逐格數清楚>;物件2=<同上>;...」(如果某個物件冇印刷/冇畫出嚟個實際疊法,唔肯定就唔好估,淨係漏低嗰個物件唔寫)。如果冇呢類代用單位高度比較圖就完全唔使加呢行。
+
 **如果題目印刷咗一個目標金額(例如一個銀幣圖),要求用指定嘅幾種面額銀幣/紙幣兌換(例如「[$5硬幣]可以兌換做___個[$2硬幣]同___個[$1硬幣]」,每個空格旁邊都印住緊一個特定面額嘅硬幣圖示)**，喺回覆最開始加一行「COIN_BLANKS: 目標=<金額數字>;面額1=<第一個空格旁邊個硬幣面額>;面額2=<第二個空格旁邊個硬幣面額,如果得返一個空格就唔使呢個>」(面額跟返空格喺題目入面出現嘅先後次序;金額可以係小數,例如0.2代表2毫)。
 香港硬幣認面額提示(用嚟分辨邊個係邊個,唔好淨係睇個「數字」就估,細心睇形狀顏色邊緣)：$2(12邊波浪形,銀色)、$0.2(波浪形,金色)呢兩個先係波浪邊;$10係圓形(唔係波浪形),銀色中心+金色外環雙色設計;$5、$1、$0.5都係圓形銀/金色,滾花邊;$0.1(1毫)最細,圓形金色,平邊。$0.1同$10喺數字上都印住個「10」,好容易撞——分辨方法係睇成隻硬幣嘅大細(1毫最細)、顏色(1毫純金色,$10銀心金環雙色)、形狀，唔好淨係睇印住嘅數字就當係$10。
 如果冇呢類兌換空格題就完全唔使加呢行。
@@ -2455,6 +2457,72 @@ function verifyDistanceRanking(distanceValues, printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 195 (2026-09-28, real citation, 躍思P1: 子君、美兒和小文每人各
+// 種一棵植物, 高度用代用單位"磚"疊住量度): a value ESTABLISHED by one
+// sub-question (e.g. "美兒的植物高___個磚" -> 6) is often needed to
+// answer a LATER sub-question in the same group (e.g. "小文的植物比子君
+// 的高,又比美兒的矮,可能高*2/5/7個磚" needs both 子君 and 美兒's values
+// to pick the one MC option that falls strictly between them). Same
+// "OCR extracts, code compares" split as DISTANCE_VALUES, just for
+// direct height lookups + a between-two-values MC instead of ranking.
+// ⚠️ 子君's own height was NOT confidently readable from the real photo
+// at hand (a small sprout icon, no printed number) -- this citation's
+// (a) shape (direct lookup of 美兒=6) is verified, but (b) is only
+// tested here with a constructed placeholder for 子君, same disclosed
+// gap as Ticket 194.
+function extractObjectHeights(text) {
+  const m = /^OBJECT_HEIGHTS:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^OBJECT_HEIGHTS:.*$/gm, "");
+  if (!m) return { objectHeights: null, cleanedText };
+  const heights = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const num = Number(part.slice(eqIdx + 1).trim());
+    if (key && Number.isFinite(num)) heights[key] = num;
+  }
+  return { objectHeights: Object.keys(heights).length ? heights : null, cleanedText };
+}
+
+function verifyObjectHeights(objectHeights, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !objectHeights) return { correct: null, correctAnswer: "" };
+
+  // Shape B: "X的...比Y的高,又比Z的矮,...可能高*optA/optB/optC個..." --
+  // between-two-values MC. Checked first: more specific than Shape A.
+  const betweenM = printed.match(/(\S+?)的[\s\S]{0,6}比(\S+?)的高[\s\S]{0,12}比(\S+?)的矮/);
+  const optionsM = printed.match(/可能高\s*\*?\s*([\d.]+(?:\s*\/\s*[\d.]+)+)/);
+  if (betweenM && optionsM) {
+    const higherThan = objectHeights[betweenM[2]];
+    const lowerThan = objectHeights[betweenM[3]];
+    if (!Number.isFinite(higherThan) || !Number.isFinite(lowerThan)) return { correct: null, correctAnswer: "" };
+    const lo = Math.min(higherThan, lowerThan);
+    const hi = Math.max(higherThan, lowerThan);
+    const options = optionsM[1].split("/").map((s) => Number(s.trim()));
+    const matching = options.filter((v) => v > lo && v < hi);
+    if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+    const studentNum = parseNumericAnswer(answer);
+    if (studentNum === null) return { correct: null, correctAnswer: "" };
+    const correct = Math.abs(studentNum - matching[0]) < 1e-9;
+    return { correct, correctAnswer: correct ? "" : String(matching[0]) };
+  }
+
+  // Shape A: direct lookup, "X的...高___個<unit>".
+  const directM = printed.match(/(\S+?)的[\s\S]{0,6}高\s*_+\s*個/);
+  if (directM) {
+    const expected = objectHeights[directM[1]];
+    if (!Number.isFinite(expected)) return { correct: null, correctAnswer: "" };
+    const studentNum = parseNumericAnswer(answer);
+    if (studentNum === null) return { correct: null, correctAnswer: "" };
+    const correct = Math.abs(studentNum - expected) < 1e-9;
+    return { correct, correctAnswer: correct ? "" : String(expected) };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2596,7 +2664,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { pathGraph, cleanedText: cleanedText19 } = extractPathGraph(cleanedText18);
   const { clockOptions, cleanedText: cleanedText20 } = extractClockOptions(cleanedText19);
   const { coinBlanks, cleanedText: cleanedText21 } = extractCoinBlanks(cleanedText20);
-  const { distanceValues, cleanedText } = extractDistanceValues(cleanedText21);
+  const { distanceValues, cleanedText: cleanedText22 } = extractDistanceValues(cleanedText21);
+  const { objectHeights, cleanedText } = extractObjectHeights(cleanedText22);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2604,7 +2673,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -7994,6 +8063,13 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyDistanceRanking(item.distanceValues, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 195 (2026-09-28): shared-value lookup/between-range MC
+    // across a group of sub-questions (e.g. plant heights in "磚").
+    name: "object_heights",
+    detect: (item) => !!item.objectHeights && (/的[\s\S]{0,6}高\s*_+\s*個/.test(String(item.printedQuestion || "")) || /可能高\s*\*?\s*[\d.]+(?:\s*\/\s*[\d.]+)+/.test(String(item.printedQuestion || ""))),
+    verify: (item) => verifyObjectHeights(item.objectHeights, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -9024,7 +9100,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -9134,6 +9210,10 @@ async function handleMark(request, env) {
     // Ticket 194: same page-level shared-context pattern.
     if (qwenOutcome.distanceValues) {
       qwenOutcome.items.forEach((item) => { item.distanceValues = qwenOutcome.distanceValues; });
+    }
+    // Ticket 195: same page-level shared-context pattern.
+    if (qwenOutcome.objectHeights) {
+      qwenOutcome.items.forEach((item) => { item.objectHeights = qwenOutcome.objectHeights; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9942,6 +10022,8 @@ export {
   verifyCoinBlanks,
   extractDistanceValues,
   verifyDistanceRanking,
+  extractObjectHeights,
+  verifyObjectHeights,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,
