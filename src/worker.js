@@ -1794,6 +1794,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果印刷咗幾個鐘面圖(每個係一個圓形錶面,有時針分針,揀邊個鐘面時間先啱嗰種MC)**，喺回覆最開始加一行「CLOCK_OPTIONS: A=<小時>:<分鐘,兩位數>;B=<同上>;C=<同上>」(用24小時制,由時針分針實際指緊嘅位置直接讀,如果有D、E等更多選項都照樣加落去;如果題目本身都有印刷一個「開始/起點」鐘面或者講明咗個開始時間,都要加多一組「開始=<小時>:<分鐘>」)。如果冇呢類鐘面MC就完全唔使加呢行。
 
+**如果題目印刷咗一個目標金額(例如一個銀幣圖),要求用指定嘅幾種面額銀幣/紙幣兌換(例如「[$5硬幣]可以兌換做___個[$2硬幣]同___個[$1硬幣]」,每個空格旁邊都印住緊一個特定面額嘅硬幣圖示)**，喺回覆最開始加一行「COIN_BLANKS: 目標=<金額數字>;面額1=<第一個空格旁邊個硬幣面額>;面額2=<第二個空格旁邊個硬幣面額,如果得返一個空格就唔使呢個>」(面額跟返空格喺題目入面出現嘅先後次序;金額可以係小數,例如0.2代表2毫)。如果冇呢類兌換空格題就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2291,6 +2293,56 @@ function verifyClockOptionsMc(clockOptions, printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : plausible[0] };
 }
 
+// Ticket 189 (2026-09-28, real citation, P2pc Q29: "[$5 coin] can be
+// exchanged for __2__ [$2 coin] and __1__ [$1 coin]" -> 2, 1): a
+// change-making question with one blank PER denomination, each blank
+// tied to a specific coin shown right next to it (not a free choice of
+// which denominations to use). With only 2 unknowns and 1 equation
+// (n1*d1 + n2*d2 = target) there's no unique answer in general, so this
+// assumes the standard "fewest coins" convention real HK coin
+// denominations always support (greedy from the largest stated
+// denomination down is provably optimal for HK's coin set) -- hand-
+// verified: target=5, denoms=[2,1] -> greedy gives 2x$2 + 1x$1,
+// matching the real citation exactly.
+function extractCoinBlanks(text) {
+  const m = /^COIN_BLANKS:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^COIN_BLANKS:.*$/gm, "");
+  if (!m) return { coinBlanks: null, cleanedText };
+  const parts = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const value = Number(part.slice(eqIdx + 1).trim());
+    if (Number.isFinite(value)) parts[key] = value;
+  }
+  const target = parts["目標"];
+  const denoms = [];
+  for (let i = 1; parts[`面額${i}`] !== undefined; i++) denoms.push(parts[`面額${i}`]);
+  if (!Number.isFinite(target) || target <= 0 || !denoms.length || denoms.some((d) => !Number.isFinite(d) || d <= 0)) {
+    return { coinBlanks: null, cleanedText };
+  }
+  return { coinBlanks: { target, denoms }, cleanedText };
+}
+
+function verifyCoinBlanks(coinBlanks, studentAnswer) {
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !coinBlanks) return { correct: null, correctAnswer: "" };
+  const studentParts = answer.split(",").map((s) => parseNumericAnswer(s.trim()));
+  if (studentParts.length !== coinBlanks.denoms.length || studentParts.some((n) => n === null)) {
+    return { correct: null, correctAnswer: "" };
+  }
+  let remaining = coinBlanks.target;
+  const expectedCounts = coinBlanks.denoms.map((d) => {
+    const count = Math.floor(remaining / d + 1e-9);
+    remaining = remaining - count * d;
+    return count;
+  });
+  if (Math.abs(remaining) > 1e-6) return { correct: null, correctAnswer: "" };
+  const correct = studentParts.every((n, i) => Math.abs(n - expectedCounts[i]) < 1e-6);
+  return { correct, correctAnswer: correct ? "" : expectedCounts.join(",") };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2430,7 +2482,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { compassRoseMc, cleanedText: cleanedText17 } = extractCompassRoseMc(cleanedText16);
   const { paperFold, cleanedText: cleanedText18 } = extractPaperFold(cleanedText17);
   const { pathGraph, cleanedText: cleanedText19 } = extractPathGraph(cleanedText18);
-  const { clockOptions, cleanedText } = extractClockOptions(cleanedText19);
+  const { clockOptions, cleanedText: cleanedText20 } = extractClockOptions(cleanedText19);
+  const { coinBlanks, cleanedText } = extractCoinBlanks(cleanedText20);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2438,7 +2491,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -7816,6 +7869,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyClockOptionsMc(item.clockOptions, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 189 (2026-09-28): change-making with a blank per denomination.
+    name: "coin_blanks",
+    detect: (item) => !!item.coinBlanks && /兌換|exchange/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCoinBlanks(item.coinBlanks, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8846,7 +8905,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8948,6 +9007,10 @@ async function handleMark(request, env) {
     // Ticket 187: same page-level shared-context pattern.
     if (qwenOutcome.clockOptions) {
       qwenOutcome.items.forEach((item) => { item.clockOptions = qwenOutcome.clockOptions; });
+    }
+    // Ticket 189: same page-level shared-context pattern.
+    if (qwenOutcome.coinBlanks) {
+      qwenOutcome.items.forEach((item) => { item.coinBlanks = qwenOutcome.coinBlanks; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9752,6 +9815,8 @@ export {
   verifyPathGraph,
   extractClockOptions,
   verifyClockOptionsMc,
+  extractCoinBlanks,
+  verifyCoinBlanks,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

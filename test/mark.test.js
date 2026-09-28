@@ -2353,6 +2353,48 @@ test("clock_options_mc handler: registered and reachable through real classifyAn
   assert.equal(worker.classifyAndVerify(item, null).correct, true);
 });
 
+// Ticket 189 (2026-09-28, real citation, P2pc Q29: "[$5 coin] can be
+// exchanged for __2__ [$2 coin] and __1__ [$1 coin]" -> 2, 1).
+test("verifyCoinBlanks: greedy fewest-coins change matches the real citation", async () => {
+  const worker = await import(TMP);
+  const coinBlanks = { target: 5, denoms: [2, 1] };
+  const r = worker.verifyCoinBlanks(coinBlanks, "2,1");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyCoinBlanks(coinBlanks, "1,3");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "2,1");
+});
+
+test("verifyCoinBlanks: handles decimal (毫子) denominations", async () => {
+  const worker = await import(TMP);
+  const coinBlanks = { target: 0.8, denoms: [0.5, 0.2, 0.1] };
+  const r = worker.verifyCoinBlanks(coinBlanks, "1,1,1");
+  assert.equal(r.correct, true, "0.5+0.2+0.1 = 0.8");
+});
+
+test("verifyCoinBlanks: declines (null) on wrong blank count, unsolvable remainder, or no coinBlanks", async () => {
+  const worker = await import(TMP);
+  const coinBlanks = { target: 5, denoms: [2, 1] };
+  assert.equal(worker.verifyCoinBlanks(coinBlanks, "2").correct, null, "only 1 value for 2 denoms");
+  assert.equal(worker.verifyCoinBlanks({ target: 5, denoms: [3] }, "1").correct, null, "5 not divisible by 3 alone -- unsolvable");
+  assert.equal(worker.verifyCoinBlanks(null, "2,1").correct, null);
+});
+
+test("extractCoinBlanks: parses the COIN_BLANKS marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { coinBlanks, cleanedText } = worker.extractCoinBlanks("COIN_BLANKS: 目標=5;面額1=2;面額2=1\n1. 題目|2,1");
+  assert.deepEqual(coinBlanks, { target: 5, denoms: [2, 1] });
+  assert.ok(!cleanedText.includes("COIN_BLANKS"));
+});
+
+test("coin_blanks handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const item = { printedQuestion: "$5硬幣可以兌換做___個$2硬幣同___個$1硬幣。", studentAnswer: "2,1", coinBlanks: { target: 5, denoms: [2, 1] } };
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "coin_blanks");
+  assert.ok(handler);
+  assert.equal(worker.classifyAndVerify(item, null).correct, true);
+});
+
 // Ticket 190 (2026-09-28): give Jev the same OCR-extracted diagram
 // markers code uses, so it has a second (text-only) chance before an
 // item falls through to the real image-based AI-fallback.
