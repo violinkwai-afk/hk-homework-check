@@ -130,22 +130,6 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
-    // TEMPORARY debug route (2026-09-28) -- one-use, calls DeepSeek R1
-    // and GPT-5 (both real reasoning models, confirmed via OpenRouter's
-    // own supported_parameters listing) as TEXT-ONLY judges, one call
-    // PER item (real per-question latency, not a batched average), BOTH
-    // models called in parallel for the SAME item before moving to the
-    // next one (controls for network/OpenRouter-load variance between
-    // models -- a fairness requirement the user explicitly asked for).
-    // reasoning_effort fixed at "low" for both, uniformly -- comparing a
-    // model at full reasoning against one with none would not be a fair
-    // speed test, and "low" reflects how this project would actually
-    // configure a reasoning model for a latency-sensitive judge role.
-    // Remove after this comparison is done, same convention as Ticket
-    // 41's routes.
-    if (url.pathname === "/api/test-reasoning-judge-batch" && request.method === "POST") {
-      return handleTestReasoningJudgeBatch(request, env);
-    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -225,66 +209,6 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
-}
-
-// TEMPORARY (2026-09-28) -- see the route registration's own comment.
-// Reuses buildTextOnlyJudgePrompt's shape (defined below, near the
-// earlier Qwen/Gemini judge-batch diagnostic) is NOT available here
-// (that route was already removed) -- redefined locally so this route
-// stays fully self-contained and easy to delete as one unit.
-function buildReasoningJudgePrompt(item) {
-  return `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？只回覆JSON，格式：{"correct": true}或{"correct": false}或{"correct": null}（null代表你唔夠信心判斷，寧願老實話唔知都唔好亂估）。唔好加任何其他文字、解釋。`;
-}
-async function callReasoningJudge(model, prompt, openrouterKey) {
-  const t0 = Date.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
-    body: JSON.stringify({
-      model,
-      max_tokens: 800,
-      temperature: 0,
-      reasoning: { effort: "low" },
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  const elapsedMs = Date.now() - t0;
-  const data = await res.json();
-  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
-  let verdict = null;
-  try {
-    const m = content.match(/\{[^}]*\}/);
-    if (m) verdict = JSON.parse(m[0]).correct;
-    if (verdict === undefined) verdict = null;
-  } catch (e) { verdict = null; }
-  return { elapsedMs, verdict, costUsd: (data.usage && data.usage.cost) || null, reasoningTokens: (data.usage && data.usage.completion_tokens_details && data.usage.completion_tokens_details.reasoning_tokens) || null, raw: content.slice(0, 200), ok: res.ok, status: res.status, finishReason: data.choices && data.choices[0] && data.choices[0].finish_reason };
-}
-async function handleTestReasoningJudgeBatch(request, env) {
-  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { items } = await request.json();
-  // Reasoning models are slow enough (even at reasoning_effort=low) that
-  // processing 30 items sequentially blew past both curl's and (likely)
-  // the Worker's own request time budget -- every item's (R1, GPT-5)
-  // pair now fires concurrently across the WHOLE batch instead of one
-  // item at a time. This doesn't weaken the per-item fairness
-  // requirement (R1 and GPT-5 are still called at the exact same moment
-  // for a given item, each call's own elapsedMs is still measured
-  // independently) -- it only changes how many items are in flight at
-  // once, not what's being compared within an item.
-  const results = await Promise.all(items.map(async (it) => {
-    const prompt = buildReasoningJudgePrompt(it);
-    const [deepseekR1, gpt5] = await Promise.all([
-      callReasoningJudge("deepseek/deepseek-r1", prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
-      callReasoningJudge("openai/gpt-5", prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
-    ]);
-    return { resultIndex: it.resultIndex, deepseekR1, gpt5 };
-  }));
-  return json({ results });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
