@@ -1557,3 +1557,18 @@ test("mentionsShape2D: recognises real Chinese and English 2-D shape keywords, d
   assert.equal(worker.mentionsShape2D([{ printedQuestion: "呢個係咪三角形？" }]), true);
   assert.equal(worker.mentionsShape2D([{ printedQuestion: "How many faces does a cube have?" }]), false, "3-D 'faces' keyword must not trigger the 2-D reference");
 });
+
+// Ticket 62 (2026-09-27, user's own real insight, confirmed against this
+// project's own past PDF survey): real coin illustrations almost always
+// print the exact denomination directly on the coin as small text, so
+// reading that text is the primary, more reliable method -- not
+// shape/colour classification.
+test("buildAiFallbackPrompt: money guidance tells the AI to read the printed denomination directly, and coexists with the currency reference data", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "How much money is shown? (coins)", studentAnswer: "$5" },
+  ]);
+  assert.match(prompt, /硬幣\/紙幣面額題：/);
+  assert.match(prompt, /印刷數字先係最準嘅資訊來源/);
+  assert.match(prompt, /洋紫荊/, "the Ticket 57 reference data must still appear as a fallback");
+});

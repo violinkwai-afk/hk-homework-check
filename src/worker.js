@@ -2080,6 +2080,20 @@ const TIER_V_GUIDANCE = {
     re: /\bclock\b|o'clock|時針|分針|鐘面/i,
     text: "鐘面題：分別搵返時針同分針實際指緊邊個方向（分針通常較長），先讀分針對應嘅分鐘數，再睇時針落喺邊兩個數字之間判斷小時。",
   },
+  // Ticket 62 (2026-09-27, user's own real insight): confirmed via this
+  // project's own past PDF survey (question-type-library.md, "Coin
+  // denomination recognition... '$5' coin drawn with small print") --
+  // real workbook coin illustrations almost always print the exact
+  // denomination as small text directly ON the drawn coin. This makes
+  // denomination recognition an OCR/reading problem, not a shape/colour/
+  // size classification problem -- the HK_CURRENCY_REFERENCE data
+  // (Ticket 57) is a fallback for when that print is too small/blurry to
+  // read, but reading the coin's own printed label directly is the
+  // primary, more reliable method and should be tried first.
+  money: {
+    re: /\$|coin|note|cent|denomination|硬幣|紙幣|銀紙|面額|毫子|蚊/i,
+    text: "硬幣/紙幣面額題：真實嘅硬幣/紙幣插圖通常會將面額數字直接印喺個圖案上面（例如個銀仔中間印住細細嘅「$5」），請先搵嗰個印刷嘅數字直接讀,唔好淨係靠銀仔嘅大細/顏色/形狀去估面額——印刷數字先係最準嘅資訊來源。",
+  },
 };
 
 function buildTierVGuidance(pendingItems) {
