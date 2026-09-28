@@ -2356,3 +2356,131 @@ test("facing_direction_query handler: registered and reachable", async () => {
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Ticket 119 (real citation): change from a 2-item purchase.
+test("verifyChangeFromTwoItemPurchase: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "Each sandwich costs 3 dollars. Each bottle of juice costs 7 dollars. Sue spends 15 dollars to buy one sandwich and one bottle of juice. How much change does she receive?";
+  assert.equal(worker.verifyChangeFromTwoItemPurchase(printed, "5").correct, true);
+  assert.equal(worker.verifyChangeFromTwoItemPurchase(printed, "8").correct, false);
+});
+test("change_from_two_item_purchase handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "change_from_two_item_purchase");
+  assert.ok(handler);
+  const item = { printedQuestion: "Each sandwich costs 3 dollars. Each bottle of juice costs 7 dollars. Sue spends 15 dollars to buy one sandwich and one bottle of juice. How much change does she receive?", studentAnswer: "5" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 121 (real citation): resource-constrained "at most".
+test("verifyResourceConstrainedMax: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "It takes 2 bows and 3 flower buttons to decorate a dress. There are now 11 bows and 19 flower buttons. How many dresses can be decorated at most?";
+  assert.equal(worker.verifyResourceConstrainedMax(printed, "5").correct, true);
+  assert.equal(worker.verifyResourceConstrainedMax(printed, "6").correct, false);
+});
+test("resource_constrained_max handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "resource_constrained_max");
+  assert.ok(handler);
+  const item = { printedQuestion: "It takes 2 bows and 3 flower buttons to decorate a dress. There are now 11 bows and 19 flower buttons. How many dresses can be decorated at most?", studentAnswer: "5" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 124 (real citation): chained two-step equation, mid blank.
+test("verifyChainedTwoStepBlank: real citation", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyChainedTwoStepBlank("79 - 18 - [] = 10", "51");
+  assert.equal(r.correct, true);
+  assert.equal(worker.verifyChainedTwoStepBlank("79 - 18 - [] = 10", "50").correct, false);
+});
+test("chained_two_step_blank handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "chained_two_step_blank");
+  assert.ok(handler);
+  const item = { printedQuestion: "79 - 18 - [] = 10", studentAnswer: "51" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 127 (real citation): curve-only-letter MC.
+test("verifyCurveOnlyLetterMC: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "Circle the English letter(s) below that are formed by curves only. ( Q / H / R / S )";
+  assert.equal(worker.verifyCurveOnlyLetterMC(printed, "S").correct, true);
+  assert.equal(worker.verifyCurveOnlyLetterMC(printed, "H").correct, false);
+});
+test("curve_only_letter_mc handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "curve_only_letter_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "Circle the English letter(s) below that are formed by curves only. ( Q / H / R / S )", studentAnswer: "S" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 136 (real citation): total-then-regroup word problem.
+test("verifyRegroupTotalWordProblem: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "餅店店員把蛋糕每10個裝成一盒，可裝成2盒；如果改為每2個裝成一盒，可以裝成多少盒？";
+  assert.equal(worker.verifyRegroupTotalWordProblem(printed, "10").correct, true);
+  assert.equal(worker.verifyRegroupTotalWordProblem(printed, "5").correct, false);
+});
+test("regroup_total_word_problem handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "regroup_total_word_problem");
+  assert.ok(handler);
+  const item = { printedQuestion: "餅店店員把蛋糕每10個裝成一盒，可裝成2盒；如果改為每2個裝成一盒，可以裝成多少盒？", studentAnswer: "10" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 137 (real citation): elapsed-time inequality MC.
+test("verifyElapsedTimeInequalityMC: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "爸爸在3時正開始做運動，他做運動的時間比3小時長，以下哪一項可能是爸爸結束做運動的時間？A.4時正 B.5時正 C.6時正 D.7時正";
+  assert.equal(worker.verifyElapsedTimeInequalityMC(printed, "D").correct, true);
+  assert.equal(worker.verifyElapsedTimeInequalityMC(printed, "C").correct, false);
+});
+test("elapsed_time_inequality_mc handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "elapsed_time_inequality_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "爸爸在3時正開始做運動，他做運動的時間比3小時長，以下哪一項可能是爸爸結束做運動的時間？A.4時正 B.5時正 C.6時正 D.7時正", studentAnswer: "D" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 138 (real citation): yesterday/tomorrow simple shift.
+test("verifyYesterdayTomorrowShift: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "如果琴日是星期二，聽日是星期___。";
+  assert.equal(worker.verifyYesterdayTomorrowShift(printed, "四").correct, true);
+  assert.equal(worker.verifyYesterdayTomorrowShift(printed, "三").correct, false);
+});
+test("yesterday_tomorrow_shift handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "yesterday_tomorrow_shift");
+  assert.ok(handler);
+  const item = { printedQuestion: "如果琴日是星期二，聽日是星期___。", studentAnswer: "四" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 140 (real citation): duration sum across multiple time ranges.
+test("verifyDurationSumWordProblem: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "工作時間：9時正至12時正，3時正至6時正。媽媽每天工作___小時。";
+  assert.equal(worker.verifyDurationSumWordProblem(printed, "6").correct, true);
+  assert.equal(worker.verifyDurationSumWordProblem(printed, "3").correct, false);
+});
+test("duration_sum_word_problem handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "duration_sum_word_problem");
+  assert.ok(handler);
+  const item = { printedQuestion: "工作時間：9時正至12時正，3時正至6時正。媽媽每天工作___小時。", studentAnswer: "6" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

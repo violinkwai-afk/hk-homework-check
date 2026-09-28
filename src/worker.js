@@ -4162,6 +4162,160 @@ function verifyFacingDirectionQuery(facingDirection, printedQuestion, studentAns
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 119 (2026-09-28, real citation: "Each sandwich costs 3 dollars.
+// Each bottle of juice costs 7 dollars. Sue spends 15 dollars to buy one
+// sandwich and one bottle of juice. How much change does she receive?"
+// -> 15-(3+7)=5): change from a purchase of 2 named items whose prices
+// are stated inline in the sentence (not a printed price table).
+function verifyChangeFromTwoItemPurchase(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/change/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const priceMatches = [...printed.matchAll(/costs?\s*(\d+)\s*dollars?/gi)].map((m) => Number(m[1]));
+  const paidMatch = printed.match(/spends?\s*(\d+)\s*dollars?/i);
+  if (priceMatches.length !== 2 || !paidMatch) return { correct: null, correctAnswer: "" };
+  const expected = Number(paidMatch[1]) - priceMatches.reduce((a, b) => a + b, 0);
+  if (expected < 0) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 121 (2026-09-28, real citation: "It takes 2 bows and 3 flower
+// buttons to decorate a dress. There are now 11 bows and 19 flower
+// buttons. How many dresses can be decorated at most?" ->
+// floor(min(11/2,19/3))=5): resource-constrained "at most" word problem
+// -- the limiting resource determines the max count.
+function verifyResourceConstrainedMax(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/at most/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const takesMatch = printed.match(/takes?\s*(\d+)\s*[a-z]+s?\s+and\s+(\d+)\s*[a-z]+s?/i);
+  const hasMatch = printed.match(/(?:are now|has|have)\s*(\d+)\s*[a-z]+s?\s+and\s+(\d+)\s*[a-z]+s?/i);
+  if (!takesMatch || !hasMatch) return { correct: null, correctAnswer: "" };
+  const n1 = Number(takesMatch[1]), n2 = Number(takesMatch[2]);
+  const m1 = Number(hasMatch[1]), m2 = Number(hasMatch[2]);
+  if (!n1 || !n2) return { correct: null, correctAnswer: "" };
+  const expected = Math.floor(Math.min(m1 / n1, m2 / n2));
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 124 (2026-09-28, real citation: "79 − 18 − [box] = 10" -> 51):
+// chained two-step equation with the blank in the middle -- needs the
+// intermediate result (79-18=61) before isolating the blank, distinct
+// from the existing single-operator trySubstituteBlank shape.
+function verifyChainedTwoStepBlank(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*-\s*(\d+)\s*-\s*(?:\[?_*\]?|□)\s*=\s*(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [a, b, c] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const expected = a - b - c;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 127 (2026-09-28, real citation: "Circle the English letter(s)
+// below that are formed by curves only. ( Q / H / R / S )" -> S):
+// static-fact reverse-MC-selection -- filters the given letter options
+// against a fixed curve-only-letter table, matching this project's
+// established shape-knowledge-lookup pattern (Ticket 108).
+const CURVE_ONLY_LETTERS = new Set(["C", "O", "S", "U"]);
+function verifyCurveOnlyLetterMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim().toUpperCase();
+  if (!answer || !/curves? only/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const optionsMatch = printed.match(/\(([^)]+)\)/);
+  if (!optionsMatch) return { correct: null, correctAnswer: "" };
+  const options = optionsMatch[1].split("/").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const validOnes = options.filter((o) => CURVE_ONLY_LETTERS.has(o));
+  if (!validOnes.length) return { correct: null, correctAnswer: "" };
+  const studentSet = new Set(answer.split(/[,;\s]+/).filter(Boolean));
+  const correct = studentSet.size === validOnes.length && validOnes.every((v) => studentSet.has(v));
+  return { correct, correctAnswer: correct ? "" : validOnes.join(", ") };
+}
+
+// Ticket 136 (2026-09-28, real citation: "餅店店員把蛋糕每10個裝成一
+// 盒，可裝成2盒；如果改為每2個裝成一盒，可以裝成多少盒？" -> total=10×2=
+// 20, then 20÷2=10): total-then-regroup word problem -- derive the total
+// from one grouping fact, then regroup by a different size.
+function verifyRegroupTotalWordProblem(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/每\s*(\d+)\s*個.{0,6}(?:裝成|一盒).{0,10}(\d+)\s*盒[\s\S]*?每\s*(\d+)\s*個.{0,6}一盒/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [size1, count1, size2] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const total = size1 * count1;
+  if (!size2 || total % size2 !== 0) return { correct: null, correctAnswer: "" };
+  const expected = total / size2;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 137 (2026-09-28, real citation: "爸爸在3時正開始做運動，他做運動
+// 的時間比3小時長，以下哪一項可能是爸爸結束做運動的時間？A.4時正 B.5時正
+// C.6時正 D.7時正" -> D, since only 7:00 is strictly MORE than 3 hours
+// after 3:00): elapsed-time inequality MC -- filters options by a
+// strict "more than N hours later" constraint.
+function verifyElapsedTimeInequalityMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*時正?開始.{0,15}比\s*(\d+)\s*小時長/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const startHour = Number(m[1]), minDuration = Number(m[2]);
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const matching = options.filter((o) => {
+    const hm = o.text.match(/(\d+)\s*時正?/);
+    if (!hm) return false;
+    const hour = Number(hm[1]);
+    return hour - startHour > minDuration;
+  });
+  if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = matching[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Ticket 138 (2026-09-28, real citation: "如果琴日是星期二，聽日是星期
+// ___。" -> 星期四): simple yesterday/tomorrow day-of-week shift --
+// distinct from the CALENDAR_GRID/ordinal-day shapes, no grid needed at
+// all, pure +2 mod 7 from a stated "yesterday" fact.
+function verifyYesterdayTomorrowShift(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(?:琴日|昨天)是?星期([日一二三四五六])/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const yesterdayIdx = WEEKDAY_NAMES_ZH.indexOf(m[1]);
+  const tomorrowIdx = (yesterdayIdx + 2) % 7;
+  const expected = WEEKDAY_NAMES_ZH[tomorrowIdx];
+  const correct = answer === expected;
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
+// Ticket 140 (2026-09-28, real citation: "工作時間：9時正至12時正，3時正至
+// 6時正。媽媽每天工作___小時。" -> (12-9)+(6-3)=6): sum of durations
+// across multiple stated time ranges.
+function verifyDurationSumWordProblem(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const ranges = [...printed.matchAll(/(\d+)\s*時正?至\s*(\d+)\s*時正?/g)];
+  if (ranges.length < 2) return { correct: null, correctAnswer: "" };
+  const expected = ranges.reduce((sum, r) => sum + (Number(r[2]) - Number(r[1])), 0);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // Ticket 108 (2026-09-28, found in a real P2 3-D shapes unit test's own
 // answer key): reverses the already-known face/edge/vertex facts in
 // SHAPE_REFERENCE -- given how many lateral faces a solid has and what
@@ -6150,6 +6304,61 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyFacingDirectionQuery(item.facingDirection, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
+    // stated inline in the sentence (not a printed price table).
+    name: "change_from_two_item_purchase",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /change/i.test(printed) && (printed.match(/costs?\s*\d+\s*dollars?/gi) || []).length === 2;
+    },
+    verify: (item) => verifyChangeFromTwoItemPurchase(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 121 (2026-09-28): resource-constrained "at most" word problem.
+    name: "resource_constrained_max",
+    detect: (item) => /at most/i.test(String(item.printedQuestion || "")) && /takes?\s*\d+/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyResourceConstrainedMax(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 124 (2026-09-28): chained two-step equation, blank in the middle.
+    name: "chained_two_step_blank",
+    detect: (item) => /\d+\s*-\s*\d+\s*-\s*(?:\[?_*\]?|□)\s*=\s*\d+/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyChainedTwoStepBlank(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 127 (2026-09-28): curve-only-letter static-fact reverse MC.
+    name: "curve_only_letter_mc",
+    detect: (item) => /curves? only/i.test(String(item.printedQuestion || "")) && /\([^)]+\)/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCurveOnlyLetterMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 136 (2026-09-28): total-then-regroup word problem.
+    name: "regroup_total_word_problem",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return (printed.match(/每\s*\d+\s*個/g) || []).length >= 2 && /裝成|一盒/.test(printed);
+    },
+    verify: (item) => verifyRegroupTotalWordProblem(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 137 (2026-09-28): elapsed-time inequality MC.
+    name: "elapsed_time_inequality_mc",
+    detect: (item) => /比\s*\d+\s*小時長/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyElapsedTimeInequalityMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 138 (2026-09-28): simple yesterday/tomorrow day-of-week shift.
+    name: "yesterday_tomorrow_shift",
+    detect: (item) => /(?:琴日|昨天)是?星期[日一二三四五六]/.test(String(item.printedQuestion || "")) && /聽日|明天/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyYesterdayTomorrowShift(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 140 (2026-09-28): sum of durations across multiple time ranges.
+    name: "duration_sum_word_problem",
+    detect: (item) => (String(item.printedQuestion || "").match(/\d+\s*時正?至\s*\d+\s*時正?/g) || []).length >= 2,
+    verify: (item) => verifyDurationSumWordProblem(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -7829,6 +8038,14 @@ export {
   verifyLocationGridQuery,
   extractFacingDirection,
   verifyFacingDirectionQuery,
+  verifyChangeFromTwoItemPurchase,
+  verifyResourceConstrainedMax,
+  verifyChainedTwoStepBlank,
+  verifyCurveOnlyLetterMC,
+  verifyRegroupTotalWordProblem,
+  verifyElapsedTimeInequalityMC,
+  verifyYesterdayTomorrowShift,
+  verifyDurationSumWordProblem,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,
