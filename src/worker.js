@@ -4316,6 +4316,68 @@ function verifyDurationSumWordProblem(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Ticket 125 (2026-09-28, real citation: "John has $80. He wants to buy
+// a doll [$60]. After buying the doll, he still has: $80 − $60 = $20.
+// If he wants to buy a teddy bear too [$33], his remaining money is
+// *(more/less) than the price of a teddy bear. Therefore, John *(has/
+// does not have) enough money to buy a teddy bear." -> less;does not
+// have): two-stage affordability chain. Found on a SECOND, more careful
+// pass through the original survey report after an earlier turn wrongly
+// skipped this citing "insufficient evidence" -- the exact quote was
+// there all along, just lost when compressed into a one-line TICKETS.md
+// summary (see the 2026-09-28 process-review memory note). Anchored
+// regexes (not a naive "grab all $N in order") specifically to avoid
+// being confused by the "$80 − $60 = $20" arithmetic sentence that
+// contains 3 MORE dollar amounts in between the ones actually needed.
+function verifyTwoStageAffordabilityChain(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/\(more\/less\)|\(less\/more\)/i.test(printed) || !/\(has\/does not have\)|\(does not have\/has\)/i.test(printed)) {
+    return { correct: null, correctAnswer: "" };
+  }
+  const initialMatch = printed.match(/has\s*\$(\d+)/i);
+  const item1Match = printed.match(/buy a [a-z ]+?[^.]*?\$(\d+)/i);
+  const item2Match = printed.match(/buy a [a-z ]+? too[^.]*?\$(\d+)/i);
+  if (!initialMatch || !item1Match || !item2Match) return { correct: null, correctAnswer: "" };
+  const initial = Number(initialMatch[1]), item1 = Number(item1Match[1]), item2 = Number(item2Match[1]);
+  const remaining = initial - item1;
+  const moreOrLess = remaining > item2 ? "more" : "less";
+  const hasEnough = remaining >= item2 ? "has" : "does not have";
+  const parts = answer.split(/[;,]/).map((s) => s.trim());
+  if (parts.length !== 2) return { correct: null, correctAnswer: "" };
+  const correct = parts[0] === moreOrLess && parts[1] === hasEnough;
+  return { correct, correctAnswer: correct ? "" : `${moreOrLess};${hasEnough}` };
+}
+
+// Ticket 129 (2026-09-28, real citation: "2 3 5 / + 5 5 7 / [box] /
+// − 2 8 1 / [box]" -- two chained vertical operations, the second
+// blank's calculation depends on the FIRST blank's own computed result,
+// not a number in the original printed question): chained vertical
+// arithmetic with feed-forward blanks. Same "found on re-reading the
+// original report" story as Ticket 125 above. Honest caveat: this
+// assumes OCR renders the chain as a flat "A op1 B [blank] op2 C
+// [blank]" expression (following this project's established □-
+// preservation convention) -- the real per-page OCR output for this
+// exact vertical-stack shape hasn't been observed yet, so this is
+// good-faith construction from the citation's numbers, not a confirmed
+// OCR-format match.
+function verifyChainedVerticalArithmetic(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*([+-])\s*(\d+)\s*(?:\[?_*\]?|□)\s*([+-])\s*(\d+)\s*(?:\[?_*\]?|□)\s*$/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [a, op1, b, op2, c] = [Number(m[1]), m[2], Number(m[3]), m[4], Number(m[5])];
+  const apply = (x, op, y) => (op === "+" ? x + y : x - y);
+  const result1 = apply(a, op1, b);
+  const result2 = apply(result1, op2, c);
+  const parts = answer.split(/[;,]/).map((s) => s.trim()).map(Number);
+  if (parts.length !== 2 || parts.some(Number.isNaN)) return { correct: null, correctAnswer: "" };
+  const correct = parts[0] === result1 && parts[1] === result2;
+  return { correct, correctAnswer: correct ? "" : `${result1};${result2}` };
+}
+
 // Ticket 108 (2026-09-28, found in a real P2 3-D shapes unit test's own
 // answer key): reverses the already-known face/edge/vertex facts in
 // SHAPE_REFERENCE -- given how many lateral faces a solid has and what
@@ -6359,6 +6421,21 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyDurationSumWordProblem(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 125 (2026-09-28): two-stage affordability chain.
+    name: "two_stage_affordability_chain",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /\(more\/less\)|\(less\/more\)/i.test(printed) && /\(has\/does not have\)|\(does not have\/has\)/i.test(printed);
+    },
+    verify: (item) => verifyTwoStageAffordabilityChain(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 129 (2026-09-28): chained vertical arithmetic, feed-forward blanks.
+    name: "chained_vertical_arithmetic",
+    detect: (item) => /\d+\s*[+-]\s*\d+\s*(?:\[?_*\]?|□)\s*[+-]\s*\d+\s*(?:\[?_*\]?|□)\s*$/.test(String(item.printedQuestion || "").trim()),
+    verify: (item) => verifyChainedVerticalArithmetic(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -8046,6 +8123,8 @@ export {
   verifyElapsedTimeInequalityMC,
   verifyYesterdayTomorrowShift,
   verifyDurationSumWordProblem,
+  verifyTwoStageAffordabilityChain,
+  verifyChainedVerticalArithmetic,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,

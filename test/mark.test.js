@@ -2484,3 +2484,54 @@ test("duration_sum_word_problem handler: registered and reachable", async () => 
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 130 (2026-09-28 REGRESSION, real citation: "[box]82 / − 4[box]
+// / 6[box]5" -> 682-47=635): confirms the EXISTING generic
+// verifyMissingDigitsInEquation already solves this real 3-blank vertical
+// subtraction citation (unique solution H=6,U=7,T=3) -- no new code
+// needed, this locks in the real example as a regression test.
+test("verifyMissingDigitsInEquation: real 3-blank vertical subtraction citation (682-47=635), no new code needed", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyMissingDigitsInEquation("□82-4□=6□5", "6,7,3");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyMissingDigitsInEquation("□82-4□=6□5", "5,3,6");
+  assert.equal(wrong.correct, false);
+});
+
+// Ticket 125 (real citation, found on re-reading the original survey
+// report -- see the function's own comment for the process-review story).
+test("verifyTwoStageAffordabilityChain: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "John has $80. He wants to buy a doll [$60]. After buying the doll, he still has: $80 − $60 = $20. If he wants to buy a teddy bear too [$33], his remaining money is *(more/less) than the price of a teddy bear. Therefore, John *(has/does not have) enough money to buy a teddy bear.";
+  const r = worker.verifyTwoStageAffordabilityChain(printed, "less;does not have");
+  assert.equal(r.correct, true, `remaining=$20 < $33 -> less, does not have; got ${JSON.stringify(r)}`);
+  const wrong = worker.verifyTwoStageAffordabilityChain(printed, "more;has");
+  assert.equal(wrong.correct, false);
+});
+test("two_stage_affordability_chain handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "two_stage_affordability_chain");
+  assert.ok(handler);
+  const item = { printedQuestion: "John has $80. He wants to buy a doll [$60]. After buying the doll, he still has: $80 − $60 = $20. If he wants to buy a teddy bear too [$33], his remaining money is *(more/less) than the price of a teddy bear. Therefore, John *(has/does not have) enough money to buy a teddy bear.", studentAnswer: "less;does not have" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 129 (real citation, found on re-reading the original survey
+// report -- construction assumes a flat feed-forward expression format,
+// honestly flagged as unconfirmed against real OCR output).
+test("verifyChainedVerticalArithmetic: real citation numbers (235+557, then result-281)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyChainedVerticalArithmetic("235+557[]-281[]", "792;511");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyChainedVerticalArithmetic("235+557[]-281[]", "792;500");
+  assert.equal(wrong.correct, false);
+});
+test("chained_vertical_arithmetic handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "chained_vertical_arithmetic");
+  assert.ok(handler);
+  const item = { printedQuestion: "235+557[]-281[]", studentAnswer: "792;511" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
