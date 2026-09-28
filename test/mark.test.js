@@ -2310,3 +2310,49 @@ test("verifyLocationGridQuery: shape 3 -- Q27 real citation", async () => {
   const r = worker.verifyLocationGridQuery(PLAZA_GRID, printed, "東;南");
   assert.equal(r.correct, true);
 });
+
+// Facing-direction reasoning (2026-09-28, real citations, Q28/29 of the
+// same P2 exam as the location-grid tests above -- both cross-verified
+// by hand to agree on the same underlying fact: 偉誠 faces 東).
+const WAI_SING_FACING = { "偉誠": "東" };
+
+test("verifyFacingDirectionQuery: shape 1 -- turn right/left from a known direction (Q29 real citation)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyFacingDirectionQuery(WAI_SING_FACING, "偉誠向右轉一個直角後，面向___方。", "南");
+  assert.equal(r.correct, true, "turning right (clockwise) from 東 gives 南");
+  const wrong = worker.verifyFacingDirectionQuery(WAI_SING_FACING, "偉誠向右轉一個直角後，面向___方。", "北");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "南");
+});
+
+test("verifyFacingDirectionQuery: turning LEFT goes the other way round the cycle", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyFacingDirectionQuery(WAI_SING_FACING, "偉誠向左轉一個直角後，面向___方。", "北");
+  assert.equal(r.correct, true, "turning left (counter-clockwise) from 東 gives 北");
+});
+
+test("verifyFacingDirectionQuery: shape 2 -- opposite direction when face-to-face (Q28 real citation)", async () => {
+  const worker = await import(TMP);
+  const printed = "梓君和偉誠面對面站在一起。梓君面向___方。";
+  const r = worker.verifyFacingDirectionQuery(WAI_SING_FACING, printed, "西");
+  assert.equal(r.correct, true, "opposite of 偉誠's 東 is 西");
+  const wrong = worker.verifyFacingDirectionQuery(WAI_SING_FACING, printed, "東");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "西");
+});
+
+test("verifyFacingDirectionQuery: declines (null) with no facingDirection or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyFacingDirectionQuery(null, "偉誠向右轉一個直角後，面向___方。", "南").correct, null);
+  assert.equal(worker.verifyFacingDirectionQuery(WAI_SING_FACING, "9 + 4 = ?", "13").correct, null);
+});
+
+test("facing_direction_query handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "facing_direction_query");
+  assert.ok(handler);
+  const item = { printedQuestion: "偉誠向右轉一個直角後，面向___方。", studentAnswer: "南", facingDirection: WAI_SING_FACING };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});

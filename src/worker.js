@@ -1770,6 +1770,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右,即係個指北針實際指緊邊個畫面方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
 
+**如果幅圖入面有人物,身體/手臂明確指緊一個方向,並且有一個指北針(或者其他方式)可以確定嗰個人實際面向緊東南西北邊一個方向**，喺回覆最開始加一行「FACING_DIRECTION: 人物1=東/南/西/北;人物2=...」，列出每個可以判斷到面向方向嘅人物。如果冇辦法判斷或者冇呢類人物就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1947,6 +1949,29 @@ function extractLocationGrid(text) {
   return { locationGrid: valid ? { northDir, positions } : null, cleanedText };
 }
 
+// Facing-direction reasoning (found 2026-09-28, real citations: "梓君和
+// 偉誠面對面站在一起。梓君面向___方。" -> 西 (opposite of 偉誠's own
+// direction); "偉誠向右轉一個直角後，面向___方。" -> 南). Cross-checked
+// BOTH real answers by hand before building anything: Q29's answer (南)
+// implies 偉誠's own starting direction is 東 (turning right/clockwise
+// from 東 gives 南), and Q28's answer (西) is exactly the opposite of
+// 東 -- both citations agree on the same underlying fact (偉誠 faces
+// 東), confirming the model is right before writing any code.
+function extractFacingDirection(text) {
+  const m = /^FACING_DIRECTION:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^FACING_DIRECTION:.*$/gm, "");
+  if (!m) return { facingDirection: null, cleanedText };
+  const dirs = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = part.slice(0, eqIdx).trim();
+    const dir = part.slice(eqIdx + 1).trim();
+    if (name && ["東", "南", "西", "北"].includes(dir)) dirs[name] = dir;
+  }
+  return { facingDirection: Object.keys(dirs).length ? dirs : null, cleanedText };
+}
+
 // Shared by literal_keyword_mc (and any future MC-options consumer):
 // pulls "A. text B. text C. text..." style MC options straight out of an
 // item's own printedQuestion -- no new OCR field needed, since the
@@ -2063,7 +2088,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { pictogramData, cleanedText: cleanedText6 } = extractPictogramData(cleanedText5);
   const { calendarGrid, cleanedText: cleanedText7 } = extractCalendarGrid(cleanedText6);
   const { scheduleTable, cleanedText: cleanedText8 } = extractScheduleTable(cleanedText7);
-  const { locationGrid, cleanedText } = extractLocationGrid(cleanedText8);
+  const { locationGrid, cleanedText: cleanedText9 } = extractLocationGrid(cleanedText8);
+  const { facingDirection, cleanedText } = extractFacingDirection(cleanedText9);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2071,7 +2097,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -4088,6 +4114,54 @@ function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Facing-direction reasoning (2026-09-28, real citations, same P2 exam's
+// Q28/Q29 -- see extractFacingDirection's own comment for the full
+// cross-check that confirmed the model before any code was written).
+const COMPASS_CYCLE = ["東", "南", "西", "北"]; // clockwise order
+
+function verifyFacingDirectionQuery(facingDirection, printedQuestion, studentAnswer) {
+  if (!facingDirection) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(facingDirection);
+
+  // Shape 1: "X向右/左轉一個直角後，面向___方。" -- turn from X's own
+  // known direction (real citation: 偉誠 turns right from 東 -> 南).
+  let m = printed.match(/(.+?)向(左|右)轉.{0,3}直角.{0,5}面向/);
+  if (m) {
+    const name = names.find((n) => m[1].includes(n));
+    if (name && facingDirection[name]) {
+      const idx = COMPASS_CYCLE.indexOf(facingDirection[name]);
+      const steps = m[2] === "右" ? 1 : -1;
+      const expected = COMPASS_CYCLE[((idx + steps) % 4 + 4) % 4];
+      const correct = answer === expected;
+      return { correct, correctAnswer: correct ? "" : expected };
+    }
+  }
+
+  // Shape 2: "...面對面...Y面向___方。" -- the OPPOSITE of the other
+  // named person's known direction (real citation: 梓君 opposite 偉誠's
+  // 東 -> 西). The subject being asked about (Y) is deliberately NOT
+  // the one with a stored direction -- only the reference person's
+  // direction is knowable from the image.
+  if (/面對面/.test(printed)) {
+    const subjectMatch = printed.match(/([^\s，,。.]+?)面向.{0,3}方/);
+    if (subjectMatch) {
+      const subject = names.find((n) => subjectMatch[1].includes(n));
+      const knownOther = names.find((n) => printed.includes(n) && n !== subject && facingDirection[n]);
+      if (knownOther) {
+        const idx = COMPASS_CYCLE.indexOf(facingDirection[knownOther]);
+        const expected = COMPASS_CYCLE[(idx + 2) % 4];
+        const correct = answer === expected;
+        return { correct, correctAnswer: correct ? "" : expected };
+      }
+    }
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket 108 (2026-09-28, found in a real P2 3-D shapes unit test's own
 // answer key): reverses the already-known face/edge/vertex facts in
 // SHAPE_REFERENCE -- given how many lateral faces a solid has and what
@@ -6065,6 +6139,17 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyLocationGridQuery(item.locationGrid, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Facing-direction reasoning (found 2026-09-28, Q28/29 of the same
+    // real P2 exam).
+    name: "facing_direction_query",
+    detect: (item) => {
+      if (!item.facingDirection || typeof item.facingDirection !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /轉.{0,3}直角.{0,5}面向|面對面.*面向/.test(printed);
+    },
+    verify: (item) => verifyFacingDirectionQuery(item.facingDirection, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -6900,7 +6985,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -6959,6 +7044,11 @@ async function handleMark(request, env) {
     // pattern as scheduleTable above.
     if (qwenOutcome.locationGrid) {
       qwenOutcome.items.forEach((item) => { item.locationGrid = qwenOutcome.locationGrid; });
+    }
+    // Facing-direction reasoning: page-level shared context, same
+    // pattern as locationGrid above.
+    if (qwenOutcome.facingDirection) {
+      qwenOutcome.items.forEach((item) => { item.facingDirection = qwenOutcome.facingDirection; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -7737,6 +7827,8 @@ export {
   verifyScheduleTableQuery,
   extractLocationGrid,
   verifyLocationGridQuery,
+  extractFacingDirection,
+  verifyFacingDirectionQuery,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,

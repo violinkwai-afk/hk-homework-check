@@ -307,3 +307,21 @@ test("extractLocationGrid: returns null when no marker line is present", () => {
   assert.equal(locationGrid, null);
   assert.equal(cleanedText, raw);
 });
+
+// FACING_DIRECTION marker extraction. Real citation: 偉誠 faces East
+// (cross-derived by hand from Q28+Q29's real recorded answers before
+// any code was written).
+test("extractFacingDirection: parses a real facing-direction line and strips it from the item text", () => {
+  const raw = "FACING_DIRECTION: 偉誠=東\n28=梓君面向___方。|西";
+  const { facingDirection, cleanedText } = mod.extractFacingDirection(raw);
+  assert.deepEqual(facingDirection, { "偉誠": "東" });
+  assert.doesNotMatch(cleanedText, /FACING_DIRECTION/);
+  assert.match(cleanedText, /梓君面向/);
+});
+
+test("extractFacingDirection: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { facingDirection, cleanedText } = mod.extractFacingDirection(raw);
+  assert.equal(facingDirection, null);
+  assert.equal(cleanedText, raw);
+});
