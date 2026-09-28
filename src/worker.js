@@ -4059,6 +4059,32 @@ function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
     }
   }
 
+  // Shape 3 (2026-09-28, real citations: "嘉言由港鐵站前往商場，他應先向
+  // ___方走，經過巴士站後，再一直往___方走便可到達。" -> 北;東; "李小姐
+  // 由酒店前往碼頭，她應先向___方走，經過商場後，再往___方走便可到達。"
+  // -> 東;南): multi-step path via a named intermediate landmark -- just
+  // the same single-step direction logic applied twice (A->intermediate,
+  // then intermediate->B). Both real citations hand-verified against the
+  // actual grid before writing this. Student answer expected as two
+  // values separated by ";"/","，matching this project's established
+  // multi-sub-answer convention.
+  m = printed.match(/由(.+?)(?:前往|去)(.+?)[,，].*?經過(.+?)後/);
+  if (m) {
+    const fromName = names.find((n) => m[1].includes(n));
+    const toName = names.find((n) => m[2].includes(n));
+    const viaName = names.find((n) => m[3].includes(n));
+    if (fromName && toName && viaName && positions[fromName] && positions[toName] && positions[viaName]) {
+      const screenDir1 = screenDirectionBetween(positions[fromName], positions[viaName]);
+      const screenDir2 = screenDirectionBetween(positions[viaName], positions[toName]);
+      if (!screenDir1 || !screenDir2) return { correct: null, correctAnswer: "" }; // a diagonal leg -- not validated
+      const expected1 = rotation[screenDir1], expected2 = rotation[screenDir2];
+      const parts = answer.split(/[;,]/).map((s) => s.trim());
+      if (parts.length !== 2) return { correct: null, correctAnswer: "" };
+      const correct = parts[0] === expected1 && parts[1] === expected2;
+      return { correct, correctAnswer: correct ? "" : `${expected1};${expected2}` };
+    }
+  }
+
   return { correct: null, correctAnswer: "" };
 }
 
@@ -6034,7 +6060,7 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       if (!item.locationGrid || typeof item.locationGrid !== "object") return false;
       const printed = String(item.printedQuestion || "");
-      return /由.+向.{0,3}方走|在.+的[東南西北]方/.test(printed);
+      return /由.+向.{0,3}方走|在.+的[東南西北]方|由.+(?:前往|去).+經過.+後/.test(printed);
     },
     verify: (item) => verifyLocationGridQuery(item.locationGrid, item.printedQuestion, item.studentAnswer),
   },

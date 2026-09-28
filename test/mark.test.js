@@ -2291,3 +2291,22 @@ test("location_grid_query handler: registered and reachable", async () => {
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Location-grid shape 3 (2026-09-28, real citations, Q26/27 of the same
+// P2 exam): multi-step path via a named intermediate landmark.
+test("verifyLocationGridQuery: shape 3 -- multi-step path via intermediate landmark (Q26 real citation)", async () => {
+  const worker = await import(TMP);
+  const printed = "嘉言由港鐵站前往商場，他應先向___方走，經過巴士站後，再一直往___方走便可到達。";
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, printed, "北;東");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyLocationGridQuery(PLAZA_GRID, printed, "南;東");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "北;東");
+});
+
+test("verifyLocationGridQuery: shape 3 -- Q27 real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "李小姐由酒店前往碼頭，她應先向___方走，經過商場後，再往___方走便可到達。";
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, printed, "東;南");
+  assert.equal(r.correct, true);
+});
