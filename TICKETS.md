@@ -690,3 +690,16 @@
 **結論**:GPT-5準繩度好,但55秒一條題**完全唔切實際**(家長唔會肯等成分鐘先批改一條題)。DeepSeek R1呢個task完全用唔到(七成幾call燒晒budget都答唔到)。而家個結論:呢類reasoning model準,但慢到用唔到,唔適合做batch快速判斷嗰層——同之前搵到嘅其他reasoning model一樣嘅問題class(Qwen3.6-flash、之前嘅DeepSeek變種都係燒budget)。
 
 臨時route `/api/test-reasoning-judge-batch` 用完即刻拆走(commit `9ff8052`)。
+
+## 2026年9月28號:GPT-5用真相、真正production prompt(buildAiFallbackPrompt)真測一次
+
+用戶指出之前啲test淨係得文字、冇真相,測唔到真實成本。用返P5真實試卷嗰版相(4條題,包括之前「資訊不足」嗰條squares-diagonal),用返production真正嘅`buildAiFallbackPrompt`(同Qwen而家用緊嗰個一樣),連埋真相一齊send俾GPT-5(reasoning_effort=low)。
+
+**第一次撞板**:max_tokens=1500唔夠,燒晒(1472 reasoning tokens)都仲未答到,`finish_reason:"length"`。加到4000先成功。
+
+**真實結果(1個batch call,4條題,真相)**:
+- 用時**1.5秒**(真快,冇撞到之前嗰個排隊問題,因為呢次淨係一個call)
+- 成本**$0.0376**(4條題一齊問,對比之前文字-only單條題$0.0024——一次過問幾條加埋真相,平均落嚟每條貴咗但都仲係細額)
+- 4條入面:2條啱、1條老實話唔知(資料唔夠肯定)、**1條答錯**(啱啱好就係之前果條squares-diagonal,學生答180真係錯,但GPT-5話佢啱)——證明咗就算俾埋真相,呢條幾何題GPT-5都係計錯,唔係之前「冇圖」先計唔到。
+
+臨時route `/api/test-gpt5-real-photo` 用完即刻拆走(commit `4136e15`)。
