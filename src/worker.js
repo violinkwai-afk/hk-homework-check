@@ -4103,6 +4103,33 @@ function verifyFactFamilyGeneration(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : [...valid].join(" 或 ") };
 }
 
+// Ticket 76/139 (2026-09-28, real citation: "以下哪組數可合成13?
+// A.6和5 B.8和5 C.4和7 D.9和3" -> B): matching-value expression set MC
+// -- evaluates each option's "A和B" pair sum against a stated target,
+// finds the unique match. Declines when the target isn't uniquely
+// determined (0 or >1 matching options).
+function verifyMatchingValueExpressionSetMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const targetMatch = printed.match(/合成\s*(\d+)|make\s*(\d+)|equals?\s*(\d+)/i);
+  if (!targetMatch) return { correct: null, correctAnswer: "" };
+  const target = Number(targetMatch[1] ?? targetMatch[2] ?? targetMatch[3]);
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const evalPair = (text) => {
+    const m = String(text).match(/(\d+)\s*(?:和|,|\+)\s*(\d+)/);
+    return m ? Number(m[1]) + Number(m[2]) : null;
+  };
+  const evaluated = options.map((o) => ({ ...o, sum: evalPair(o.text) }));
+  if (evaluated.some((o) => o.sum === null)) return { correct: null, correctAnswer: "" };
+  const matching = evaluated.filter((o) => o.sum === target);
+  if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = matching[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -6027,6 +6054,18 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifySequentialSubtractionRemaining(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 76/139 (2026-09-28): matching-value expression set MC
+    // ("以下哪組數可合成13?").
+    name: "matching_value_expression_set_mc",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/合成\s*\d+|make\s*\d+|equals?\s*\d+/i.test(printed)) return false;
+      const options = parseMcOptions(printed);
+      return options.length >= 2 && options.every((o) => /\d+\s*(?:和|,|\+)\s*\d+/.test(o.text));
+    },
+    verify: (item) => verifyMatchingValueExpressionSetMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -7239,6 +7278,7 @@ export {
   verifyTextualClockDescription,
   verifyModularRemainderMC,
   verifySequentialSubtractionRemaining,
+  verifyMatchingValueExpressionSetMC,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,

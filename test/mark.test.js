@@ -2100,3 +2100,24 @@ test("sequential_subtraction_remaining handler: registered and reachable", async
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 76/139 (2026-09-28, real citation: "以下哪組數可合成13?
+// A.6和5 B.8和5 C.4和7 D.9和3" -> B).
+test("verifyMatchingValueExpressionSetMC: finds the unique option matching a stated target sum", async () => {
+  const worker = await import(TMP);
+  const printed = "以下哪組數可合成13? A.6和5 B.8和5 C.4和7 D.9和3";
+  const r = worker.verifyMatchingValueExpressionSetMC(printed, "B");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyMatchingValueExpressionSetMC(printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "B");
+});
+
+test("matching_value_expression_set_mc handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "matching_value_expression_set_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "以下哪組數可合成13? A.6和5 B.8和5 C.4和7 D.9和3", studentAnswer: "B" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
