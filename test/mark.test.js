@@ -2862,3 +2862,116 @@ test("digit_card_extreme_composite handler registered and reachable", async () =
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 154 (2026-09-28, real citation, P4 exam Q19: "以下各短除式中，
+// 哪組被除數的最大公因數不是14？" A=14丨70 56; B=2丨18 28; C=7丨42 28,
+// 2丨6 4; D=2丨14 28,7丨7 14 -- student picked B, correctly).
+test("verifyShortDivisionHcfMc: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "以下各短除式中，哪組被除數的最大公因數不是14？";
+  const shortDivisionMc = { A: [14], B: [2], C: [7, 2], D: [2, 7] };
+  const r = worker.verifyShortDivisionHcfMc(shortDivisionMc, printed, "B");
+  assert.equal(r.correct, true, "B's chain (2) multiplies to 2, not 14 -- the odd one out");
+  const wrong = worker.verifyShortDivisionHcfMc(shortDivisionMc, printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "B");
+});
+test("short_division_hcf_mc handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "short_division_hcf_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "以下各短除式中，哪組被除數的最大公因數不是14？", studentAnswer: "B", shortDivisionMc: { A: [14], B: [2], C: [7, 2], D: [2, 7] } };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 155 (2026-09-28, real citation, P5 exam Q4: "上圖由兩個面積分
+// 別是81 cm²和36 cm²的正方形組成。陰影部分的面積是多少cm²？" -- real
+// photo hand-derived: two top-aligned squares, diagonal from big
+// square's bottom-left corner to a point 3cm below the shared top edge
+// on the combined right edge. Teacher's own marked answer: 90 (student
+// wrote 180, marked wrong).
+test("verifySquaresDiagonalShadedArea: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "上圖由兩個面積分別是81 cm²和36 cm²的正方形組成。陰影部分的面積是多少cm²？";
+  const squaresDiagonal = { bigArea: 81, smallArea: 36, gap: 3 };
+  const r = worker.verifySquaresDiagonalShadedArea(squaresDiagonal, printed, "90");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifySquaresDiagonalShadedArea(squaresDiagonal, printed, "180");
+  assert.equal(wrong.correct, false, "180 is just 81+36+... the naive sum-without-subtracting-the-cut mistake the real student actually made");
+  assert.equal(wrong.correctAnswer, "90");
+});
+test("squares_diagonal_shaded_area handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "squares_diagonal_shaded_area");
+  assert.ok(handler);
+  const item = { printedQuestion: "上圖由兩個面積分別是81 cm²和36 cm²的正方形組成。陰影部分的面積是多少cm²？", studentAnswer: "90", squaresDiagonal: { bigArea: 81, smallArea: 36, gap: 3 } };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 156 (2026-09-28, real citation, P5 exam Q5: "右圖由一個梯形和
+// 兩個正方形組成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少
+// cm²？" options A.10/B.20/C.60/D.62 -- real photo shows the total
+// baseline as 12cm; student picked A, correctly).
+test("verifyTrapezoidTwoSquaresArea: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "右圖由一個梯形和兩個正方形組成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？ A. 10 cm² B. 20 cm² C. 60 cm² D. 62 cm²";
+  const r = worker.verifyTrapezoidTwoSquaresArea(12, printed, "10");
+  assert.equal(r.correct, true, "side1=6,side2=4,gap=12-6-4=2,area=(6+4)/2*2=10");
+});
+test("trapezoid_two_squares_area handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "trapezoid_two_squares_area");
+  assert.ok(handler);
+  const item = { printedQuestion: "右圖由一個梯形和兩個正方形組成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？", studentAnswer: "10", trapezoidBaseline: 12 };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 157 (2026-09-28, real citation, P5 exam Q6, brand-new geometry
+// concept for this project: "把兩個高是4 cm，底是9 cm的平行四邊形重疊
+// 成一個新圖形...如果重疊部分的底是3 cm，重疊後整個圖形的面積是多少
+// cm²？" options A.36/B.57/C.60/D.72 -- student picked C, correctly).
+test("verifyOverlappingParallelogramUnionArea: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "把兩個高是4 cm，底是9 cm的平行四邊形重疊成一個新圖形，如上圖所示。如果重疊部分的底是3 cm，重疊後整個圖形的面積是多少cm²？ A. 36 cm² B. 57 cm² C. 60 cm² D. 72 cm²";
+  const r = worker.verifyOverlappingParallelogramUnionArea(printed, "C");
+  assert.equal(r.correct, true, "2*9*4 - 3*4 = 72-12 = 60 = option C");
+});
+test("overlapping_parallelogram_union_area handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "overlapping_parallelogram_union_area");
+  assert.ok(handler);
+  const item = { printedQuestion: "把兩個高是4 cm，底是9 cm的平行四邊形重疊成一個新圖形，如上圖所示。如果重疊部分的底是3 cm，重疊後整個圖形的面積是多少cm²？ A. 36 cm² B. 57 cm² C. 60 cm² D. 72 cm²", studentAnswer: "C" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 158 (2026-09-28, real citation, P5 exam Q7: "右圖是一個大平行
+// 四邊形果園，它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，
+// 白色部分高多少m？" options A.11/B.22/C.25/D.35 -- real photo shows the
+// shaded strip's own base as 10m; student picked C, correctly).
+test("verifyParallelogramPartialHeight: real citation (MC letter, matches how the real student answered)", async () => {
+  const worker = await import(TMP);
+  const printed = "右圖是一個大平行四邊形果園，它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，白色部分高多少m？ A. 11 m B. 22 m C. 25 m D. 35 m";
+  const r = worker.verifyParallelogramPartialHeight(10, printed, "C");
+  assert.equal(r.correct, true, "height=220/10=22, white area=770-220=550, white width=550/22=25=option C");
+  const wrong = worker.verifyParallelogramPartialHeight(10, printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "C");
+});
+test("verifyParallelogramPartialHeight: falls back to a bare number when the printed text carries no MC options", async () => {
+  const worker = await import(TMP);
+  const printed = "右圖是一個大平行四邊形果園，它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，白色部分高多少m？";
+  const r = worker.verifyParallelogramPartialHeight(10, printed, "25");
+  assert.equal(r.correct, true);
+});
+test("parallelogram_partial_height handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "parallelogram_partial_height");
+  assert.ok(handler);
+  const item = { printedQuestion: "右圖是一個大平行四邊形果園，它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，白色部分高多少m？ A. 11 m B. 22 m C. 25 m D. 35 m", studentAnswer: "C", parallelogramShadedWidth: 10 };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

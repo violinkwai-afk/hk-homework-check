@@ -342,3 +342,59 @@ test("extractDigitCards: returns null when no marker line is present", () => {
   assert.equal(digitCards, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 154 (2026-09-28): SHORT_DIVISION_MC marker extraction.
+test("extractShortDivisionMc: parses a real 4-option short-division-chain line", () => {
+  const raw = "SHORT_DIVISION_MC: A=14;B=2;C=7,2;D=2,7\n19=以下各短除式中，哪組被除數的最大公因數不是14？|B";
+  const { shortDivisionMc, cleanedText } = mod.extractShortDivisionMc(raw);
+  assert.deepEqual(shortDivisionMc, { A: [14], B: [2], C: [7, 2], D: [2, 7] });
+  assert.doesNotMatch(cleanedText, /SHORT_DIVISION_MC/);
+});
+test("extractShortDivisionMc: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { shortDivisionMc, cleanedText } = mod.extractShortDivisionMc(raw);
+  assert.equal(shortDivisionMc, null);
+  assert.equal(cleanedText, raw);
+});
+
+// Ticket 155 (2026-09-28): SQUARES_DIAGONAL marker extraction.
+test("extractSquaresDiagonal: parses a real two-squares-diagonal line", () => {
+  const raw = "SQUARES_DIAGONAL: 大正方形面積=81;細正方形面積=36;缺口=3\n4=上圖由兩個面積分別是81 cm²和36 cm²的正方形組成。陰影部分的面積是多少cm²？|90";
+  const { squaresDiagonal, cleanedText } = mod.extractSquaresDiagonal(raw);
+  assert.deepEqual(squaresDiagonal, { bigArea: 81, smallArea: 36, gap: 3 });
+  assert.doesNotMatch(cleanedText, /SQUARES_DIAGONAL/);
+});
+test("extractSquaresDiagonal: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { squaresDiagonal, cleanedText } = mod.extractSquaresDiagonal(raw);
+  assert.equal(squaresDiagonal, null);
+  assert.equal(cleanedText, raw);
+});
+
+// Ticket 156 (2026-09-28): TRAPEZOID_TWO_SQUARES marker extraction.
+test("extractTrapezoidTwoSquares: parses a real baseline-total line", () => {
+  const raw = "TRAPEZOID_TWO_SQUARES: 底總長=12\n5=右圖由一個梯形和兩個正方形組成...|10";
+  const { trapezoidBaseline, cleanedText } = mod.extractTrapezoidTwoSquares(raw);
+  assert.equal(trapezoidBaseline, 12);
+  assert.doesNotMatch(cleanedText, /TRAPEZOID_TWO_SQUARES/);
+});
+test("extractTrapezoidTwoSquares: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { trapezoidBaseline, cleanedText } = mod.extractTrapezoidTwoSquares(raw);
+  assert.equal(trapezoidBaseline, null);
+  assert.equal(cleanedText, raw);
+});
+
+// Ticket 158 (2026-09-28): PARALLELOGRAM_PARTIAL marker extraction.
+test("extractParallelogramPartial: parses a real shaded-width line", () => {
+  const raw = "PARALLELOGRAM_PARTIAL: 陰影底闊度=10\n7=右圖是一個大平行四邊形果園...|25";
+  const { parallelogramShadedWidth, cleanedText } = mod.extractParallelogramPartial(raw);
+  assert.equal(parallelogramShadedWidth, 10);
+  assert.doesNotMatch(cleanedText, /PARALLELOGRAM_PARTIAL/);
+});
+test("extractParallelogramPartial: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { parallelogramShadedWidth, cleanedText } = mod.extractParallelogramPartial(raw);
+  assert.equal(parallelogramShadedWidth, null);
+  assert.equal(cleanedText, raw);
+});

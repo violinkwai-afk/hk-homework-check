@@ -1776,6 +1776,14 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
+**如果題目係揀邊組短除法（HCF/最大公因數）圖唔啱嘅MC（每個選項本身係一個短除法圖，唔係文字）**，喺回覆最開始加一行「SHORT_DIVISION_MC: A=除數1,除數2,...;B=...;C=...;D=...」，每個選項列晒佢個短除法圖由頭到尾用過嘅所有除數(由外層到內層，用","分隔)。如果冇呢類短除法MC就完全唔使加呢行。
+
+**如果幅圖係兩個正方形並排(頂部對齊,右邊嗰個細啲),中間有條斜線由大正方形嘅左下角斜住去到右邊細正方形嘅右邊,幅圖仲有一個數字標住由最頂到斜線接觸右邊緣嗰點嘅距離**，喺回覆最開始加一行「SQUARES_DIAGONAL: 大正方形面積=<數字>;細正方形面積=<數字>;缺口=<嗰個標住嘅距離數字>」。如果冇呢類圖就完全唔使加呢行。
+
+**如果幅圖係一個梯形夾住喺兩個正方形中間(左右各一個正方形,中間一個梯形斜邊連接),幅圖底部有標住成條底線嘅總長度**，喺回覆最開始加一行「TRAPEZOID_TWO_SQUARES: 底總長=<數字>」。如果冇呢類圖就完全唔使加呢行。
+
+**如果幅圖係一個平行四邊形(果園/地皮),用一條垂直線分咗做兩部分(一部分有陰影),幅圖底部標住咗陰影嗰部分嘅闊度**，喺回覆最開始加一行「PARALLELOGRAM_PARTIAL: 陰影底闊度=<數字>」。如果冇呢類圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -1974,6 +1982,69 @@ function extractFacingDirection(text) {
   return { facingDirection: Object.keys(dirs).length ? dirs : null, cleanedText };
 }
 
+// Ticket 154 (2026-09-28, real citation: "以下各短除式中，哪組被除數的
+// 最大公因數不是14？" -- 4 MC options, each itself a short-division
+// diagram): extracts each option's chain of divisors used, outer to
+// inner (e.g. B: "2丨18 28 -> 9 14" is just [2]; D: "2丨14 28 -> 7 14,
+// 7丨7 14 -> 1 2" is [2,7]).
+function extractShortDivisionMc(text) {
+  const m = /^SHORT_DIVISION_MC:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^SHORT_DIVISION_MC:.*$/gm, "");
+  if (!m) return { shortDivisionMc: null, cleanedText };
+  const options = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const letter = part.slice(0, eqIdx).trim();
+    const divisors = part.slice(eqIdx + 1).split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+    if (letter && divisors.length) options[letter] = divisors;
+  }
+  return { shortDivisionMc: Object.keys(options).length ? options : null, cleanedText };
+}
+
+// Ticket 155 (2026-09-28, real citation: "上圖由兩個面積分別是81 cm²和
+// 36 cm²的正方形組成。陰影部分的面積是多少cm²？" -- two squares,
+// top-aligned side by side, a diagonal from the big square's bottom-left
+// corner to a point on the right edge marked by a "gap from top"
+// measurement; verified answer 90 by hand-deriving the geometry from the
+// real photo before writing any code -- see verifySquaresDiagonalShadedArea).
+function extractSquaresDiagonal(text) {
+  const m = /^SQUARES_DIAGONAL:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^SQUARES_DIAGONAL:.*$/gm, "");
+  if (!m) return { squaresDiagonal: null, cleanedText };
+  const fields = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    fields[part.slice(0, eqIdx).trim()] = Number(part.slice(eqIdx + 1).trim());
+  }
+  const bigArea = fields["大正方形面積"], smallArea = fields["細正方形面積"], gap = fields["缺口"];
+  const ok = Number.isFinite(bigArea) && Number.isFinite(smallArea) && Number.isFinite(gap);
+  return { squaresDiagonal: ok ? { bigArea, smallArea, gap } : null, cleanedText };
+}
+
+// Ticket 156 (2026-09-28, real citation: "右圖由一個梯形和兩個正方形組
+// 成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？" -- the
+// two squares' perimeters are already in the printed question text; only
+// the diagram-only total baseline length ("12 cm" in the photo) needs a
+// marker).
+function extractTrapezoidTwoSquares(text) {
+  const m = /^TRAPEZOID_TWO_SQUARES:\s*底總長=(\d+(?:\.\d+)?)/m.exec(text);
+  const cleanedText = text.replace(/^TRAPEZOID_TWO_SQUARES:.*$/gm, "");
+  return { trapezoidBaseline: m ? Number(m[1]) : null, cleanedText };
+}
+
+// Ticket 158 (2026-09-28, real citation: "右圖是一個大平行四邊形果園，
+// 它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，白色部分高多
+// 少m？" -- total/shaded areas are in the printed text; only the
+// diagram-only shaded strip's base width ("10 m" in the photo) needs a
+// marker).
+function extractParallelogramPartial(text) {
+  const m = /^PARALLELOGRAM_PARTIAL:\s*陰影底闊度=(\d+(?:\.\d+)?)/m.exec(text);
+  const cleanedText = text.replace(/^PARALLELOGRAM_PARTIAL:.*$/gm, "");
+  return { parallelogramShadedWidth: m ? Number(m[1]) : null, cleanedText };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2104,7 +2175,11 @@ async function callQwenOcrText(images, openrouterKey) {
   const { scheduleTable, cleanedText: cleanedText8 } = extractScheduleTable(cleanedText7);
   const { locationGrid, cleanedText: cleanedText9 } = extractLocationGrid(cleanedText8);
   const { facingDirection, cleanedText: cleanedText10 } = extractFacingDirection(cleanedText9);
-  const { digitCards, cleanedText } = extractDigitCards(cleanedText10);
+  const { digitCards, cleanedText: cleanedText11 } = extractDigitCards(cleanedText10);
+  const { shortDivisionMc, cleanedText: cleanedText12 } = extractShortDivisionMc(cleanedText11);
+  const { squaresDiagonal, cleanedText: cleanedText13 } = extractSquaresDiagonal(cleanedText12);
+  const { trapezoidBaseline, cleanedText: cleanedText14 } = extractTrapezoidTwoSquares(cleanedText13);
+  const { parallelogramShadedWidth, cleanedText } = extractParallelogramPartial(cleanedText14);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2112,7 +2187,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5558,6 +5633,169 @@ function verifyDigitCardExtremeComposite(digitCards, printedQuestion, studentAns
   return { correct: studentNum === best, correctAnswer: studentNum === best ? "" : String(best) };
 }
 
+// Ticket 154 (2026-09-28, real citation: "以下各短除式中，哪組被除數的
+// 最大公因數不是14？" A=14丨70 56(→5,4); B=2丨18 28(→9,14); C=7丨42 28,
+// 2丨6 4(→3,2); D=2丨14 28,7丨7 14(→1,2) -- student picked B, correctly):
+// each option's own short-division chain, when carried all the way until
+// the quotients are coprime, has HCF = product of every divisor used
+// down the chain. Find whichever option's product does NOT match the
+// number named in the question ("不是14"); that's the odd one out.
+function verifyShortDivisionHcfMc(shortDivisionMc, printedQuestion, studentAnswer) {
+  if (!shortDivisionMc) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  const targetMatch = /最大公因數不是\s*(\d+)/.exec(printed);
+  if (!answer || !targetMatch) return { correct: null, correctAnswer: "" };
+  const target = Number(targetMatch[1]);
+  const letters = Object.keys(shortDivisionMc);
+  if (letters.length < 2) return { correct: null, correctAnswer: "" };
+  const oddOnes = letters.filter((l) => shortDivisionMc[l].reduce((a, b) => a * b, 1) !== target);
+  if (oddOnes.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = oddOnes[0];
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Ticket 155 (2026-09-28, real citation: "上圖由兩個面積分別是81 cm²和
+// 36 cm²的正方形組成。陰影部分的面積是多少cm²？" -- real photo shows two
+// squares TOP-ALIGNED side by side (big on the left, side a=√bigArea;
+// small on the right, side b=√smallArea), with a diagonal from the big
+// square's bottom-left corner to a point on the combined right edge that
+// sits "gap" cm below the shared top edge. Hand-derived from the real
+// photo before writing this (verified against the teacher's own marked
+// answer, 90):
+//   Diagonal: from (0,0) to (a+b, a-gap).
+//   Left square (x:0..a, y:0..a): shaded = bigArea - the below-diagonal
+//     triangle (0,0)-(a,0)-(a, diag(a)).
+//   Right square (x:a..a+b, y:(a-b)..a): shaded = smallArea - the
+//     below-diagonal trapezoid between the square's own bottom and the
+//     diagonal.
+// Deliberately narrow: declines (returns null) if the diagonal doesn't
+// stay within the right square's own vertical span, since that's a
+// different picture than the one actually verified.
+function verifySquaresDiagonalShadedArea(squaresDiagonal, printedQuestion, studentAnswer) {
+  if (!squaresDiagonal) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/陰影部分的面積/.test(printed)) return { correct: null, correctAnswer: "" };
+  const { bigArea, smallArea, gap } = squaresDiagonal;
+  const a = Math.sqrt(bigArea), b = Math.sqrt(smallArea);
+  if (!(a > 0) || !(b > 0) || !(gap >= 0) || gap >= a) return { correct: null, correctAnswer: "" };
+  const W = a + b;
+  const endHeight = a - gap;
+  const slope = endHeight / W;
+  const yAtSharedEdge = slope * a;
+  if (yAtSharedEdge < 0 || yAtSharedEdge > a) return { correct: null, correctAnswer: "" };
+  const shadedLeft = bigArea - 0.5 * a * yAtSharedEdge;
+  const squareBottom = a - b;
+  const h1 = yAtSharedEdge - squareBottom, h2 = endHeight - squareBottom;
+  if (h1 < 0 || h2 < 0) return { correct: null, correctAnswer: "" };
+  const whiteRight = b * (h1 + h2) / 2;
+  const shadedRight = smallArea - whiteRight;
+  const expected = shadedLeft + shadedRight;
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
+}
+
+// Ticket 156 (2026-09-28, real citation: "右圖由一個梯形和兩個正方形組
+// 成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？" -- real
+// photo shows the two squares sitting on a common baseline, the trapezoid
+// wedged between them, with the WHOLE baseline's total length given in
+// the diagram (12 cm). The two squares' own widths (sides) are already
+// their own two parallel edges of the trapezoid; the trapezoid's own
+// "height" (distance between those two parallel vertical sides) is
+// whatever's left of the baseline once both squares' widths are removed.
+// Verified against the real citation's own answer, A. 10 cm²:
+//   side1=24/4=6, side2=16/4=4, gap=12-6-4=2, area=(6+4)/2*2=10.
+function verifyTrapezoidTwoSquaresArea(trapezoidBaseline, printedQuestion, studentAnswer) {
+  if (trapezoidBaseline == null) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/梯形的面積/.test(printed)) return { correct: null, correctAnswer: "" };
+  const perims = [...printed.matchAll(/(\d+(?:\.\d+)?)\s*cm/gi)].map((m) => Number(m[1]));
+  if (perims.length < 2) return { correct: null, correctAnswer: "" };
+  const [p1, p2] = perims;
+  const side1 = p1 / 4, side2 = p2 / 4;
+  const gap = trapezoidBaseline - side1 - side2;
+  if (gap <= 0) return { correct: null, correctAnswer: "" };
+  const expected = ((side1 + side2) / 2) * gap;
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
+}
+
+// Ticket 157 (2026-09-28, real citation: "把兩個高是4 cm，底是9 cm的平
+// 行四邊形重疊成一個新圖形...如果重疊部分的底是3 cm，重疊後整個圖形的
+// 面積是多少cm²？" MC A.36/B.57/C.60/D.72 -- new geometry concept, not
+// covered by anything else in this project before. No diagram marker
+// needed -- base/height/overlap are all in the printed question text
+// itself. Union area = 2×(base×height) - overlapBase×height, same
+// height for both parallelograms and the overlap (only the overlap's
+// base differs). Verified against the real citation's own answer, C. 60.
+function verifyOverlappingParallelogramUnionArea(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/重疊/.test(printed) || !/平行四邊形/.test(printed)) return { correct: null, correctAnswer: "" };
+  const heightMatch = /高是\s*(\d+(?:\.\d+)?)\s*cm/.exec(printed);
+  const baseMatch = /底是\s*(\d+(?:\.\d+)?)\s*cm/.exec(printed);
+  const overlapMatch = /重疊部分的底是\s*(\d+(?:\.\d+)?)\s*cm/.exec(printed);
+  if (!heightMatch || !baseMatch || !overlapMatch) return { correct: null, correctAnswer: "" };
+  const height = Number(heightMatch[1]), base = Number(baseMatch[1]), overlapBase = Number(overlapMatch[1]);
+  const expected = 2 * base * height - overlapBase * height;
+  const options = parseMcOptions(printed);
+  if (options.length >= 2) {
+    const matching = options.filter((o) => Math.abs(Number((o.text.match(/[\d.]+/) || [])[0]) - expected) < 0.01);
+    if (matching.length === 1) {
+      const correct = answer === matching[0].letter;
+      return { correct, correctAnswer: correct ? "" : matching[0].letter };
+    }
+  }
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
+}
+
+// Ticket 158 (2026-09-28, real citation: "右圖是一個大平行四邊形果園，
+// 它的佔地面積是770 m²。如果着色部分的佔地面積是220 m²，白色部分高多少
+// m？" MC A.11/B.22/C.25/D.35 -- real photo shows a parallelogram split
+// by a VERTICAL line into a white (left) and shaded (right) piece, with
+// the shaded piece's own base width given in the diagram. Key insight
+// (shearing/Cavalieri): ANY vertical slice of a parallelogram has area =
+// slice_width × the parallelogram's own perpendicular (vertical) height,
+// exactly like a rectangle -- so the shaded piece's area/width gives that
+// shared height directly, and the white piece's width follows the same
+// way. Verified against the real citation's own answer, C. 25.
+function verifyParallelogramPartialHeight(parallelogramShadedWidth, printedQuestion, studentAnswer) {
+  if (parallelogramShadedWidth == null) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/白色部分/.test(printed) || !/佔地面積/.test(printed)) return { correct: null, correctAnswer: "" };
+  const totalMatch = /佔地面積是\s*(\d+(?:\.\d+)?)\s*m/.exec(printed);
+  const shadedMatch = /着色部分的佔地面積是\s*(\d+(?:\.\d+)?)\s*m/.exec(printed);
+  if (!totalMatch || !shadedMatch) return { correct: null, correctAnswer: "" };
+  const total = Number(totalMatch[1]), shadedArea = Number(shadedMatch[1]);
+  const height = shadedArea / parallelogramShadedWidth;
+  if (!(height > 0)) return { correct: null, correctAnswer: "" };
+  const whiteArea = total - shadedArea;
+  const expected = whiteArea / height;
+  const options = parseMcOptions(printed);
+  if (options.length >= 2) {
+    const matching = options.filter((o) => Math.abs(Number((o.text.match(/[\d.]+/) || [])[0]) - expected) < 0.01);
+    if (matching.length === 1) {
+      const correct = answer === matching[0].letter;
+      return { correct, correctAnswer: correct ? "" : matching[0].letter };
+    }
+  }
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
+}
+
 function verifyListFactors(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -6884,6 +7122,36 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyDigitCardExtremeComposite(item.digitCards, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 154 (2026-09-28): short-division HCF "which option is wrong" MC.
+    name: "short_division_hcf_mc",
+    detect: (item) => !!item.shortDivisionMc && /最大公因數不是/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyShortDivisionHcfMc(item.shortDivisionMc, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 155 (2026-09-28): two top-aligned squares, diagonal-cut shaded area.
+    name: "squares_diagonal_shaded_area",
+    detect: (item) => !!item.squaresDiagonal && /陰影部分的面積/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySquaresDiagonalShadedArea(item.squaresDiagonal, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 156 (2026-09-28): trapezoid wedged between two squares, area from perimeters.
+    name: "trapezoid_two_squares_area",
+    detect: (item) => item.trapezoidBaseline != null && /梯形的面積/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyTrapezoidTwoSquaresArea(item.trapezoidBaseline, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 157 (2026-09-28): overlapping parallelograms union area.
+    name: "overlapping_parallelogram_union_area",
+    detect: (item) => /重疊/.test(String(item.printedQuestion || "")) && /平行四邊形/.test(String(item.printedQuestion || "")) && /整個圖形的面積/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyOverlappingParallelogramUnionArea(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 158 (2026-09-28): parallelogram split by a vertical line, reverse-solve height.
+    name: "parallelogram_partial_height",
+    detect: (item) => item.parallelogramShadedWidth != null && /白色部分/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyParallelogramPartialHeight(item.parallelogramShadedWidth, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -7906,7 +8174,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -7975,6 +8243,19 @@ async function handleMark(request, env) {
     // same pattern as facingDirection above.
     if (qwenOutcome.digitCards) {
       qwenOutcome.items.forEach((item) => { item.digitCards = qwenOutcome.digitCards; });
+    }
+    // Tickets 154/155/156/158: same page-level shared-context pattern.
+    if (qwenOutcome.shortDivisionMc) {
+      qwenOutcome.items.forEach((item) => { item.shortDivisionMc = qwenOutcome.shortDivisionMc; });
+    }
+    if (qwenOutcome.squaresDiagonal) {
+      qwenOutcome.items.forEach((item) => { item.squaresDiagonal = qwenOutcome.squaresDiagonal; });
+    }
+    if (qwenOutcome.trapezoidBaseline != null) {
+      qwenOutcome.items.forEach((item) => { item.trapezoidBaseline = qwenOutcome.trapezoidBaseline; });
+    }
+    if (qwenOutcome.parallelogramShadedWidth != null) {
+      qwenOutcome.items.forEach((item) => { item.parallelogramShadedWidth = qwenOutcome.parallelogramShadedWidth; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -8757,6 +9038,15 @@ export {
   verifyFacingDirectionQuery,
   extractDigitCards,
   verifyDigitCardExtremeComposite,
+  extractShortDivisionMc,
+  verifyShortDivisionHcfMc,
+  extractSquaresDiagonal,
+  verifySquaresDiagonalShadedArea,
+  extractTrapezoidTwoSquares,
+  verifyTrapezoidTwoSquaresArea,
+  verifyOverlappingParallelogramUnionArea,
+  extractParallelogramPartial,
+  verifyParallelogramPartialHeight,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,
