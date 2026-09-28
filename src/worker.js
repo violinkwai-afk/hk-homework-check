@@ -267,15 +267,23 @@ async function handleTestReasoningJudgeBatch(request, env) {
     : await env.OPENROUTER_API_KEY.get();
   if (!openrouterKey) return json({ error: "no_key" }, 500);
   const { items } = await request.json();
-  const results = [];
-  for (const it of items) {
+  // Reasoning models are slow enough (even at reasoning_effort=low) that
+  // processing 30 items sequentially blew past both curl's and (likely)
+  // the Worker's own request time budget -- every item's (R1, GPT-5)
+  // pair now fires concurrently across the WHOLE batch instead of one
+  // item at a time. This doesn't weaken the per-item fairness
+  // requirement (R1 and GPT-5 are still called at the exact same moment
+  // for a given item, each call's own elapsedMs is still measured
+  // independently) -- it only changes how many items are in flight at
+  // once, not what's being compared within an item.
+  const results = await Promise.all(items.map(async (it) => {
     const prompt = buildReasoningJudgePrompt(it);
     const [deepseekR1, gpt5] = await Promise.all([
       callReasoningJudge("deepseek/deepseek-r1", prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
       callReasoningJudge("openai/gpt-5", prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
     ]);
-    results.push({ resultIndex: it.resultIndex, deepseekR1, gpt5 });
-  }
+    return { resultIndex: it.resultIndex, deepseekR1, gpt5 };
+  }));
   return json({ results });
 }
 
