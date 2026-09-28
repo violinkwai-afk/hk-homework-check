@@ -819,3 +819,9 @@
   新增`OBJECT_HEIGHTS`標記、`extractObjectHeights`、`verifyObjectHeights`(Shape A直接讀取;Shape B between-range MC)。7個新測試,684/684測試通過,已push。
 
   【今晚總結:185-195一共11個新ticket全部接落生產環境】
+
+- ✅ **28. Handler交叉碰撞test框架,已落實(用戶確認做)。** 新增`test/handler-collision.test.js`——攞晒今晚11個新handler(185-195)+歷史上兩個真係撞過車嘅handler(183/184)嘅真實citation，逐條餵晒俾成個`QUESTION_TYPE_HANDLERS`陣列，check邊個先係「第一個」match(即係真正dispatch會用嗰個)。
+  **第一次run即刻搵到1個真bug**：`number_word_conversion`嘅「quoted」偵測太寬鬆——一句有兩個所有格apostrophe(例如"Sally's dart...than Ken's dart")、中間冇標點斷開，會被誤判做「有quote住嘅數字詞」，攔截咗194嘅飛鏢題(唔會答錯,但會錯誤咁停喺呢個handler,`distance_ranking`永遠冇機會answer)。修法:quote內容加長度上限(≤20字)，真實嘅number-word citation('twenty-six'、'70'、「七十」)全部係短詞，唔會受影響。
+  另外發現`math_equation`(排喺陣列最尾嘅broad fallback)都會"match"多條citation,但呢個係設計上刻意嘅(唔係bug)，已經調整test邏輯做「check第一個match」而唔係「淨係得一個match」。
+  698/698測試通過(新增14個碰撞check+1個真fix)，已push。
+- ✅ **195跟進：子君嘅高度數值已經真實核實(用戶提供zoom相)。** 之前用嘅係構造placeholder(3)，用戶提供清晰相確認子君真係有3舊疊起嘅代用單位(擦膠)，同美兒嘅6舊對比。已將test/code comment嘅「未核實」披露刪走，改做「已核實」。

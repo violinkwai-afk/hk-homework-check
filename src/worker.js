@@ -2465,11 +2465,10 @@ function verifyDistanceRanking(distanceValues, printedQuestion, studentAnswer) {
 // to pick the one MC option that falls strictly between them). Same
 // "OCR extracts, code compares" split as DISTANCE_VALUES, just for
 // direct height lookups + a between-two-values MC instead of ranking.
-// ⚠️ 子君's own height was NOT confidently readable from the real photo
-// at hand (a small sprout icon, no printed number) -- this citation's
-// (a) shape (direct lookup of 美兒=6) is verified, but (b) is only
-// tested here with a constructed placeholder for 子君, same disclosed
-// gap as Ticket 194.
+// Both real values confirmed: 美兒=6 (directly printed), 子君=3 (a
+// zoomed re-photo confirmed exactly 3 stacked eraser units -- the
+// original photo's resolution genuinely couldn't be counted, so this
+// was independently verified before shipping, not guessed).
 function extractObjectHeights(text) {
   const m = /^OBJECT_HEIGHTS:\s*(.+)$/m.exec(text);
   const cleanedText = text.replace(/^OBJECT_HEIGHTS:.*$/gm, "");
@@ -7840,7 +7839,18 @@ const QUESTION_TYPE_HANDLERS = [
       const printed = String(item.printedQuestion || "").trim();
       const answer = String(item.studentAnswer || "").trim();
       if (!printed || !answer) return false;
-      const quoted = /'([a-zA-Z\s-]+)'|"([a-zA-Z\s-]+)"|「([一二三四五六七八九十零]+)」/.test(printed);
+      // Ticket 28 (2026-09-28, real collision found): a sentence with TWO
+      // possessive apostrophes and no punctuation between them (e.g.
+      // "Sally's dart is nearer to the center than Ken's dart") let the
+      // quote-span regex match the whole clause between them as if it
+      // were a quoted number-word -- a real citation's own two darts
+      // sub-questions were wrongly claimed away from distance_ranking.
+      // Every real number-word citation quotes a single short word/
+      // phrase ('twenty-six', '70', 「七十」), never a full clause, so
+      // capping the captured span's length keeps those working while
+      // excluding this false-positive class.
+      const quotedMatch = /'([a-zA-Z\s-]+)'|"([a-zA-Z\s-]+)"|「([一二三四五六七八九十零]+)」/.exec(printed);
+      const quoted = quotedMatch && (quotedMatch[1] || quotedMatch[2] || quotedMatch[3] || "").length <= 20;
       if (quoted) return true;
       // 2026-09-23 (challenge-all review finding): a bare small digit in the
       // printed question plus ANY letter/CN-numeral character in the answer

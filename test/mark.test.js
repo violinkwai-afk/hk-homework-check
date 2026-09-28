@@ -2477,12 +2477,11 @@ test("distance_ranking handler: registered and reachable through real classifyAn
 });
 
 // Ticket 195 (2026-09-28, real citation, 躍思P1: 子君、美兒和小文每人各種
-// 一棵植物). Shape A's value (美兒=6) is real and directly read from the
-// photo. Shape B's constraint logic is real ("小文...比子君的高,又比美兒
-// 的矮,可能高2/5/7個磚") but 子君's own height wasn't confidently
-// readable from the photo (a small sprout icon, no printed number) --
-// this test uses a constructed placeholder for 子君, same disclosed gap
-// as Ticket 194's darts test.
+// 一棵植物). Both values are real and confirmed from the photo: 美兒=6
+// (directly printed), 子君=3 (a zoomed re-photo confirmed exactly 3
+// stacked eraser units beside 子君's pot -- the earlier attempt at this
+// resolution genuinely couldn't count it, so this was verified before
+// being written here, not guessed).
 test("verifyObjectHeights: shape A -- direct lookup (real citation, 美兒=6)", async () => {
   const worker = await import(TMP);
   const objectHeights = { "美兒": 6 };
