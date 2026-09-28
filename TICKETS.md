@@ -729,7 +729,7 @@
 | 13 | CGP odd-one-out(指南針) | CGP Pointing Q1 | 自己睇圖案規律判斷 | ⚠️冇批改,可信度較低 |
 | 14 | 鐘面MC(揀合理時間) | 躍思P1 | D | 用戶提供 |
 | 15 | 螞蟻最短路徑 | 躍思P1 | (a)6 (b)5 (c)F | 用戶提供 |
-| 16 | 摺紙對摺求原長 | 躍思P1 | 23cm | 用戶提供 |
+| 16 | 摺紙對摺求原長 | 躍思P1 | 26cm(用戶2026-09-28更正,原本俾錯咗23cm) | 用戶提供 |
 | 17 | 甜品星期循環 | 躍思P1 | (a)二 (b)3 (c)cupcake | 用戶提供 |
 | 18 | 2D形狀分類多選 | 躍思P1 | (a)A,I (b)F (c)E,J (d)H | 官方答案key |
 | 19 | 邊組砌到三角形MC | 躍思P1 | B | 官方答案key |
@@ -784,3 +784,5 @@
   同時擴充咗OCR_ONLY_PROMPT嘅SCHEDULE_TABLE指令,由淨係識「活動/科目」擴闊到都識「甜品/食物」類,仲加咗指令話如果問題入面嘅子句都有隻同上面個表一樣嘅圖示,要將圖示換做文字寫入printedQuestion(唔淨係寫「圖示」兩個字),等code先至讀得到嗰個值。
   **過程中搵到2個真bug(都係用返真正`classifyAndVerify`先揭發,單獨test個function測唔出)**:(1)Shape4第一版用`printed.includes(value)`喺**成句**度搵「昨天」嗰個值,但MC選項嗰句本身都可能包含另一個scheduleTable值(真citation入面「明天的甜品是*(蛋卷/紙杯蛋糕/兩粒朱古力)」嗰個「蛋卷」選項啱啱好同「昨天」嘅正確值「雪糕」撞唔埋,但因為object key order「蛋卷」排第一,錯誤咁攞咗「蛋卷」當「昨天」用),改用regex capture group淨係喺「昨天...是」到「明天」中間嗰段搵先啱。(2)`detect()`原本淨係識`/星期/`呢個pattern,但Shape3/Shape4嘅真實問法用「今天/昨天/明天」呢類相對日子詞,完全冇「星期」兩個字,導致detect()一開始就攔截唔到呢兩條題(單獨test verify函數睇唔出呢個問題,因為直接call function唔經過detect(),要用返真正`classifyAndVerify`先揭發),已擴闊detect()嘅regex。
   新增4個測試(2個shape測試+1個classifyAndVerify真dispatch測試+已有嘅declines測試維持通過),648/648測試通過。
+
+- ✅ **188. 摺紙對摺求原長,已接落生產環境。** 真實citation(躍思P1 Q7,用戶2026-09-28更正答案由23cm改做26cm):「家文把一張手工紙如上圖般對摺，對摺後的長度是13cm，手工紙原來長___cm。」答案26cm——確認原本嘅簡單假設先啱:單一次對摺,原長=摺後長度×2(13×2=26)。新增`PAPER_FOLD`標記(OCR輸出摺次數+摺後長度)、`extractPaperFold`、`verifyPaperFold`(原長=摺後長度×2^摺次數,支援多次摺)。4個新測試(包括classifyAndVerify真dispatch),652/652測試通過,已push。

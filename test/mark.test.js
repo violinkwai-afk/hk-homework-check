@@ -2229,6 +2229,40 @@ test("schedule_table_query handler: shape 3/4 reachable through real classifyAnd
   assert.equal(worker.classifyAndVerify(item2, null).correct, true);
 });
 
+// Ticket 188 (2026-09-28, real citation, 躍思P1 Q7: 家文把一張手工紙如上圖
+// 般對摺，對摺後的長度是13cm，手工紙原來長___cm -> 26, user-confirmed).
+test("verifyPaperFold: single fold, original = folded * 2", async () => {
+  const worker = await import(TMP);
+  const paperFold = { folds: 1, foldedLength: 13 };
+  const r = worker.verifyPaperFold(paperFold, "26");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyPaperFold(paperFold, "23");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "26");
+});
+
+test("verifyPaperFold: two folds compounds (2^2), declines with no paperFold data", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyPaperFold({ folds: 2, foldedLength: 5 }, "20");
+  assert.equal(r.correct, true, "5 * 2^2 = 20");
+  assert.equal(worker.verifyPaperFold(null, "26").correct, null);
+});
+
+test("extractPaperFold: parses the PAPER_FOLD marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { paperFold, cleanedText } = worker.extractPaperFold("PAPER_FOLD: 摺次數=1;摺後長度=13\n1. 手工紙原來長___cm。|26");
+  assert.deepEqual(paperFold, { folds: 1, foldedLength: 13 });
+  assert.ok(!cleanedText.includes("PAPER_FOLD"));
+});
+
+test("paper_fold handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const item = { printedQuestion: "家文把一張手工紙如上圖般對摺，對摺後的長度是13 cm，手工紙原來長___cm。", studentAnswer: "26", paperFold: { folds: 1, foldedLength: 13 } };
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "paper_fold");
+  assert.ok(handler);
+  assert.equal(worker.classifyAndVerify(item, null).correct, true);
+});
+
 test("verifyScheduleTableQuery: declines (null) with no scheduleTable or unmatched phrasing", async () => {
   const worker = await import(TMP);
   assert.equal(worker.verifyScheduleTableQuery(null, "小怡在星期___有游泳班。", "一").correct, null);

@@ -1788,6 +1788,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果印刷咗幾個「8方位指南針」圖(每個圖係一個米字型,8條線由中心放射出去,每條線盡頭寫住一個方向:北/東北/東/東南/南/西南/西/西北,揀邊個圖先啱)**，喺回覆最開始加一行「COMPASS_ROSE_MC: A=<由最頂嗰個位置開始,順時針方向讀晒8個方向字,用","分隔>;B=<同上>;C=<同上>」(如果有D、E等更多選項都照樣加落去)。如果冇呢類圖就完全唔使加呢行。
 
+**如果幅圖係一張紙(長方形)對摺嘅過程圖(由原本嘅長方形,經過一次或者多次對摺,變到最後嘅形狀,圖入面標住咗最後對摺完嘅長度)**，喺回覆最開始加一行「PAPER_FOLD: 摺次數=<對摺咗幾多次,由圖入面箭嘴/步驟數清楚數,通常係1>;摺後長度=<圖入面標住嘅最後長度數字>」。如果冇呢類摺紙圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2102,6 +2104,42 @@ function extractCompassRoseMc(text) {
   return { compassRoseMc: Object.keys(options).length ? options : null, cleanedText };
 }
 
+// Ticket 188 (2026-09-28, real citation, 躍思P1: 家文把一張手工紙如上
+// 圖般對摺，對摺後的長度是13cm，手工紙原來長___cm -> 26): a single fold
+// halves the length, so original = folded_length * 2^fold_count.
+// Hand-verified against the real citation (folds=1, folded=13,
+// 13*2^1=26, matches the user-confirmed correct answer) before writing
+// verifyPaperFold below.
+function extractPaperFold(text) {
+  const m = /^PAPER_FOLD:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PAPER_FOLD:.*$/gm, "");
+  if (!m) return { paperFold: null, cleanedText };
+  const parts = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const value = Number(part.slice(eqIdx + 1).trim());
+    if (Number.isFinite(value)) parts[key] = value;
+  }
+  const folds = parts["摺次數"];
+  const foldedLength = parts["摺後長度"];
+  if (!Number.isFinite(folds) || folds < 1 || !Number.isFinite(foldedLength) || foldedLength <= 0) {
+    return { paperFold: null, cleanedText };
+  }
+  return { paperFold: { folds, foldedLength }, cleanedText };
+}
+
+function verifyPaperFold(paperFold, studentAnswer) {
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !paperFold) return { correct: null, correctAnswer: "" };
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const expected = paperFold.foldedLength * Math.pow(2, paperFold.folds);
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2238,7 +2276,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { trapezoidBaseline, cleanedText: cleanedText14 } = extractTrapezoidTwoSquares(cleanedText13);
   const { parallelogramShadedWidth, cleanedText: cleanedText15 } = extractParallelogramPartial(cleanedText14);
   const { rectCutKite, cleanedText: cleanedText16 } = extractRectCutKite(cleanedText15);
-  const { compassRoseMc, cleanedText } = extractCompassRoseMc(cleanedText16);
+  const { compassRoseMc, cleanedText: cleanedText17 } = extractCompassRoseMc(cleanedText16);
+  const { paperFold, cleanedText } = extractPaperFold(cleanedText17);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2246,7 +2285,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -7553,6 +7592,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyCompassRoseMc(item.compassRoseMc, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 188 (2026-09-28): paper-fold reverse-length question.
+    name: "paper_fold",
+    detect: (item) => !!item.paperFold && /對摺|摺.{0,4}後/.test(String(item.printedQuestion || "")) && /原來長|原長/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyPaperFold(item.paperFold, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8581,7 +8626,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8671,6 +8716,10 @@ async function handleMark(request, env) {
     // Ticket 179: same page-level shared-context pattern.
     if (qwenOutcome.compassRoseMc) {
       qwenOutcome.items.forEach((item) => { item.compassRoseMc = qwenOutcome.compassRoseMc; });
+    }
+    // Ticket 188: same page-level shared-context pattern.
+    if (qwenOutcome.paperFold) {
+      qwenOutcome.items.forEach((item) => { item.paperFold = qwenOutcome.paperFold; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9468,6 +9517,8 @@ export {
   verifyWriteAlgebraicExpression,
   extractCompassRoseMc,
   verifyCompassRoseMc,
+  extractPaperFold,
+  verifyPaperFold,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,
