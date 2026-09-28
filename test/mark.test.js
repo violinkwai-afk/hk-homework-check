@@ -1934,3 +1934,73 @@ test("min_from_two_capacity_constraints handler: registered and reachable", asyn
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 75 (2026-09-28, real citations: "Which is NOT correct?
+// A.12-0=0 B.9+0=9 C.0+18=18 D.14-14=0" -> A; "A.9=2+6 B.5+2=7 C.10-4=2
+// D.1+7=9" -- which IS correct -> B).
+test("verifyEquationTruthMC: 'which is NOT correct' framing", async () => {
+  const worker = await import(TMP);
+  const printed = "Which is NOT correct? A.12-0=0 B.9+0=9 C.0+18=18 D.14-14=0";
+  const r = worker.verifyEquationTruthMC(printed, "A");
+  assert.equal(r.correct, true);
+});
+
+test("verifyEquationTruthMC: 'which IS correct' framing", async () => {
+  const worker = await import(TMP);
+  const printed = "A.9=2+6 B.5+2=7 C.10-4=2 D.1+7=9";
+  const r = worker.verifyEquationTruthMC(printed, "B");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyEquationTruthMC(printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "B");
+});
+
+test("equation_truth_mc handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "equation_truth_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "Which is NOT correct? A.12-0=0 B.9+0=9 C.0+18=18 D.14-14=0", studentAnswer: "A" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 77 (2026-09-28, real citation: "How do you separate 10
+// [candies] into two groups? 10 = [] + []").
+test("verifyOpenDecomposition: any valid split is accepted, not one fixed pair", async () => {
+  const worker = await import(TMP);
+  const printed = "How do you separate 10 candies into two groups? 10 = [] + []";
+  const r1 = worker.verifyOpenDecomposition(printed, "6;4");
+  assert.equal(r1.correct, true);
+  const r2 = worker.verifyOpenDecomposition(printed, "1;9");
+  assert.equal(r2.correct, true, "any pair summing to 10 must be accepted");
+  const wrong = worker.verifyOpenDecomposition(printed, "6;3");
+  assert.equal(wrong.correct, false);
+});
+
+test("open_decomposition handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "open_decomposition");
+  assert.ok(handler);
+  const item = { printedQuestion: "10 = [] + []", studentAnswer: "6;4" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 81 (2026-09-28, real citation: "Use 8, 9, 17 to form 4
+// different expressions" -- valid set includes 8+9=17, 17-9=8, etc.)
+test("verifyFactFamilyGeneration: checks membership in the closed set of 4 valid rearrangements", async () => {
+  const worker = await import(TMP);
+  const printed = "Use 8, 9, 17 to form 4 different expressions: (a)[]+[]=[]";
+  assert.equal(worker.verifyFactFamilyGeneration(printed, "8+9=17").correct, true);
+  assert.equal(worker.verifyFactFamilyGeneration(printed, "17-9=8").correct, true);
+  assert.equal(worker.verifyFactFamilyGeneration(printed, "8+9=18").correct, false);
+});
+
+test("fact_family_generation handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "fact_family_generation");
+  assert.ok(handler);
+  const item = { printedQuestion: "Use 8, 9, 17 to form 4 different expressions: (a)[]+[]=[]", studentAnswer: "8+9=17" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

@@ -4015,6 +4015,94 @@ function verifyMinFromTwoCapacityConstraints(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Ticket 75 (2026-09-28, real citations: "Which is NOT correct?
+// A.12-0=0 B.9+0=9 C.0+18=18 D.14-14=0" -> A is wrong (12-0=12);
+// "A.9=2+6 B.5+2=7 C.10-4=2 D.1+7=9" -- which IS correct -> B):
+// MC full-equation truth check, both "which is correct" and "which is
+// NOT correct" framings. Declines whenever any option isn't a clean
+// parseable equation, or when the target isn't uniquely determined.
+function verifyEquationTruthMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const applyOp = (x, op, y) => {
+    switch (op) {
+      case "+": return x + y;
+      case "-": return x - y;
+      case "×": case "x": case "*": return x * y;
+      case "÷": case "/": return y === 0 ? NaN : x / y;
+      default: return NaN;
+    }
+  };
+  const evalEquation = (text) => {
+    const clean = String(text).replace(/\s+/g, "");
+    // Two real option shapes seen: "a op b = c" AND "c = a op b" (the
+    // target-first form, e.g. real citation "9=2+6") -- both must be
+    // supported, not just the first.
+    let m = clean.match(/^(\d+)([+\-×x*÷/])(\d+)=(\d+)$/);
+    if (m) {
+      const [, a, op, b, c] = m;
+      const result = applyOp(Number(a), op, Number(b));
+      return Number.isFinite(result) ? result === Number(c) : null;
+    }
+    m = clean.match(/^(\d+)=(\d+)([+\-×x*÷/])(\d+)$/);
+    if (m) {
+      const [, c, a, op, b] = m;
+      const result = applyOp(Number(a), op, Number(b));
+      return Number.isFinite(result) ? result === Number(c) : null;
+    }
+    return null;
+  };
+  const evaluated = options.map((o) => ({ ...o, isTrue: evalEquation(o.text) }));
+  if (evaluated.some((o) => o.isTrue === null)) return { correct: null, correctAnswer: "" };
+  const wantsNotCorrect = /not correct|唔啱|不正確|唔正確/i.test(printed);
+  const target = evaluated.filter((o) => (wantsNotCorrect ? !o.isTrue : o.isTrue));
+  if (target.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = target[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Ticket 77 (2026-09-28, real citation: "How do you separate 10
+// [candies] into two groups? 10 = [] + []" -- many valid splits, not one
+// fixed pair): open-ended decomposition. Student answer expected as two
+// numbers separated by a semicolon/comma/plus (matching this project's
+// established multi-sub-answer convention).
+function verifyOpenDecomposition(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*=\s*(?:\[?_*\]?|□)\s*\+\s*(?:\[?_*\]?|□)\s*$/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const target = Number(m[1]);
+  const parts = answer.split(/[;,+]/).map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n));
+  if (parts.length !== 2) return { correct: null, correctAnswer: "" };
+  const correct = parts[0] + parts[1] === target;
+  return { correct, correctAnswer: correct ? "" : `(任何加埋等於${target}嘅兩個數)` };
+}
+
+// Ticket 81 (2026-09-28, real citation: "Use 8, 9, 17 to form 4
+// different expressions: (a)[]+[]=[] (b)[]+[]=[] (c)[]-[]=[]
+// (d)[]-[]=[]" -- valid set = {8+9=17, 9+8=17, 17-9=8, 17-8=9}):
+// fact-family generation from 3 given numbers (one = sum of the other
+// two). Checks the student's filled equation against the closed set of
+// 4 valid rearrangements.
+function verifyFactFamilyGeneration(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim().replace(/\s+/g, "");
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/use\s*(\d+)\s*,\s*(\d+)\s*(?:,|and)?\s*(\d+)\s*to form/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const nums = [Number(m[1]), Number(m[2]), Number(m[3])].sort((a, b) => a - b);
+  const [a, b, c] = nums;
+  if (a + b !== c) return { correct: null, correctAnswer: "" };
+  const valid = new Set([`${a}+${b}=${c}`, `${b}+${a}=${c}`, `${c}-${a}=${b}`, `${c}-${b}=${a}`]);
+  const correct = valid.has(answer);
+  return { correct, correctAnswer: correct ? "" : [...valid].join(" 或 ") };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -5783,6 +5871,30 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyMinFromTwoCapacityConstraints(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 75 (2026-09-28): MC full-equation truth check (both "which
+    // is correct" and "which is NOT correct" framings).
+    name: "equation_truth_mc",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const options = parseMcOptions(printed);
+      const eqShape = /^\d+\s*[+\-×x*÷/]\s*\d+\s*=\s*\d+$|^\d+\s*=\s*\d+\s*[+\-×x*÷/]\s*\d+$/;
+      return options.length >= 2 && options.every((o) => eqShape.test(o.text.replace(/\s+/g, " ").trim()));
+    },
+    verify: (item) => verifyEquationTruthMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 77 (2026-09-28): open-ended decomposition ("10 = [] + []").
+    name: "open_decomposition",
+    detect: (item) => /\d+\s*=\s*(?:\[?_*\]?|□)\s*\+\s*(?:\[?_*\]?|□)\s*$/.test(String(item.printedQuestion || "").trim()),
+    verify: (item) => verifyOpenDecomposition(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 81 (2026-09-28): fact-family generation from 3 given numbers.
+    name: "fact_family_generation",
+    detect: (item) => /use\s*\d+\s*,\s*\d+\s*(?:,|and)?\s*\d+\s*to form/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyFactFamilyGeneration(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -6989,6 +7101,9 @@ export {
   verifyRelativeComparisonChain,
   verifyCompoundMultiplierWordProblem,
   verifyMinFromTwoCapacityConstraints,
+  verifyEquationTruthMC,
+  verifyOpenDecomposition,
+  verifyFactFamilyGeneration,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
