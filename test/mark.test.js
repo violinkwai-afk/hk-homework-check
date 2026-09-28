@@ -1826,3 +1826,46 @@ test("ordinal_from_count_in_front handler: registered and reachable", async () =
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Ticket 86 (2026-09-28, real citation: "If 7+6=☆, then ☆-6=? A.0 B.6
+// C.7 D.13" -> answer C=7).
+test("verifySymbolicSubstitution: solves the first equation, substitutes into the second", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifySymbolicSubstitution("If 7+6=☆, then ☆-6=?", "7");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifySymbolicSubstitution("If 7+6=☆, then ☆-6=?", "13");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "7");
+});
+
+test("symbolic_substitution handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "symbolic_substitution");
+  assert.ok(handler);
+  const item = { printedQuestion: "If 7+6=☆, then ☆-6=?", studentAnswer: "7" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 93 (2026-09-28, real citation: "如果△+○=□，(a) ○+___=□
+// (b) □-___=△" -> (a)=△ (b)=○).
+test("verifySymbolicRelation: resolves equivalent rearranged forms of a given symbolic sum", async () => {
+  const worker = await import(TMP);
+  const ra = worker.verifySymbolicRelation("如果△+○=□，○+___=□", "△");
+  assert.equal(ra.correct, true);
+  const rb = worker.verifySymbolicRelation("如果△+○=□，□-___=△", "○");
+  assert.equal(rb.correct, true);
+  const wrong = worker.verifySymbolicRelation("如果△+○=□，○+___=□", "○");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "△");
+});
+
+test("symbolic_relation handler: registered and reachable, doesn't confuse □ (a real symbol here) with the blank marker", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "symbolic_relation");
+  assert.ok(handler);
+  const item = { printedQuestion: "如果△+○=□，○+___=□", studentAnswer: "△" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});

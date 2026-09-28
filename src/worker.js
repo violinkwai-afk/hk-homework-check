@@ -3869,6 +3869,72 @@ function verifyOrdinalFromCountInFront(printedQuestion, studentAnswer) {
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
+// Ticket 86 (2026-09-28, real citation: "If 7+6=☆, then ☆-6=? A.0 B.6
+// C.7 D.13" -> ☆=13, 13-6=7, answer C): numeric symbolic substitution --
+// solve the first equation for the symbol, substitute into the second.
+// Narrow: only the "if A op1 B = SYMBOL, then SYMBOL op2 C = ?" shape.
+function verifySymbolicSubstitution(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*([+\-×x*÷/])\s*(\d+)\s*=\s*([△○□☆★◇])\D+\4\s*([+\-×x*÷/])\s*(\d+)\s*=/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, a, op1, b, , op2, c] = m;
+  const applyOp = (x, op, y) => {
+    switch (op) {
+      case "+": return x + y;
+      case "-": return x - y;
+      case "×": case "x": case "*": return x * y;
+      case "÷": case "/": return y === 0 ? NaN : x / y;
+      default: return NaN;
+    }
+  };
+  const symbolValue = applyOp(Number(a), op1, Number(b));
+  const expected = applyOp(symbolValue, op2, Number(c));
+  if (!Number.isFinite(expected)) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 93 (2026-09-28, real citation: "如果△+○=□，(a) ○+___=□
+// (b) □-___=△" -> (a)=△ (b)=○): purely symbolic relation reasoning, no
+// numeric values at all -- given X+Y=Z, the 3 equivalent rearranged
+// forms (Y+?=Z, Z-?=X, Z-?=Y) all resolve to one of the 3 known
+// symbols. Uses "___" (underscores) as the blank marker specifically
+// (NOT "□", which is itself one of the real symbols used in this exact
+// citation and must not be confused with a placeholder).
+function verifySymbolicRelation(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const SYM = "[△○□☆★◇▽◆]";
+  const givenRe = new RegExp(`(${SYM})\\s*\\+\\s*(${SYM})\\s*=\\s*(${SYM})`);
+  const given = printed.match(givenRe);
+  if (!given) return { correct: null, correctAnswer: "" };
+  const [wholeGiven, x, y, z] = given;
+  const rest = printed.slice(printed.indexOf(wholeGiven) + wholeGiven.length);
+  const checkAnswer = (expected) => {
+    const correct = answer === expected || answer.includes(expected);
+    return { correct, correctAnswer: correct ? "" : expected };
+  };
+  let m = rest.match(new RegExp(`(${SYM})\\s*\\+\\s*_{2,}\\s*=\\s*(${SYM})`));
+  if (m) {
+    const [, known, target] = m;
+    if (known === x && target === z) return checkAnswer(y);
+    if (known === y && target === z) return checkAnswer(x);
+    return { correct: null, correctAnswer: "" };
+  }
+  m = rest.match(new RegExp(`(${SYM})\\s*-\\s*_{2,}\\s*=\\s*(${SYM})`));
+  if (m) {
+    const [, minuend, target] = m;
+    if (minuend === z && target === x) return checkAnswer(y);
+    if (minuend === z && target === y) return checkAnswer(x);
+    return { correct: null, correctAnswer: "" };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -5600,6 +5666,21 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyOrdinalFromCountInFront(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 86 (2026-09-28): numeric symbolic substitution ("if 7+6=☆,
+    // then ☆-6=?"). detect() requires the specific two-equation-with-
+    // shared-symbol shape.
+    name: "symbolic_substitution",
+    detect: (item) => /\d+\s*[+\-×x*÷/]\s*\d+\s*=\s*[△○□☆★◇]\D+[△○□☆★◇]\s*[+\-×x*÷/]\s*\d+\s*=/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySymbolicSubstitution(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 93 (2026-09-28): purely symbolic relation reasoning ("若
+    // △+○=□，○+___=□"), no numeric values at all.
+    name: "symbolic_relation",
+    detect: (item) => /[△○□☆★◇▽◆]\s*\+\s*[△○□☆★◇▽◆]\s*=\s*[△○□☆★◇▽◆]/.test(String(item.printedQuestion || "")) && /_{2,}/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySymbolicRelation(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -6801,6 +6882,8 @@ export {
   verifyClockReading,
   readLineShaftLengths,
   verifyLineShaftAllEqual,
+  verifySymbolicSubstitution,
+  verifySymbolicRelation,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
