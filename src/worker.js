@@ -1993,7 +1993,40 @@ const HK_CURRENCY_REFERENCE = `參考資料——香港硬幣同紙幣真實資�
 紙幣顏色：$20藍色、$50綠色、$100紅色、$500啡色、$1000金色。`;
 
 function mentionsMoneyDenomination(pendingItems) {
-  return pendingItems.some((it) => /\$|coin|note|cent|denomination|硬幣|紙幣|銀紙|面額|毫子|蚊/i.test(String(it.printedQuestion || "")));
+  const re = /\$|coin|note|cent|denomination|硬幣|紙幣|銀紙|面額|毫子|蚊/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Ticket 59 (2026-09-27): same "give the AI real facts instead of relying
+// on its pretrained visual memory" lever as Ticket 57's currency
+// reference, applied to 3-D shape identification/general-knowledge
+// questions (e.g. "which shape has two circular bases?", "how many faces
+// does a triangular prism have?") -- standard, fixed primary-level solid
+// geometry facts, not something that changes or needs a live source
+// check the way currency specs did. Deliberately NOT attempted for
+// clock/water-level/ruler/angle questions -- those need real measurement
+// from the image, not a lookup fact, so no reference block would help
+// (see the parallel Photon-based clock-reading investigation this same
+// session for the actual right lever there).
+const SHAPE_REFERENCE = `參考資料——常見立體形狀嘅真實幾何資料（幫你答立體形狀嘅通用知識題,唔好靠估）：
+正方體(cube)：6個面(全部正方形)、12條邊、8個頂點。
+長方體(cuboid)：6個面(長方形)、12條邊、8個頂點。
+三棱柱(triangular prism)：5個面(2個三角形底+3個長方形)、9條邊、6個頂點、2個底。
+四角錐(square-based pyramid)：5個面(1個正方形底+4個三角形)、8條邊、5個頂點、1個底。
+三角錐(triangular-based pyramid/tetrahedron)：4個面(全部三角形)、6條邊、4個頂點。
+圓柱體(cylinder)：3個面(2個平面圓形底+1個彎曲面)、2條邊(圓形)、0個頂點、2個圓形底。
+圓錐體(cone)：2個面(1個平面圓形底+1個彎曲面)、1條邊(圓形)、1個頂點(尖端)、1個圓形底。
+球體(sphere)：1個彎曲面、0條邊、0個頂點。`;
+
+// Checks BOTH printedQuestion and studentAnswer -- a real "which shape
+// has two circular bases?" style question often names the shape only in
+// the STUDENT'S OWN answer (e.g. "cylinder"), never in the printed
+// question text itself (which just describes properties), unlike the
+// currency case where "$"/"coin" almost always appears in the printed
+// question itself.
+function mentionsShapeGeometry(pendingItems) {
+  const re = /prism|pyramid|cone|cylinder|sphere|cube|cuboid|\bface\b|\bedge\b|\bvertex\b|vertices|棱柱|棱錐|圓柱|圓錐|球體|立體|正方體|長方體|三棱柱/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
 function buildAiFallbackPrompt(pendingItems) {
@@ -2001,11 +2034,15 @@ function buildAiFallbackPrompt(pendingItems) {
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
   // (which additionally sees the real photo) should still know about it.
   const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
-  const currencyBlock = mentionsMoneyDenomination(pendingItems) ? `\n${HK_CURRENCY_REFERENCE}\n` : "";
+  const referenceBlocks = [
+    mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
+    mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
+  ].filter(Boolean);
+  const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
 
 ${itemsText}
-${currencyBlock}
+${referenceBlock}
 要求：
 1. 相有機會打橫/倒轉，先確認閱讀方向。
 2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。
@@ -6037,6 +6074,7 @@ export {
   buildJevQuestions,
   buildAiFallbackPrompt,
   mentionsMoneyDenomination,
+  mentionsShapeGeometry,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,

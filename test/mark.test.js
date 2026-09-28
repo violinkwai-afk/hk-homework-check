@@ -1473,3 +1473,41 @@ test("mentionsMoneyDenomination: recognises real Chinese and English money keywo
   assert.equal(worker.mentionsMoneyDenomination([{ printedQuestion: "How many $2 coins?" }]), true);
   assert.equal(worker.mentionsMoneyDenomination([{ printedQuestion: "25÷5" }]), false);
 });
+
+// Ticket 59 (2026-09-27): real 3-D shape geometry reference added to the
+// AI-fallback prompt, same conditional-inclusion pattern as Ticket 57's
+// currency reference -- and both can coexist in one call if a page has
+// both types of pending item.
+test("buildAiFallbackPrompt: includes the real 3-D shape reference when a pending item is about shape geometry", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "Which 3-D shape has two circular bases?", studentAnswer: "cylinder" },
+  ]);
+  assert.match(prompt, /圓柱體\(cylinder\)/, "the real cylinder fact must be present");
+  assert.match(prompt, /三棱柱\(triangular prism\)/, "the real triangular prism fact must be present");
+});
+
+test("buildAiFallbackPrompt: omits the shape reference for unrelated questions", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "25÷5", studentAnswer: "5" },
+  ]);
+  assert.doesNotMatch(prompt, /圓柱體/);
+});
+
+test("buildAiFallbackPrompt: both currency and shape references can appear together when a page has both types of pending item", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "How much money is shown?", studentAnswer: "$5" },
+    { question: "2", printedQuestion: "How many faces does a cone have?", studentAnswer: "2" },
+  ]);
+  assert.match(prompt, /洋紫荊/);
+  assert.match(prompt, /圓錐體\(cone\)/);
+});
+
+test("mentionsShapeGeometry: recognises real Chinese and English shape-geometry keywords", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsShapeGeometry([{ printedQuestion: "邊個係三棱柱？" }]), true);
+  assert.equal(worker.mentionsShapeGeometry([{ printedQuestion: "How many edges does a cube have?" }]), true);
+  assert.equal(worker.mentionsShapeGeometry([{ printedQuestion: "25÷5" }]), false);
+});
