@@ -1784,6 +1784,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係一個平行四邊形(果園/地皮),用一條垂直線分咗做兩部分(一部分有陰影),幅圖底部標住咗陰影嗰部分嘅闊度**，喺回覆最開始加一行「PARALLELOGRAM_PARTIAL: 陰影底闊度=<數字>」。如果冇呢類圖就完全唔使加呢行。
 
+**如果幅圖係一張長方形卡紙,四個角各剪走一個大小形狀一樣嘅三角形,餘低中間一個菱形/風箏形,幅圖標住咗長方形嘅長闊,同埋其中一個被剪走嘅三角形嘅兩隻直角腳長度**，喺回覆最開始加一行「RECT_CUT_KITE: 長方形長=<數字>;長方形闊=<數字>;三角形腳1=<數字>;三角形腳2=<數字>」。如果冇呢類圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2045,6 +2047,25 @@ function extractParallelogramPartial(text) {
   return { parallelogramShadedWidth: m ? Number(m[1]) : null, cleanedText };
 }
 
+// Ticket 177 (2026-09-28, real citation: "一張長方形卡紙剪去4個大小和
+// 形狀都相同的三角形後，餘下部分的面積是多少cm²？" rectangle 20×12,
+// each corner triangle's two legs 8 and 6 -- found this segment while
+// re-reviewing the real P5 exam for Tickets 154-160).
+function extractRectCutKite(text) {
+  const m = /^RECT_CUT_KITE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^RECT_CUT_KITE:.*$/gm, "");
+  if (!m) return { rectCutKite: null, cleanedText };
+  const fields = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    fields[part.slice(0, eqIdx).trim()] = Number(part.slice(eqIdx + 1).trim());
+  }
+  const { 長方形長: length, 長方形闊: width, 三角形腳1: leg1, 三角形腳2: leg2 } = fields;
+  const ok = [length, width, leg1, leg2].every((n) => Number.isFinite(n));
+  return { rectCutKite: ok ? { length, width, leg1, leg2 } : null, cleanedText };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2179,7 +2200,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { shortDivisionMc, cleanedText: cleanedText12 } = extractShortDivisionMc(cleanedText11);
   const { squaresDiagonal, cleanedText: cleanedText13 } = extractSquaresDiagonal(cleanedText12);
   const { trapezoidBaseline, cleanedText: cleanedText14 } = extractTrapezoidTwoSquares(cleanedText13);
-  const { parallelogramShadedWidth, cleanedText } = extractParallelogramPartial(cleanedText14);
+  const { parallelogramShadedWidth, cleanedText: cleanedText15 } = extractParallelogramPartial(cleanedText14);
+  const { rectCutKite, cleanedText } = extractRectCutKite(cleanedText15);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2187,7 +2209,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5796,6 +5818,90 @@ function verifyParallelogramPartialHeight(parallelogramShadedWidth, printedQuest
   return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
 }
 
+// Ticket 177 (2026-09-28, real citation: "一張長方形卡紙剪去4個大小和
+// 形狀都相同的三角形後，餘下部分的面積是多少cm²？" rectangle 20×12,
+// each corner triangle's legs 8 and 6 -- the real student's own worked
+// steps ("20×12-6×8÷2×4") confirm the formula: rectangle area minus 4
+// congruent right-triangle corners, area = W×H - 2×leg1×leg2).
+function verifyRectCutKiteArea(rectCutKite, printedQuestion, studentAnswer) {
+  if (!rectCutKite) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/剪去4個/.test(printed) || !/餘下部分的面積/.test(printed)) return { correct: null, correctAnswer: "" };
+  const { length, width, leg1, leg2 } = rectCutKite;
+  const expected = length * width - 2 * leg1 * leg2;
+  const studentNum = parseNumericAnswer(answer);
+  if (studentNum === null) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.01;
+  return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
+}
+
+// Ticket 178 (2026-09-28, real citation, 4 items, P5 exam "代數：
+// 根據題意，列寫代數式" section): "write the algebraic expression" is a
+// different shape from every other verifier in this project -- the
+// student's answer IS the expression, not a computed number, and
+// algebraically-equivalent-but-differently-written forms (e.g. "s÷3" for
+// "s/3") must both be accepted. Deliberately narrow to the 2 phrasing
+// shapes that self-identify as this question type from their OWN text
+// (both literally contain "用代數式表示"). The section's other 2 real
+// items were deliberately NOT built:
+//   - "曉晴有貼紙8張，心柔比曉晴多A張，心柔有貼紙___張。" -- its own
+//     sentence never says "用代數式表示" or anything else marking it as
+//     an algebra-expression question rather than an ordinary numeric
+//     fill-in-blank word problem; only the SECTION header says that, and
+//     no page-level marker currently carries section context down to
+//     individual items. Detecting this from the item's own text alone
+//     risks false-firing on ordinary "比...多" word problems, so it's
+//     left to AI judgment.
+//   - "雪兒有$100，比嘉妍多$x。嘉妍用去$25後，還餘款項多少？" -- the real
+//     student wrote an algebraically-equivalent "75-x" and the teacher
+//     marked it WRONG (expecting the unsimplified "$100-x-$25" form);
+//     building an auto-grader that would flip that human-graded "wrong"
+//     into "correct" is exactly the failure this project must never
+//     introduce, so this one is left to AI judgment too.
+function evalAlgebraicExpr(expr, varName, varValue) {
+  const substituted = String(expr).replace(new RegExp(varName, "gi"), String(varValue));
+  return evalArithmetic(substituted);
+}
+function verifyWriteAlgebraicExpression(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/用代數式表示/.test(printed)) return { correct: null, correctAnswer: "" };
+  // Shape A: "每瓶紙星星有s顆，把這些紙星星平均分給嘉妍、嘉敏和嘉俊，
+  // 用代數式表示嘉妍分到紙星星多少顆。" -> var/count(names after 分給,
+  // which may be joined by "、"/","/"和"/"同" -- "嘉妍、嘉敏和嘉俊" is 3
+  // names, not 2, since the last pair is joined by "和" not "、").
+  const shareMatch = /有\s*([A-Za-z])\s*[顆枝張個粒本隻]/.exec(printed);
+  const splitMatch = /平均分[給俾]([^，。,.]+?)[，。,.]/.exec(printed);
+  let varName = null, expected = null;
+  if (shareMatch && splitMatch) {
+    varName = shareMatch[1];
+    const names = splitMatch[1].split(/[、,，]|和|同/).map((s) => s.trim()).filter(Boolean);
+    if (names.length >= 2) expected = `${varName}/${names.length}`;
+  }
+  // Shape B: "一盒粉筆原有B枝，用去10枝後，用代數式表示還餘粉筆多少枝。"
+  // -> var - N.
+  if (expected === null) {
+    const origMatch = /原有\s*([A-Za-z])\s*[枝張個粒本]/.exec(printed);
+    const usedMatch = /用去\s*(\d+)\s*[枝張個粒本]後/.exec(printed);
+    if (origMatch && usedMatch) {
+      varName = origMatch[1];
+      expected = `${varName}-${usedMatch[1]}`;
+    }
+  }
+  if (expected === null || !varName) return { correct: null, correctAnswer: "" };
+  const studentHasVar = new RegExp(varName, "i").test(answer);
+  if (!studentHasVar) return { correct: null, correctAnswer: "" };
+  const testValues = [3, 7, 12];
+  for (const v of testValues) {
+    const expectedVal = evalAlgebraicExpr(expected, varName, v);
+    const studentVal = evalAlgebraicExpr(answer, varName, v);
+    if (expectedVal === null || studentVal === null) return { correct: null, correctAnswer: "" };
+    if (Math.abs(expectedVal - studentVal) > 1e-9) return { correct: false, correctAnswer: expected };
+  }
+  return { correct: true, correctAnswer: "" };
+}
+
 function verifyListFactors(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -7152,6 +7258,18 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyParallelogramPartialHeight(item.parallelogramShadedWidth, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 177 (2026-09-28): rectangle minus 4 congruent corner triangles.
+    name: "rect_cut_kite_area",
+    detect: (item) => !!item.rectCutKite && /剪去4個/.test(String(item.printedQuestion || "")) && /餘下部分的面積/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyRectCutKiteArea(item.rectCutKite, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 178 (2026-09-28): write an algebraic expression from a word scenario.
+    name: "write_algebraic_expression",
+    detect: (item) => /用代數式表示/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyWriteAlgebraicExpression(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8174,7 +8292,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8256,6 +8374,10 @@ async function handleMark(request, env) {
     }
     if (qwenOutcome.parallelogramShadedWidth != null) {
       qwenOutcome.items.forEach((item) => { item.parallelogramShadedWidth = qwenOutcome.parallelogramShadedWidth; });
+    }
+    // Ticket 177: same page-level shared-context pattern.
+    if (qwenOutcome.rectCutKite) {
+      qwenOutcome.items.forEach((item) => { item.rectCutKite = qwenOutcome.rectCutKite; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9047,6 +9169,9 @@ export {
   verifyOverlappingParallelogramUnionArea,
   extractParallelogramPartial,
   verifyParallelogramPartialHeight,
+  extractRectCutKite,
+  verifyRectCutKiteArea,
+  verifyWriteAlgebraicExpression,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

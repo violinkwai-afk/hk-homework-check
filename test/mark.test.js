@@ -2975,3 +2975,68 @@ test("parallelogram_partial_height handler registered and reachable", async () =
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 177 (2026-09-28, real citation, P5 exam Q6: "一張長方形卡紙剪
+// 去4個大小和形狀都相同的三角形後，餘下部分的面積是多少cm²？" rectangle
+// 20×12, corner triangle legs 8 and 6 -- real student worked
+// "20×12-6×8÷2×4=144" and got it right).
+test("verifyRectCutKiteArea: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "一張長方形卡紙剪去4個大小和形狀都相同的三角形後，餘下部分的面積是多少cm²？";
+  const r = worker.verifyRectCutKiteArea({ length: 20, width: 12, leg1: 6, leg2: 8 }, printed, "144");
+  assert.equal(r.correct, true, "20*12 - 2*6*8 = 240-96 = 144");
+  const wrong = worker.verifyRectCutKiteArea({ length: 20, width: 12, leg1: 6, leg2: 8 }, printed, "240");
+  assert.equal(wrong.correct, false);
+});
+test("rect_cut_kite_area handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "rect_cut_kite_area");
+  assert.ok(handler);
+  const item = { printedQuestion: "一張長方形卡紙剪去4個大小和形狀都相同的三角形後，餘下部分的面積是多少cm²？", studentAnswer: "144", rectCutKite: { length: 20, width: 12, leg1: 6, leg2: 8 } };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 178 (2026-09-28, real citations, P5 exam "代數" section 3
+// phrasing shapes -- "write the algebraic expression", not "compute a
+// number"; accepts algebraically-equivalent-but-differently-written
+// forms via numeric substitution rather than requiring an exact string
+// match).
+test("verifyWriteAlgebraicExpression: shape A (share evenly among N named people)", async () => {
+  const worker = await import(TMP);
+  const printed = "每瓶紙星星有s顆，把這些紙星星平均分給嘉妍、嘉敏和嘉俊，用代數式表示嘉妍分到紙星星多少顆。";
+  const r = worker.verifyWriteAlgebraicExpression(printed, "s/3");
+  assert.equal(r.correct, true);
+  const alsoOk = worker.verifyWriteAlgebraicExpression(printed, "s÷3");
+  assert.equal(alsoOk.correct, true, "division symbol variant must be accepted too");
+  const wrong = worker.verifyWriteAlgebraicExpression(printed, "s/2");
+  assert.equal(wrong.correct, false);
+});
+test("verifyWriteAlgebraicExpression: shape B (original minus used)", async () => {
+  const worker = await import(TMP);
+  const printed = "一盒粉筆原有B枝，用去10枝後，用代數式表示還餘粉筆多少枝。";
+  const r = worker.verifyWriteAlgebraicExpression(printed, "B-10");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyWriteAlgebraicExpression(printed, "B+10");
+  assert.equal(wrong.correct, false);
+});
+test("verifyWriteAlgebraicExpression: declines (null) on the section's 3rd real item -- its own sentence never says 用代數式表示, so it's indistinguishable from an ordinary numeric word problem without section-level context", async () => {
+  const worker = await import(TMP);
+  const printed = "曉晴有貼紙8張，心柔比曉晴多A張，心柔有貼紙___張。";
+  const r = worker.verifyWriteAlgebraicExpression(printed, "8+A");
+  assert.equal(r.correct, null, "left to AI judgment -- see the function's own comment");
+});
+test("verifyWriteAlgebraicExpression: declines (null) on the known human-grading-ambiguous compound shape rather than guessing", async () => {
+  const worker = await import(TMP);
+  const printed = "雪兒有$100，比嘉妍多$x。嘉妍用去$25後，還餘款項多少？";
+  const r = worker.verifyWriteAlgebraicExpression(printed, "75-x");
+  assert.equal(r.correct, null, "this shape is deliberately left to AI judgment -- see the function's own comment");
+});
+test("write_algebraic_expression handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "write_algebraic_expression");
+  assert.ok(handler);
+  const item = { printedQuestion: "一盒粉筆原有B枝，用去10枝後，用代數式表示還餘粉筆多少枝。", studentAnswer: "B-10" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

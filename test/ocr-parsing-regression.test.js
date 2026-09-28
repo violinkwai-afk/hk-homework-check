@@ -398,3 +398,17 @@ test("extractParallelogramPartial: returns null when no marker line is present",
   assert.equal(parallelogramShadedWidth, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 177 (2026-09-28): RECT_CUT_KITE marker extraction.
+test("extractRectCutKite: parses a real rectangle-minus-4-triangles line", () => {
+  const raw = "RECT_CUT_KITE: 長方形長=20;長方形闊=12;三角形腳1=6;三角形腳2=8\n6=一張長方形卡紙剪去4個大小和形狀都相同的三角形後...|144";
+  const { rectCutKite, cleanedText } = mod.extractRectCutKite(raw);
+  assert.deepEqual(rectCutKite, { length: 20, width: 12, leg1: 6, leg2: 8 });
+  assert.doesNotMatch(cleanedText, /RECT_CUT_KITE/);
+});
+test("extractRectCutKite: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { rectCutKite, cleanedText } = mod.extractRectCutKite(raw);
+  assert.equal(rectCutKite, null);
+  assert.equal(cleanedText, raw);
+});
