@@ -130,6 +130,14 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // TEMPORARY debug route (2026-09-28) -- one-use, exercises the real
+    // Jev pre-check against a caller-supplied batch of items (real
+    // question/answer pairs, no image), to measure real-world Jev
+    // accuracy against known-correct answers. Remove after this
+    // verification is done, same convention as Ticket 41's routes.
+    if (url.pathname === "/api/test-jev-batch" && request.method === "POST") {
+      return handleTestJevBatch(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -209,6 +217,26 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
+}
+
+// TEMPORARY (2026-09-28) -- see the route registration's own comment.
+// Accepts { items: [{resultIndex, printedQuestion, studentAnswer}] },
+// runs the real callJevPreCheck against them (no image, exactly what Jev
+// itself always gets), and returns Jev's raw verdict per item so it can
+// be compared against known-correct answers by hand.
+async function handleTestJevBatch(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { items } = await request.json();
+  const resolved = await callJevPreCheck(items, openrouterKey);
+  const results = items.map((it) => ({
+    resultIndex: it.resultIndex,
+    jevVerdict: resolved.has(it.resultIndex) ? resolved.get(it.resultIndex).correct : null,
+  }));
+  return json({ results, callStatus: resolved.callStatus || null });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
