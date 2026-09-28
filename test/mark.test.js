@@ -1737,3 +1737,60 @@ test("mentionsWeekdayOrdinal / WEEKDAY_CONVENTION_REFERENCE: fires on ordinal-da
   const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
   assert.doesNotMatch(unrelated, /一星期嘅第一天係星期日/);
 });
+
+// Ticket 108 (2026-09-28, real citations from a P2 3-D shapes unit
+// test's own answer key): reverse shape lookup from stated face
+// properties -- pure text reasoning, reuses the SHAPE_REFERENCE facts
+// in reverse. Real quotes: "A 3-D shape has 6 lateral faces. All the
+// lateral faces are triangles. It is a ___." -> Hexagonal pyramid;
+// "A 3-D shape has 8 faces. Its lateral faces are quadrilaterals. It
+// is a ___." -> hexagonal prism.
+test("verifyReverseShapeFromFaceProperties: N triangular lateral faces -> N-sided pyramid", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyReverseShapeFromFaceProperties(
+    "A 3-D shape has 6 lateral faces. All the lateral faces are triangles. It is a ___.",
+    "hexagonal pyramid",
+  );
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyReverseShapeFromFaceProperties(
+    "A 3-D shape has 6 lateral faces. All the lateral faces are triangles. It is a ___.",
+    "pentagonal pyramid",
+  );
+  assert.equal(wrong.correct, false);
+});
+
+test("verifyReverseShapeFromFaceProperties: total faces + quadrilateral lateral faces -> N-sided prism", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyReverseShapeFromFaceProperties(
+    "A 3-D shape has 8 faces. Its lateral faces are quadrilaterals. It is a ___.",
+    "hexagonal prism",
+  );
+  assert.equal(r.correct, true, "8 faces = 6 lateral + 2 bases -> hexagonal prism");
+});
+
+test("verifyReverseShapeFromFaceProperties: explicit face-composition list (2 triangles = the prism's own bases)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyReverseShapeFromFaceProperties("Faces: 3 rectangles + 2 triangles", "triangular prism");
+  assert.equal(r.correct, true);
+});
+
+test("verifyReverseShapeFromFaceProperties: declines outside the 3-8 sided range and on ambiguous phrasing", async () => {
+  const worker = await import(TMP);
+  const outOfRange = worker.verifyReverseShapeFromFaceProperties(
+    "A 3-D shape has 12 lateral faces. All the lateral faces are triangles. It is a ___.",
+    "12-agonal pyramid",
+  );
+  assert.equal(outOfRange.correct, null);
+  const ambiguous = worker.verifyReverseShapeFromFaceProperties("Which shape has 6 faces?", "cube");
+  assert.equal(ambiguous.correct, null);
+});
+
+test("reverse_shape_from_face_properties handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "reverse_shape_from_face_properties");
+  assert.ok(handler, "reverse_shape_from_face_properties handler must be registered");
+  const item = { printedQuestion: "A 3-D shape has 6 lateral faces. All the lateral faces are triangles. It is a ___.", studentAnswer: "hexagonal pyramid" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});

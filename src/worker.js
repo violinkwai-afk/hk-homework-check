@@ -3770,6 +3770,75 @@ function verifyPictogramQuery(pictogramData, printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 108 (2026-09-28, found in a real P2 3-D shapes unit test's own
+// answer key): reverses the already-known face/edge/vertex facts in
+// SHAPE_REFERENCE -- given how many lateral faces a solid has and what
+// SHAPE those lateral faces are, name the solid. No image needed at all,
+// purely textual. Two real phrasing shapes:
+// (1) "A 3-D shape has 6 lateral faces. All lateral faces are triangles.
+//     It is a ___." -> hexagonal pyramid (N triangular lateral faces =
+//     an N-sided-base pyramid).
+// (2) "Faces: 3 rectangles + 2 triangles -> Triangular prism" (2
+//     triangular bases + M rectangular lateral faces = an M-sided-base
+//     prism).
+// Only covers 3-8 sided bases (the range actually seen in real
+// materials) -- declines outside that, and declines whenever the
+// lateral-face shape isn't unambiguously all-triangle or all-quadrilateral.
+const POLYGON_PYRAMID_NAMES = {
+  3: ["三角錐", "triangular pyramid"],
+  4: ["四角錐", "quadrilateral pyramid", "square-based pyramid", "square pyramid"],
+  5: ["五角錐", "pentagonal pyramid"],
+  6: ["六角錐", "hexagonal pyramid"],
+  7: ["七角錐", "heptagonal pyramid"],
+  8: ["八角錐", "octagonal pyramid"],
+};
+const POLYGON_PRISM_NAMES = {
+  3: ["三棱柱", "三角柱", "triangular prism"],
+  4: ["四角柱", "quadrilateral prism", "cuboid", "長方柱", "正方柱"],
+  5: ["五角柱", "pentagonal prism"],
+  6: ["六角柱", "hexagonal prism"],
+  7: ["七角柱", "heptagonal prism"],
+  8: ["八角柱", "octagonal prism"],
+};
+
+function verifyReverseShapeFromFaceProperties(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim().toLowerCase();
+  if (!answer) return { correct: null, correctAnswer: "" };
+
+  const isTriangleLateral = /(?:all(?:\s+the)?\s+lateral\s+faces?\s+are\s+triangles?)|(?:側面(?:都)?係三角形)|(?:lateral\s+faces?.{0,15}triangles?)/i.test(printed);
+  const isQuadLateral = /(?:all(?:\s+the)?\s+lateral\s+faces?\s+are\s+quadrilaterals?)|(?:側面(?:都)?係四邊形)|(?:lateral\s+faces?.{0,15}quadrilaterals?)/i.test(printed);
+
+  let n = null, isPyramid = null;
+  if (isTriangleLateral || isQuadLateral) {
+    isPyramid = isTriangleLateral;
+    const lateralMatch = printed.match(/(\d+)\s*(?:lateral\s+faces?|個側面)/i);
+    const totalMatch = printed.match(/(\d+)\s*faces?\b|(\d+)\s*個面/i);
+    if (lateralMatch) n = Number(lateralMatch[1]);
+    else if (totalMatch) {
+      const total = Number(totalMatch[1] || totalMatch[2]);
+      n = isPyramid ? total - 1 : total - 2;
+    }
+  } else {
+    // Shape (2): explicit face-composition list, e.g. "3 rectangles + 2
+    // triangles" (2 triangles = the prism's own 2 bases, never itself the
+    // base-side count) -- only fires when EXACTLY 2 triangles are named
+    // alongside some count of rectangles/squares.
+    const rectMatch = printed.match(/(\d+)\s*(?:rectangles?|squares?|長方形|正方形)/i);
+    const triMatch = printed.match(/(\d+)\s*(?:triangles?|三角形)/i);
+    if (rectMatch && triMatch && Number(triMatch[1]) === 2) {
+      isPyramid = false;
+      n = Number(rectMatch[1]);
+    }
+  }
+  if (isPyramid === null || !n || n < 3 || n > 8) return { correct: null, correctAnswer: "" };
+
+  const names = isPyramid ? POLYGON_PYRAMID_NAMES[n] : POLYGON_PRISM_NAMES[n];
+  if (!names) return { correct: null, correctAnswer: "" };
+  const correct = names.some((name) => answer.includes(name.toLowerCase()) || name.toLowerCase().includes(answer));
+  return { correct, correctAnswer: correct ? "" : names[names.length - 1] };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -5376,6 +5445,20 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyClockReading(item, crop),
   },
   {
+    // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
+    // text reasoning, no image needed. detect() requires BOTH a lateral-
+    // face-shape keyword AND a plausible answer shape (not itself a bare
+    // number, which would suggest this is really a different question).
+    name: "reverse_shape_from_face_properties",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const answer = String(item.studentAnswer || "").trim();
+      if (!answer || /^\d+$/.test(answer)) return false;
+      return /lateral\s+faces?|側面/i.test(printed) || (/triangles?|三角形/i.test(printed) && /rectangles?|squares?|長方形|正方形/i.test(printed));
+    },
+    verify: (item) => verifyReverseShapeFromFaceProperties(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -6569,6 +6652,7 @@ export {
   buildTierVGuidance,
   extractPictogramData,
   verifyPictogramQuery,
+  verifyReverseShapeFromFaceProperties,
   readClockHandsFromPixels,
   parseTimeAnswer,
   verifyClockReading,
