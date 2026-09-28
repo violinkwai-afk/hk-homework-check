@@ -2425,6 +2425,57 @@ test("coin_blanks handler: registered and reachable through real classifyAndVeri
   assert.equal(worker.classifyAndVerify(item, null).correct, true);
 });
 
+// Ticket 194 (2026-09-28, real citations: P1 樂思 "Distance" page --
+// darts elimination chain and cat/mouse nearest/farthest MC). Both real
+// citations are BLANK/unanswered practice pages -- no teacher marks or
+// answer key exists to verify against, unlike 185-189's citations. These
+// tests use clean constructed values (same discipline as Ticket 187's
+// clock-options MC) to exercise the comparison logic itself, which is
+// low-risk (min/max/pairwise comparison, no multi-step algorithm).
+test("verifyDistanceRanking: shape A -- MC nearest/farthest to a reference, ineligible options ignored", async () => {
+  const worker = await import(TMP);
+  const distanceValues = { reference: "Micky", values: { Tigger: 2, Billy: 5 } };
+  const r = worker.verifyDistanceRanking(distanceValues, "(Tigger / Nina / Billy) is nearest to Micky.", "Tigger");
+  assert.equal(r.correct, true, "Nina has no extracted value -- not in the picture -- so only Tigger/Billy are eligible, Tigger is smaller");
+  const r2 = worker.verifyDistanceRanking(distanceValues, "(Tigger / Nina / Billy) is farthest from Micky.", "Billy");
+  assert.equal(r2.correct, true);
+  const wrong = worker.verifyDistanceRanking(distanceValues, "(Tigger / Nina / Billy) is nearest to Micky.", "Billy");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "Tigger");
+});
+
+test("verifyDistanceRanking: shape B -- 4-way elimination chain (darts citation)", async () => {
+  const worker = await import(TMP);
+  const distanceValues = { reference: null, values: { W: 3, X: 4, Y: 1, Z: 2 } };
+  const printed = "Yan's dart is nearest to the center. Mike's dart is farthest from the center. Sally's dart is nearer to the center than Ken's dart. Ken's dart is Dart ___.";
+  const r = worker.verifyDistanceRanking(distanceValues, printed, "W");
+  assert.equal(r.correct, true, "Y=nearest(1), X=farthest(4), remaining Z(2)/W(3) -- Sally=Z(smaller), Ken=W(larger)");
+  const wrong = worker.verifyDistanceRanking(distanceValues, printed, "Z");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "W");
+});
+
+test("verifyDistanceRanking: declines (null) with no distanceValues or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyDistanceRanking(null, "(A/B) is nearest to C.", "A").correct, null);
+  assert.equal(worker.verifyDistanceRanking({ reference: null, values: { A: 1 } }, "9 + 4 = ?", "13").correct, null);
+});
+
+test("extractDistanceValues: parses the DISTANCE_VALUES marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { distanceValues, cleanedText } = worker.extractDistanceValues("DISTANCE_VALUES: 參考點=Micky;Tigger=1;Billy=2\n1. 題目|Tigger");
+  assert.deepEqual(distanceValues, { reference: "Micky", values: { Tigger: 1, Billy: 2 } });
+  assert.ok(!cleanedText.includes("DISTANCE_VALUES"));
+});
+
+test("distance_ranking handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const item = { printedQuestion: "(Tigger / Nina / Billy) is nearest to Micky.", studentAnswer: "Tigger", distanceValues: { reference: "Micky", values: { Tigger: 2, Billy: 5 } } };
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "distance_ranking");
+  assert.ok(handler);
+  assert.equal(worker.classifyAndVerify(item, null).correct, true);
+});
+
 // Ticket 190 (2026-09-28): give Jev the same OCR-extracted diagram
 // markers code uses, so it has a second (text-only) chance before an
 // item falls through to the real image-based AI-fallback.

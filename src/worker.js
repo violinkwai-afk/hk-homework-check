@@ -1820,6 +1820,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 讀鐘面步驟(逐隻鐘都要咁做,唔好一眼掃過就估)：先睇「時針」(短嗰支)實際企喺邊個數字附近(唔一定啱啱好指住個數字,可能喺兩個數字中間,咁就係嗰個較細數字加幾多分鐘嘅比例)；再睇「分針」(長嗰支)實際指住邊個數字,分針指住嘅數字×5就係分鐘數(例如分針指住"2"即係10分鐘)；兩樣都讀晒先組合做「小時:分鐘」。
 如果冇呢類鐘面MC就完全唔使加呢行。
 
+**如果幅圖有幾個物件(用名/字母標住),同一個共同參考點(或者互相之間)用線連接住,要判斷邊個離參考點最近/最遠,或者要逐個排先後次序**，喺回覆最開始加一行「DISTANCE_VALUES: 參考點=<名/留空>;物件1=<相對距離數字,由近到遠用細到大嘅數表示,唔使係真實cm,淨係要順序啱>;物件2=<同上>;...」(細心逐條線目測邊條長啲邊條短啲,由最短嗰條開始編1、2、3...)。如果冇呢類遠近排序圖就完全唔使加呢行。
+
 **如果題目印刷咗一個目標金額(例如一個銀幣圖),要求用指定嘅幾種面額銀幣/紙幣兌換(例如「[$5硬幣]可以兌換做___個[$2硬幣]同___個[$1硬幣]」,每個空格旁邊都印住緊一個特定面額嘅硬幣圖示)**，喺回覆最開始加一行「COIN_BLANKS: 目標=<金額數字>;面額1=<第一個空格旁邊個硬幣面額>;面額2=<第二個空格旁邊個硬幣面額,如果得返一個空格就唔使呢個>」(面額跟返空格喺題目入面出現嘅先後次序;金額可以係小數,例如0.2代表2毫)。
 香港硬幣認面額提示(用嚟分辨邊個係邊個,唔好淨係睇個「數字」就估,細心睇形狀顏色邊緣)：$2(12邊波浪形,銀色)、$0.2(波浪形,金色)呢兩個先係波浪邊;$10係圓形(唔係波浪形),銀色中心+金色外環雙色設計;$5、$1、$0.5都係圓形銀/金色,滾花邊;$0.1(1毫)最細,圓形金色,平邊。$0.1同$10喺數字上都印住個「10」,好容易撞——分辨方法係睇成隻硬幣嘅大細(1毫最細)、顏色(1毫純金色,$10銀心金環雙色)、形狀，唔好淨係睇印住嘅數字就當係$10。
 如果冇呢類兌換空格題就完全唔使加呢行。
@@ -2371,6 +2373,88 @@ function verifyCoinBlanks(coinBlanks, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : expectedCounts.join(",") };
 }
 
+// Ticket 194 (2026-09-28, real citations: P1 樂思 "Distance" page --
+// (1) "(Tigger / Nina / Billy) is nearest to Micky." MC, picking the
+// labelled object with the smallest extracted relative-distance value
+// (Nina isn't even in the picture, so only candidates with an actual
+// extracted value are eligible); (2) darts page -- "Yan's dart is
+// nearest to [center]. Mike's dart is farthest from [center]. Sally's
+// dart is nearer to [center] than Ken's dart. Ken's dart is Dart ___."
+// -- a 4-way elimination: nearest/farthest are named directly, the
+// remaining 2 darts are split by a relative comparison, and the
+// question asks for the FARTHER of those 2 remaining darts' own label.
+// ⚠️ Both real citations are BLANK/unanswered practice pages (no
+// teacher marks, no answer key) -- the extraction+comparison logic
+// itself is simple/low-risk (min/max and pairwise comparison, no
+// multi-step algorithm like Ticket 185's Dijkstra), but unlike 185-189
+// there is no independently-verified real ground truth to check this
+// against. Tests below use clean constructed values, same discipline
+// as Ticket 187's clock-options MC.
+function extractDistanceValues(text) {
+  const m = /^DISTANCE_VALUES:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^DISTANCE_VALUES:.*$/gm, "");
+  if (!m) return { distanceValues: null, cleanedText };
+  let reference = null;
+  const values = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const rawValue = part.slice(eqIdx + 1).trim();
+    if (key === "參考點") { if (rawValue) reference = rawValue; continue; }
+    const num = Number(rawValue);
+    if (key && Number.isFinite(num)) values[key] = num;
+  }
+  if (!Object.keys(values).length) return { distanceValues: null, cleanedText };
+  return { distanceValues: { reference, values }, cleanedText };
+}
+
+function verifyDistanceRanking(distanceValues, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !distanceValues) return { correct: null, correctAnswer: "" };
+  const values = distanceValues.values;
+
+  // Shape B: 4-name elimination chain (darts citation).
+  const nearestM = printed.match(/(\w+)(?:'s\s+\S+)?\s+is\s+nearest\s+to/i);
+  const farthestM = printed.match(/(\w+)(?:'s\s+\S+)?\s+is\s+farthest\s+from/i);
+  const relM = printed.match(/(\w+)(?:'s\s+\S+)?\s+is\s+nearer\s+to\s+[\s\S]+?\s+than\s+(\w+)(?:'s\s+\S+)?/i);
+  if (nearestM && farthestM && relM) {
+    const labels = Object.keys(values);
+    const sorted = [...labels].sort((a, b) => values[a] - values[b]);
+    if (sorted.length !== 4) return { correct: null, correctAnswer: "" };
+    const nearestLabel = sorted[0];
+    const farthestLabel = sorted[3];
+    const remaining = sorted.slice(1, 3);
+    const nearerLabel = remaining[0];
+    const fartherLabel = remaining[1];
+    // relM[1] = the "nearer" person (Sally), relM[2] = the "farther" person (Ken) being asked about.
+    const askedName = relM[2];
+    if (!askedName) return { correct: null, correctAnswer: "" };
+    const correct = answer === fartherLabel;
+    return { correct, correctAnswer: correct ? "" : fartherLabel };
+  }
+
+  // Shape A: "(A/B/C) is nearest/farthest to/from [reference]" MC --
+  // only candidates with an actual extracted value are eligible (a
+  // named MC option that isn't in the picture at all is never chosen).
+  const mcMatch = printed.match(/\(([^)]+)\)\s*is\s*(nearest|farthest)\s*(?:to|from)/i);
+  if (mcMatch) {
+    const options = mcMatch[1].split("/").map((s) => s.trim()).filter(Boolean);
+    const eligible = options.filter((o) => o in values);
+    if (!eligible.length) return { correct: null, correctAnswer: "" };
+    const wantMin = mcMatch[2].toLowerCase() === "nearest";
+    const best = eligible.reduce((acc, o) => {
+      if (acc === null) return o;
+      return (wantMin ? values[o] < values[acc] : values[o] > values[acc]) ? o : acc;
+    }, null);
+    const correct = answer === best;
+    return { correct, correctAnswer: correct ? "" : best };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2511,7 +2595,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { paperFold, cleanedText: cleanedText18 } = extractPaperFold(cleanedText17);
   const { pathGraph, cleanedText: cleanedText19 } = extractPathGraph(cleanedText18);
   const { clockOptions, cleanedText: cleanedText20 } = extractClockOptions(cleanedText19);
-  const { coinBlanks, cleanedText } = extractCoinBlanks(cleanedText20);
+  const { coinBlanks, cleanedText: cleanedText21 } = extractCoinBlanks(cleanedText20);
+  const { distanceValues, cleanedText } = extractDistanceValues(cleanedText21);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2519,7 +2604,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -7903,6 +7988,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyCoinBlanks(item.coinBlanks, item.studentAnswer),
   },
   {
+    // Ticket 194 (2026-09-28): nearest/farthest distance ranking.
+    name: "distance_ranking",
+    detect: (item) => !!item.distanceValues && /nearest|farthest|nearer|farther/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDistanceRanking(item.distanceValues, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8933,7 +9024,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -9039,6 +9130,10 @@ async function handleMark(request, env) {
     // Ticket 189: same page-level shared-context pattern.
     if (qwenOutcome.coinBlanks) {
       qwenOutcome.items.forEach((item) => { item.coinBlanks = qwenOutcome.coinBlanks; });
+    }
+    // Ticket 194: same page-level shared-context pattern.
+    if (qwenOutcome.distanceValues) {
+      qwenOutcome.items.forEach((item) => { item.distanceValues = qwenOutcome.distanceValues; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9845,6 +9940,8 @@ export {
   verifyClockOptionsMc,
   extractCoinBlanks,
   verifyCoinBlanks,
+  extractDistanceValues,
+  verifyDistanceRanking,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

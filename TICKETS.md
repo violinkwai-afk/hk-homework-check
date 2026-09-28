@@ -808,3 +808,7 @@
   671/671測試通過(純prompt文字改動,冇改code邏輯,唔使新測試),已push。
 
 - ✅ **193. 視覺增強(3):對比度自動增強,已接落生產環境。** 用戶批准做嘅低風險項——`downscaleForCheapTier`(而家/api/mark嘅OCR call同AI-fallback call都用緊呢個function處理真實相片)加咗Photon嘅`normalize()`(自動histogram拉伸,冇手動參數要調,唔會有「調錯數值反而搞衰張相」嘅風險)。改動埋咗個function嘅行為:之前如果張相本身已經細過640px就完全唔理直接原樣送出,而家會固定行多次normalize+重新encode做JPEG(即使唔使resize)——呢個係刻意嘅,等本身已經夠細嘅相都受惠於對比度增強。3個新測試(resize路徑、免resize路徑、garbage input fail-open),674/674測試通過,已push。
+
+- ✅ **194. 遠近排序(2種子類型),已接落生產環境。** 真實citation(P1樂思"Distance"頁):(a)「(Tigger/Nina/Billy) is nearest to Micky」MC(Nina喺張圖入面根本冇出現,只有Tigger/Billy有實際距離);(b)飛鏢題「Yan's dart nearest, Mike's farthest, Sally's dart nearer than Ken's, Ken's dart is Dart___」四方消去。
+  ⚠️呢兩個真實citation都係未填答案嘅練習頁(冇老師批改，冇答案key)——同185-189唔同，冇獨立核實嚟源。extraction+比較邏輯本身風險低(淨係min/max/兩兩比較，冇好似185嘅Dijkstra咁複雜嘅演算法)，但測試用嘅係乾淨構造數值(跟返187嘅做法)，唔係真實圖入面精確讀出嚟嘅數。
+  新增`DISTANCE_VALUES`標記、`extractDistanceValues`、`verifyDistanceRanking`(Shape A: MC最近/最遠,淨係計圖入面真係存在嘅選項;Shape B: 4方消去鏈)。過程中揭發1個真bug:relM嘅regex用`\S+`淨係夾到一個word嘅reference(例如"the"),夾唔到"the center"呢種多字reference,改用`[\s\S]+?`先啱。7個新測試,679/679測試通過,已push。
