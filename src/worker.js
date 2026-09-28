@@ -4235,10 +4235,7 @@ function verifyScheduleTableQuery(scheduleTable, printedQuestion, studentAnswer)
 // citations by hand confirmed the rotation model below is exactly
 // right: with North=left, page-up=East, page-right=South,
 // page-down=West, page-left=North (a 90° counter-clockwise rotation of
-// the ordinary up=North compass). Deliberately narrow: only handles
-// locations that share an exact row or column (the only relationship
-// actually seen) -- declines on true diagonal relationships, which
-// haven't been validated.
+// the ordinary up=North compass).
 const SCREEN_TO_REAL_ROTATION = {
   "上": { "上": "北", "右": "東", "下": "南", "左": "西" }, // north=up (no rotation, the ordinary case)
   "右": { "上": "西", "右": "北", "下": "東", "左": "南" }, // north=right (90° clockwise)
@@ -4246,10 +4243,45 @@ const SCREEN_TO_REAL_ROTATION = {
   "左": { "上": "東", "右": "南", "下": "西", "左": "北" }, // north=left (90° counter-clockwise) -- the real citation's own case
 };
 
+// Ticket 180 (2026-09-28, real citation, P4 exam Q2/Q4, a fountain-
+// centered network diagram: "餐廳在*(港鐵站/噴水池/書店)的東南方。" ->
+// 港鐵站; "詩詩從精品店前往巴士站。她先向___方走，經過噴水池後，轉向
+// ___方，便可到達巴士站。" -> 西北;東北): the earlier LOCATION_GRID
+// citations only ever needed same-row/same-column relationships, so
+// diagonals were deliberately left declined. This new citation has real
+// diagonal relationships, so this extends the SAME rotation model to
+// all 8 compass points rather than building a separate system.
+// Hand-verified derivation: for a given north-screen-direction, the
+// mapping is just a cyclic shift of the 8-point compass by however many
+// 45° steps that north-direction sits from screen-up. Confirmed this
+// formula reproduces the 4 cardinal entries above EXACTLY (all 16
+// values checked by hand) before adding the diagonal keys -- see the
+// self-consistency test in test/mark.test.js.
+const SCREEN_DIR_ORDER8 = ["上", "右上", "右", "右下", "下", "左下", "左", "左上"];
+const REAL_DIR_ORDER8 = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+for (const northDir of Object.keys(SCREEN_TO_REAL_ROTATION)) {
+  const shift = SCREEN_DIR_ORDER8.indexOf(northDir);
+  SCREEN_DIR_ORDER8.forEach((sd, i) => {
+    SCREEN_TO_REAL_ROTATION[northDir][sd] = REAL_DIR_ORDER8[(i - shift + 8) % 8];
+  });
+}
+
 function screenDirectionBetween(from, to) {
-  if (from.row === to.row) return to.col > from.col ? "右" : "左";
-  if (from.col === to.col) return to.row > from.row ? "下" : "上";
-  return null; // true diagonal -- not validated, caller must decline
+  const rowDiff = to.row - from.row, colDiff = to.col - from.col;
+  if (rowDiff === 0 && colDiff === 0) return null;
+  if (rowDiff === 0) return colDiff > 0 ? "右" : "左";
+  if (colDiff === 0) return rowDiff > 0 ? "下" : "上";
+  // A true diagonal is only trusted when the row/col offsets are EXACTLY
+  // equal in magnitude (a clean 45°) -- every real diagonal citation
+  // hand-verified so far (Ticket 180) had exactly this shape. A skewed
+  // offset (e.g. 2 rows but 1 column, the shape of an EARLIER already-
+  // decided "not validated, decline" test fixture) stays declined rather
+  // than being forced into one of the 8 buckets on a guessed tolerance.
+  if (Math.abs(rowDiff) !== Math.abs(colDiff)) return null;
+  if (rowDiff < 0 && colDiff > 0) return "右上";
+  if (rowDiff > 0 && colDiff > 0) return "右下";
+  if (rowDiff > 0 && colDiff < 0) return "左下";
+  return "左上";
 }
 
 function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
@@ -4277,9 +4309,38 @@ function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
     }
   }
 
+  // Shape 4 (2026-09-28, real citation, P4 exam Q2: "餐廳在*(港鐵站/
+  // 噴水池/書店)的東南方。" -- checked BEFORE Shape 2, since Shape 2's
+  // "grab whichever name appears first in the captured span" logic would
+  // otherwise accidentally match this MC-candidate-list sentence shape
+  // and pick a name by text-order coincidence rather than by actually
+  // testing all 3 candidates): the subject (餐廳) is FIXED and named
+  // directly in the sentence; the blank being solved for is WHICH of
+  // several parenthesised candidate names makes "subject is Z direction
+  // from candidate" true -- the reverse of Shape 2's own "___在Y的Z方"
+  // (there the blank is the subject, Y is fixed).
+  m = printed.match(/(.+?)在\*?[（(]([^（）()]+)[）)]的([東南西北]{1,2})方/);
+  if (m) {
+    const subjectName = names.find((n) => m[1].includes(n));
+    const candidateNames = m[2].split(/[／/]/).map((s) => s.trim()).filter((n) => names.includes(n));
+    const targetRealDir = m[3];
+    if (subjectName && candidateNames.length >= 2 && positions[subjectName]) {
+      const screenDir = Object.keys(rotation).find((sd) => rotation[sd] === targetRealDir);
+      if (screenDir) {
+        const matching = candidateNames.filter((c) => positions[c] && screenDirectionBetween(positions[c], positions[subjectName]) === screenDir);
+        if (matching.length === 1) {
+          const expected = matching[0];
+          const correct = answer === expected || answer.includes(expected);
+          return { correct, correctAnswer: correct ? "" : expected };
+        }
+      }
+    }
+    return { correct: null, correctAnswer: "" };
+  }
+
   // Shape 2: "___在Y的Z方。" -- reverse lookup: which location is in
   // direction Z from Y.
-  m = printed.match(/在(.+?)的([東南西北])方/);
+  m = printed.match(/在(.+?)的([東南西北]{1,2})方/);
   if (m) {
     const refName = names.find((n) => m[1].includes(n));
     const targetRealDir = m[2];
@@ -4304,7 +4365,9 @@ function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
   // actual grid before writing this. Student answer expected as two
   // values separated by ";"/","，matching this project's established
   // multi-sub-answer convention.
-  m = printed.match(/由(.+?)(?:前往|去)(.+?)[,，].*?經過(.+?)後/);
+  // "由" or "從" -- Ticket 180's real citation ("詩詩從精品店前往巴士
+  // 站...") uses 從, not 由.
+  m = printed.match(/[由從](.+?)(?:前往|去)(.+?)[,，。].*?經過(.+?)後/);
   if (m) {
     const fromName = names.find((n) => m[1].includes(n));
     const toName = names.find((n) => m[2].includes(n));
@@ -7269,7 +7332,7 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       if (!item.locationGrid || typeof item.locationGrid !== "object") return false;
       const printed = String(item.printedQuestion || "");
-      return /由.+向.{0,3}方走|在.+的[東南西北]方|由.+(?:前往|去).+經過.+後/.test(printed);
+      return /由.+向.{0,3}方走|在.+的[東南西北]{1,2}方|[由從].+(?:前往|去).+經過.+後/.test(printed);
     },
     verify: (item) => verifyLocationGridQuery(item.locationGrid, item.printedQuestion, item.studentAnswer),
   },

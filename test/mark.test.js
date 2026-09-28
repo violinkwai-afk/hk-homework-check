@@ -2292,6 +2292,53 @@ test("location_grid_query handler: registered and reachable", async () => {
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
 
+// Ticket 180 (2026-09-28): diagonal-direction extension. Real citation,
+// P4 exam Q2-4, a fountain-centered network diagram (北 points screen-
+// left, same as PLAZA_GRID above). Grid hand-derived from the real photo
+// (see SCREEN_TO_REAL_ROTATION's own comment for the full derivation)
+// and cross-checked against 3 independent real answers before writing
+// any code:
+//   書店(1,0) 學校(1,1) 巴士站(0,1) 停車場(0,2) 噴水池(1,2)
+//   精品店(0,3) 餐廳(1,3) 港鐵站(2,2)
+const FOUNTAIN_GRID = {
+  northDir: "左",
+  positions: {
+    "書店": { row: 1, col: 0 }, "學校": { row: 1, col: 1 }, "巴士站": { row: 0, col: 1 },
+    "停車場": { row: 0, col: 2 }, "噴水池": { row: 1, col: 2 }, "精品店": { row: 0, col: 3 },
+    "餐廳": { row: 1, col: 3 }, "港鐵站": { row: 2, col: 2 },
+  },
+};
+
+test("verifyLocationGridQuery: rotation table's diagonal entries are self-consistent for every north orientation (a location in the declared north screen-direction, checked via its diagonal neighbours too)", async () => {
+  const worker = await import(TMP);
+  // For northDir="左" (screen-left=北), screen-upper-right must be 東南
+  // (see SCREEN_TO_REAL_ROTATION's hand-derivation comment) -- checked
+  // for all 4 north orientations by rotating the same relationship.
+  const screenUpperRightRealDir = { "上": "東北", "右": "西北", "下": "西南", "左": "東南" };
+  for (const northDir of ["上", "右", "下", "左"]) {
+    const grid = { northDir, positions: { A: { row: 1, col: 1 }, B: { row: 0, col: 2 } } }; // B is screen-upper-right of A
+    const r = worker.verifyLocationGridQuery(grid, "由A向___方走，便可到達B。", screenUpperRightRealDir[northDir]);
+    assert.equal(r.correct, true, `northDir=${northDir}: screen-upper-right must resolve to ${screenUpperRightRealDir[northDir]}`);
+  }
+});
+
+test("verifyLocationGridQuery: shape 4 -- MC candidate-list reverse lookup (real citation, Q2)", async () => {
+  const worker = await import(TMP);
+  const printed = "餐廳在*(港鐵站/噴水池/書店)的東南方。";
+  const r = worker.verifyLocationGridQuery(FOUNTAIN_GRID, printed, "港鐵站");
+  assert.equal(r.correct, true, "港鐵站(2,2)->餐廳(1,3) is screen-upper-right, which under north=左 is 東南");
+  const wrong = worker.verifyLocationGridQuery(FOUNTAIN_GRID, printed, "書店");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "港鐵站");
+});
+
+test("verifyLocationGridQuery: shape 3 -- also accepts 從 (not just 由), and resolves diagonal legs (real citation, Q4)", async () => {
+  const worker = await import(TMP);
+  const printed = "詩詩從精品店前往巴士站。她先向___方走，經過噴水池後，轉向___方，便可到達巴士站。";
+  const r = worker.verifyLocationGridQuery(FOUNTAIN_GRID, printed, "西北;東北");
+  assert.equal(r.correct, true, "精品店->噴水池 is screen-lower-left(西北); 噴水池->巴士站 is screen-upper-left(東北)");
+});
+
 // Location-grid shape 3 (2026-09-28, real citations, Q26/27 of the same
 // P2 exam): multi-step path via a named intermediate landmark.
 test("verifyLocationGridQuery: shape 3 -- multi-step path via intermediate landmark (Q26 real citation)", async () => {
