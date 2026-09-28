@@ -2044,7 +2044,8 @@ const SHAPE_REFERENCE = `參考資料——常見立體形狀嘅真實幾何資�
 三角錐(triangular-based pyramid/tetrahedron)：4個面(全部三角形)、6條邊、4個頂點。
 圓柱體(cylinder)：3個面(2個平面圓形底+1個彎曲面)、2條邊(圓形)、0個頂點、2個圓形底。
 圓錐體(cone)：2個面(1個平面圓形底+1個彎曲面)、1條邊(圓形)、1個頂點(尖端)、1個圓形底。
-球體(sphere)：1個彎曲面、0條邊、0個頂點。`;
+球體(sphere)：1個彎曲面、0條邊、0個頂點。
+呢個課程嘅分類慣例：「柱體」包括長方柱、圓柱等（唔止圓柱先叫柱體）；「錐體」包括三角錐、圓錐等（唔止圓錐先叫錐體）。`;
 
 // Checks BOTH printedQuestion and studentAnswer -- a real "which shape
 // has two circular bases?" style question often names the shape only in
@@ -2072,11 +2073,44 @@ const SHAPE_2D_REFERENCE = `參考資料——常見平面形狀嘅真實幾何�
 五邊形(pentagon)：5條邊、5個頂點。
 六邊形(hexagon)：6條邊、6個頂點。
 八邊形(octagon)：8條邊、8個頂點。
-圓形(circle)：0條邊、0個頂點、彎曲嘅邊界。`;
+圓形(circle)：0條邊、0個頂點、彎曲嘅邊界。
+正方形係一種特別嘅長方形（因為正方形都符合長方形嘅所有性質：兩對邊互相平行相等、四隻角都係直角），但一般命名習慣淨係將佢叫做正方形。`;
 
 function mentionsShape2D(pendingItems) {
   const re = /\btriangle\b|\bsquare\b|rectangle|parallelogram|\brhombus\b|trapezium|trapezoid|pentagon|hexagon|octagon|\bcircle\b|\bside\b|sides|三角形|正方形|長方形|平行四邊形|菱形|梯形|五邊形|六邊形|八邊形|圓形|多邊形/i;
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Ticket 107 (2026-09-28, found across 3 separate real materials this
+// session): two more static facts an AI could easily misremember or
+// guess wrong on -- "dozen" quantity words, and clock-face mechanics
+// (the minute/second hand ratio). Bundled into one block since both are
+// small, standalone facts with no natural home in the currency/shape
+// blocks above.
+const QUANTITY_AND_CLOCK_REFERENCE = `參考資料——常見數量詞同鐘面機械知識（幫你答呢類題,唔好靠估）：
+一打(a dozen) = 12個；半打(half a dozen) = 6個。
+鐘面上，當分針行咗1小格(即1分鐘)，秒針啱啱好行完一整圈，即係行咗60小格。`;
+
+function mentionsQuantityWordOrClockMechanics(pendingItems) {
+  const re = /一打|半打|dozen|小格|second hand|minute hand/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Ticket 97/107 (2026-09-28, confirmed in BOTH 樂思 and 躍思 workbooks
+// independently): this HK curriculum's calendar convention is that the
+// FIRST day of the week is Sunday and the SEVENTH is Saturday -- NOT the
+// international/ISO convention of Monday-first. A real trap question
+// found: "一個星期中，第五天是星期五" is marked FALSE (the 5th day is
+// actually Thursday under this convention). An AI answering from general
+// knowledge alone would very plausibly get this wrong.
+const WEEKDAY_CONVENTION_REFERENCE = `參考資料——呢個課程嘅一星期慣例（幫你答日曆/星期題,唔好靠估）：
+呢個課程慣例：一星期嘅第一天係星期日(Sunday)，第二天係星期一，...，第七天係星期六(Saturday)——唔係國際慣例嘅星期一開始計。`;
+
+function mentionsWeekdayOrdinal(pendingItems) {
+  return pendingItems.some((it) => {
+    const text = `${it.printedQuestion || ""} ${it.studentAnswer || ""}`;
+    return /第.{0,3}天/.test(text) && /星期|week/i.test(text);
+  });
 }
 
 // Ticket 60 (2026-09-27): "做法B" from the Tier-V-prompt plan -- unlike
@@ -2178,6 +2212,8 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsShape2D(pendingItems) ? SHAPE_2D_REFERENCE : null,
     mentionsYearType(pendingItems) ? YEAR_TYPE_REFERENCE : null,
     mentionsMonthLength(pendingItems) ? DAYS_PER_MONTH_REFERENCE : null,
+    mentionsQuantityWordOrClockMechanics(pendingItems) ? QUANTITY_AND_CLOCK_REFERENCE : null,
+    mentionsWeekdayOrdinal(pendingItems) ? WEEKDAY_CONVENTION_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -6528,6 +6564,8 @@ export {
   mentionsShape2D,
   mentionsYearType,
   mentionsMonthLength,
+  mentionsQuantityWordOrClockMechanics,
+  mentionsWeekdayOrdinal,
   buildTierVGuidance,
   extractPictogramData,
   verifyPictogramQuery,

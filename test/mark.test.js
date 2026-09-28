@@ -1685,3 +1685,55 @@ test("pictogram_data_query handler: registered and reachable via QUESTION_TYPE_H
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9+4=", studentAnswer: "13" }), false, "no pictogramData on the item must not match");
 });
+
+// Ticket 109: static "square is a special rectangle" fact, found in a
+// real P2 worksheet's own conclusion sentence ("square is a kind of
+// special ___ because it has all the properties of rectangle").
+test("mentionsShape2D / SHAPE_2D_REFERENCE: the square-is-a-rectangle fact is present in the reference block", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "Is a square a kind of rectangle?", studentAnswer: "yes" },
+  ]);
+  assert.match(prompt, /正方形係一種特別嘅長方形/);
+});
+
+// Ticket 107: 柱體/錐體 grouping convention, found in a real 躍思 answer
+// key ("6 立體圖形" grouping triangular prism under 柱體, not just cylinder).
+test("mentionsShapeGeometry / SHAPE_REFERENCE: the 柱體/錐體 grouping convention is present", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "以下邊個立體圖形唔係錐體?", studentAnswer: "三棱柱" },
+  ]);
+  assert.match(prompt, /「柱體」包括長方柱、圓柱/);
+});
+
+// Ticket 107 (dozen/clock mechanics reference).
+test("mentionsQuantityWordOrClockMechanics: fires on dozen/half-dozen and clock small-division wording", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsQuantityWordOrClockMechanics([{ printedQuestion: "Mum buys half a dozen of waffles." }]), true);
+  assert.equal(worker.mentionsQuantityWordOrClockMechanics([{ printedQuestion: "當分針行了1小格，秒針行了多少小格？" }]), true);
+  assert.equal(worker.mentionsQuantityWordOrClockMechanics([{ printedQuestion: "9 + 4 = ?" }]), false);
+});
+
+test("buildAiFallbackPrompt: includes the dozen/clock-mechanics reference only when relevant", async () => {
+  const worker = await import(TMP);
+  const withDozen = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "Mum buys half a dozen of waffles. How much should she pay?", studentAnswer: "30 dollars" },
+  ]);
+  assert.match(withDozen, /半打\(half a dozen\) = 6個/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /一打\(a dozen\)/);
+});
+
+// Ticket 97/107: HK curriculum's week-starts-Sunday convention, confirmed
+// independently in both 樂思 and 躍思 -- a real trap: "一個星期中，第五
+// 天是星期五" is FALSE under this convention (the 5th day is Thursday).
+test("mentionsWeekdayOrdinal / WEEKDAY_CONVENTION_REFERENCE: fires on ordinal-day-of-week wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "一個星期中，第五天是星期五。", studentAnswer: "錯" },
+  ]);
+  assert.match(prompt, /一星期嘅第一天係星期日/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /一星期嘅第一天係星期日/);
+});
