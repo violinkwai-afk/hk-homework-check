@@ -2314,6 +2314,45 @@ test("path_graph handler: registered and reachable through real classifyAndVerif
   assert.equal(worker.classifyAndVerify(item2, null).correct, true);
 });
 
+// Ticket 187 (2026-09-28, real citation, 躍思P1 Q7: 小思在5時開始睇電視,
+// 以下邊個可能係佢睇完電視嘅時間? A/B/C/D四個鐘面, 答案D). Exact clock-hand
+// minute values from the real photo can't be hand-verified the way a
+// printed number can (this genuinely needs the vision step) -- these
+// round-number test times exercise the same "exactly one option falls
+// forward of the start time" logic the real citation relies on.
+test("verifyClockOptionsMc: exactly one option after the start time is the plausible answer", async () => {
+  const worker = await import(TMP);
+  const clockOptions = { "開始": 17 * 60, "A": 15 * 60, "B": 16 * 60, "C": 14 * 60, "D": 18 * 60 + 40 };
+  const r = worker.verifyClockOptionsMc(clockOptions, "小思在5時開始看電視，以下邊個可能是她看完電視的時間？", "D");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyClockOptionsMc(clockOptions, "小思在5時開始看電視，以下邊個可能是她看完電視的時間？", "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "D");
+});
+
+test("verifyClockOptionsMc: declines (null) when more than one option qualifies, or none present", async () => {
+  const worker = await import(TMP);
+  const ambiguous = { "開始": 17 * 60, "A": 18 * 60, "B": 19 * 60 };
+  assert.equal(worker.verifyClockOptionsMc(ambiguous, "小思在5時開始看電視，以下邊個可能是她看完電視的時間？", "A").correct, null);
+  assert.equal(worker.verifyClockOptionsMc(null, "小思在5時開始看電視，以下邊個可能是她看完電視的時間？", "A").correct, null);
+});
+
+test("extractClockOptions: parses the CLOCK_OPTIONS marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { clockOptions, cleanedText } = worker.extractClockOptions("CLOCK_OPTIONS: 開始=17:00;A=15:00;D=18:40\n1. 題目|D");
+  assert.deepEqual(clockOptions, { "開始": 17 * 60, "A": 15 * 60, "D": 18 * 60 + 40 });
+  assert.ok(!cleanedText.includes("CLOCK_OPTIONS"));
+});
+
+test("clock_options_mc handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const clockOptions = { "開始": 17 * 60, "A": 15 * 60, "B": 16 * 60, "C": 14 * 60, "D": 18 * 60 + 40 };
+  const item = { printedQuestion: "小思在5時開始看電視，以下邊個可能是她看完電視的時間？", studentAnswer: "D", clockOptions };
+  const handler2 = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "clock_options_mc");
+  assert.ok(handler2);
+  assert.equal(worker.classifyAndVerify(item, null).correct, true);
+});
+
 // Ticket 190 (2026-09-28): give Jev the same OCR-extracted diagram
 // markers code uses, so it has a second (text-only) chance before an
 // item falls through to the real image-based AI-fallback.

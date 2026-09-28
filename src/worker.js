@@ -1792,6 +1792,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係幾個地點(用英文字母/名稱標住)用彎彎曲曲嘅路徑線連接埋一齊,每條連接線都標住咗距離(例如"2厘米"),要計最短路程果類圖**，喺回覆最開始加一行「PATH_GRAPH: A-B=<距離>;B-C=<距離>;...」(每條直接連接嘅路徑一組,兩個地點用"-"連接,用"="接距離數字,唔同路徑之間用";"分隔;淨係列直接有線連住嘅兩個地點,唔使自己計間接距離)。如果冇呢類路徑圖就完全唔使加呢行。
 
+**如果印刷咗幾個鐘面圖(每個係一個圓形錶面,有時針分針,揀邊個鐘面時間先啱嗰種MC)**，喺回覆最開始加一行「CLOCK_OPTIONS: A=<小時>:<分鐘,兩位數>;B=<同上>;C=<同上>」(用24小時制,由時針分針實際指緊嘅位置直接讀,如果有D、E等更多選項都照樣加落去;如果題目本身都有印刷一個「開始/起點」鐘面或者講明咗個開始時間,都要加多一組「開始=<小時>:<分鐘>」)。如果冇呢類鐘面MC就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2242,6 +2244,53 @@ function verifyPathGraph(pathGraph, printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 187 (2026-09-28, real citation, 躍思P1 Q7: 小思在5時開始睇電視,
+// 以下邊個可能係佢睇完電視嘅時間? A/B/C/D四個鐘面, 答案D): a "which
+// completion time is plausible" MC where the options are ONLY shown as
+// clock-face images, no printed times at all -- genuinely needs the
+// vision step to read each clock face (unlike Ticket 187's other shape,
+// verifyElapsedTimeForward's "X o'clock" extension, where the times
+// were already in the printed text). "Plausible" = strictly after the
+// stated start time, same day, within a forward 12-hour window; if
+// more than one option qualifies the question is ambiguous and this
+// declines rather than guessing.
+function extractClockOptions(text) {
+  const m = /^CLOCK_OPTIONS:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^CLOCK_OPTIONS:.*$/gm, "");
+  if (!m) return { clockOptions: null, cleanedText };
+  const options = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(part.slice(eqIdx + 1).trim());
+    if (!key || !timeMatch) continue;
+    const h = parseInt(timeMatch[1], 10);
+    const min = parseInt(timeMatch[2], 10);
+    if (h < 0 || h > 23 || min < 0 || min > 59) continue;
+    options[key] = h * 60 + min;
+  }
+  return { clockOptions: Object.keys(options).length ? options : null, cleanedText };
+}
+
+function verifyClockOptionsMc(clockOptions, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !clockOptions || !("開始" in clockOptions)) return { correct: null, correctAnswer: "" };
+  const startMatch = printed.match(/(\d{1,2})\s*時[\s\S]{0,6}開始/);
+  const startMin = clockOptions["開始"];
+  if (!startMatch || !Number.isFinite(startMin)) return { correct: null, correctAnswer: "" };
+  const candidates = Object.keys(clockOptions).filter((k) => k !== "開始");
+  const plausible = candidates.filter((k) => {
+    let diff = clockOptions[k] - startMin;
+    if (diff < 0) diff += 24 * 60;
+    return diff > 0 && diff <= 12 * 60;
+  });
+  if (plausible.length !== 1) return { correct: null, correctAnswer: "" };
+  const correct = answer === plausible[0];
+  return { correct, correctAnswer: correct ? "" : plausible[0] };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2380,7 +2429,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { rectCutKite, cleanedText: cleanedText16 } = extractRectCutKite(cleanedText15);
   const { compassRoseMc, cleanedText: cleanedText17 } = extractCompassRoseMc(cleanedText16);
   const { paperFold, cleanedText: cleanedText18 } = extractPaperFold(cleanedText17);
-  const { pathGraph, cleanedText } = extractPathGraph(cleanedText18);
+  const { pathGraph, cleanedText: cleanedText19 } = extractPathGraph(cleanedText18);
+  const { clockOptions, cleanedText } = extractClockOptions(cleanedText19);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2388,7 +2438,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -6460,18 +6510,38 @@ function verifyElapsedTimeForward(printedQuestion, studentAnswer) {
   if (!answer) return { correct: null, correctAnswer: "" };
   if (!/(hours?|小時)/i.test(printed)) return { correct: null, correctAnswer: "" };
   const times = printed.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi);
-  if (!times || times.length !== 2) return { correct: null, correctAnswer: "" };
-  const t1 = parseTime12h(times[0]);
-  const t2 = parseTime12h(times[1]);
-  if (t1 === null || t2 === null) return { correct: null, correctAnswer: "" };
-  let diffMin = t2 - t1;
-  if (diffMin < 0) diffMin += 24 * 60;
-  const expected = diffMin / 60;
-  const studentNum = parseSignedStudentNumber(answer);
-  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
-  const closeEnough = Math.abs(studentNum - expected) < 1e-9;
-  const expectedStr = Number.isInteger(expected) ? String(expected) : String(expected);
-  return { correct: closeEnough, correctAnswer: closeEnough ? "" : expectedStr };
+  if (times && times.length === 2) {
+    const t1 = parseTime12h(times[0]);
+    const t2 = parseTime12h(times[1]);
+    if (t1 === null || t2 === null) return { correct: null, correctAnswer: "" };
+    let diffMin = t2 - t1;
+    if (diffMin < 0) diffMin += 24 * 60;
+    const expected = diffMin / 60;
+    const studentNum = parseSignedStudentNumber(answer);
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const closeEnough = Math.abs(studentNum - expected) < 1e-9;
+    return { correct: closeEnough, correctAnswer: closeEnough ? "" : String(expected) };
+  }
+  // Ticket 187 (2026-09-28, real citation: "Isabella and her family
+  // arrive at a country park at 9 o'clock. They leave the country park
+  // at 5 o'clock... stay... for ___ hours." -> 8): bare "X o'clock"
+  // phrasing with no am/pm marker at all, unlike the HH:MMam/pm shape
+  // above. Assumes a same-day forward gap within a single 12-hour clock
+  // face (wraps at 12, never negative) -- hand-verified: 9 o'clock ->
+  // 5 o'clock = ((5-9) mod 12 + 12) mod 12 = 8, matches the real answer.
+  const oclockTimes = printed.match(/\d{1,2}(?=\s*o.?clock)/gi);
+  if (oclockTimes && oclockTimes.length === 2) {
+    const h1 = parseInt(oclockTimes[0], 10);
+    const h2 = parseInt(oclockTimes[1], 10);
+    if (h1 < 1 || h1 > 12 || h2 < 1 || h2 > 12) return { correct: null, correctAnswer: "" };
+    let diffHour = ((h2 - h1) % 12 + 12) % 12;
+    if (diffHour === 0) diffHour = 12;
+    const studentNum = parseSignedStudentNumber(answer);
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const closeEnough = Math.abs(studentNum - diffHour) < 1e-9;
+    return { correct: closeEnough, correctAnswer: closeEnough ? "" : String(diffHour) };
+  }
+  return { correct: null, correctAnswer: "" };
 }
 
 // Reverse-solve the divisor from a quotient+remainder equation (real
@@ -7739,6 +7809,13 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyPathGraph(item.pathGraph, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 187 (2026-09-28): "which completion time is plausible" MC,
+    // options shown only as clock-face images.
+    name: "clock_options_mc",
+    detect: (item) => !!item.clockOptions && /時[\s\S]{0,6}開始/.test(String(item.printedQuestion || "")) && /可能/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyClockOptionsMc(item.clockOptions, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8055,7 +8132,9 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
       if (!/(hours?|小時)/i.test(printed)) return false;
-      return (printed.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi) || []).length === 2;
+      if ((printed.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi) || []).length === 2) return true;
+      // Ticket 187: bare "X o'clock" phrasing (no am/pm, no minutes).
+      return (printed.match(/\d{1,2}(?=\s*o.?clock)/gi) || []).length === 2;
     },
     verify: (item) => verifyElapsedTimeForward(item.printedQuestion, item.studentAnswer),
   },
@@ -8767,7 +8846,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8865,6 +8944,10 @@ async function handleMark(request, env) {
     // Ticket 185: same page-level shared-context pattern.
     if (qwenOutcome.pathGraph) {
       qwenOutcome.items.forEach((item) => { item.pathGraph = qwenOutcome.pathGraph; });
+    }
+    // Ticket 187: same page-level shared-context pattern.
+    if (qwenOutcome.clockOptions) {
+      qwenOutcome.items.forEach((item) => { item.clockOptions = qwenOutcome.clockOptions; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9667,6 +9750,8 @@ export {
   verifyPaperFold,
   extractPathGraph,
   verifyPathGraph,
+  extractClockOptions,
+  verifyClockOptionsMc,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

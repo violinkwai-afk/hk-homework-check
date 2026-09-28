@@ -791,3 +791,9 @@
   新增`PATH_GRAPH`標記(OCR輸出直接連接嘅邊+距離)、`extractPathGraph`、`pathGraphShortestDistances`(Dijkstra)、`verifyPathGraph`(Shape1:直接兩點最短路程;Shape2:MC揀邊個中途點令總距離啱啱好等於題目講嘅數)。9個新測試(包括classifyAndVerify真dispatch),657/657測試通過。
 
 - ✅ **190. Jev都攞到OCR結構化圖表marker(唔淨係printedQuestion),已接落生產環境。** 用戶提出:OCR已經幫某啲要睇圖嘅題目(例如鐘面、摺紙、路徑圖)抽取咗結構化資料,就算code嘅精準pattern-matcher未識答,Jev都應該攞埋呢啲資料用文字試一次,唔使一定要去到最貴嘅真AI-fallback先有機會。跟返Ticket 54(wordBankHint)一樣安全嘅做法——加一段文字落Jev嘅提問度,結構完全冇變。新增`buildDiagramMarkerHint`(逐個檢查item身上有冇14個已知marker,有就加一行可讀描述),喺`buildJevQuestions`入面同wordBankHint一齊加落prompt。5個新測試,660/660測試通過,已push。
+
+- ✅ **187. 鐘面讀時間(2種子類型),已接落生產環境。** 分兩部分:
+  (a) 「X o'clock」文字經過時間——真實citation(P2pc Q30,英文):「Isabella...arrive...at 9 o'clock...leave...at 5 o'clock...stay...for ___ hours」答案8。發現呢條其實純文字已經有齊晒資料(9同5兩個鐘面圖只係插圖,唔使真係睇圖)，擴充咗現有`verifyElapsedTimeForward`/`elapsed_time_forward`(本身淨係識`HH:MMam/pm`格式)加多一個shape專門讀「X o'clock」呢種冇am/pm嘅講法,假設同一個12小時錶面內嘅前進差(9→5=8,已驗證)。
+  (b) 鐘面MC揀合理完成時間——真實citation(躍思P1 Q7):「小思在5時開始睇電視,以下邊個可能係佢睇完電視嘅時間?」四個鐘面圖(冇印刷數字,淨係圖),答案D。呢個先真係要睇圖——新增`CLOCK_OPTIONS`標記(OCR讀每個鐘面實際時間+開始時間)、`extractClockOptions`、`verifyClockOptionsMc`(邊個選項嘅時間喺開始時間之後、12小時之內、而且淨係得一個咁樣嘅選項,就係答案)。
+  ⚠️(b)嘅風險同其他真圖形marker唔同:呢類冇印刷數字可以手推核實,答案岩唔岩100%靠AI讀鐘面準唔準,測試用嘅係乾淨嘅整點數字驗證code邏輯本身岩,唔代表真實照片一定讀啱。
+  8個新測試,666/666測試通過,已push。

@@ -1161,6 +1161,23 @@ test("elapsed time forward: no hours/小時 keyword stays null", () => {
   assert.equal(r.correct, null);
 });
 
+// Ticket 187 (2026-09-28, real citation, P2pc Q30: "Isabella and her
+// family arrive at a country park at 9 o'clock. They leave the country
+// park at 5 o'clock... Isabella and her family stay in the country
+// park for ___ hours." -> 8): bare "X o'clock" phrasing, no am/pm.
+test("elapsed time forward: real citation, 9 o'clock to 5 o'clock -> 8 hours", () => {
+  const r = mod.verifyElapsedTimeForward("Isabella and her family arrive at a country park at 9 o'clock. They leave the country park at 5 o'clock. Isabella and her family stay in the country park for ___ hours.", "8");
+  assert.equal(r.correct, true);
+  const wrong = mod.verifyElapsedTimeForward("Isabella and her family arrive at a country park at 9 o'clock. They leave the country park at 5 o'clock. Isabella and her family stay in the country park for ___ hours.", "4");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "8");
+});
+
+test("elapsed_time_forward handler: reachable through real classifyAndVerify dispatch for the o'clock shape", () => {
+  const item = { printedQuestion: "Isabella and her family arrive at a country park at 9 o'clock. They leave the country park at 5 o'clock. Isabella and her family stay in the country park for ___ hours.", studentAnswer: "8" };
+  assert.equal(mod.classifyAndVerify(item, null).correct, true);
+});
+
 // --- verifyReverseDivisorFromRemainder (2026-09-23) ----------------------
 
 test("reverse divisor from remainder: real example, 750÷※=16...14 -> 46", () => {
