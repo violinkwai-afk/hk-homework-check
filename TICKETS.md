@@ -667,3 +667,12 @@
 **核心發現**:Qwen/Gemini呢兩個(用返做judge時)完全唔識「唔夠信心就讓路」,乜嘢都照答,所以雖然快同平,但絕對錯誤數量(12-13條)遠超Jev(2條)。Jev「識自己老實話唔知」呢個能力先係佢真正嘅優勢,唔係短板。呢個結果支持繼續用Jev做第一層text-only判斷,Qwen/Gemini唔適合直接攞嚟做「淨係文字、冇圖」嘅判斷用途(佢哋原本設計都係要睇真圖先判斷,冇圖嘅時候會亂咁答)。
 
 臨時route `/api/test-model-judge-batch` 用完即刻拆走(commit `7110f87`)。
+
+## 2026年9月28號:用戶問「呢30條全部可以用code答到嗎」,認真查——搵到2個真bug
+
+冇靠印象答,寫咗個測試腳本用真正嘅`classifyAndVerify`(即係production真正嘅dispatcher,唔係逐個function孤立噉test)行齊晒30條,先發現原來得28/30,唔係諗住嘅30/30:
+
+- ✅ **183. 真bug:`word_problem_total`嘅detect()太鬆,撞晒`common_factors_count`(第148項)。** 「20和32共有多少個公因數？」入面有「共」(共有嘅共)同2個數字,啱啱好中晒`word_problem_total`嘅寬鬆觸發條件(得「共/總共/一共/合共」其中一個字+2個數字),而`word_problem_total`喺handler陣列入面排喺`common_factors_count`前面,所以會攔截咗呢條題,計錯個總和當答案,`common_factors_count`永遠冇機會行到。修法:將`common_factors_count`搬到`word_problem_total`前面(同其他已知會撞嘅handler一樣做法)。已加一個用返真正`classifyAndVerify`(唔係孤立test單一function)嘅regression test,專登防返呢種「detect()太鬆撞埋第啲handler」嘅問題。
+- ✅ **184. 真bug:第156項(梯形面積)冇支援MC字母答案,得返純數字。** 真實citation係MC格式(A/B/C/D),真學生會填字母,但個function淨係識比對純數字,一填「A」就攞去同計出嚟嘅數字(10)直接比較,梗係唔會啱——即係一個真實MC題,舊code**永遠答唔中**(無論真定假)。跟返157/158項一樣嘅做法補咗MC字母支援,仲要保留返舊有純數字測試(157/158用嘅測試本身就用緊字母,冇呢個盲點;156嗰個舊測試用緊純數字,冇撞到先前一直未發現)。
+
+修完之後30條全部再過一次`classifyAndVerify`,而家真係30/30。呢次證明咗「單一function嘅unit test過晒」唔代表「真正production dispatch都啱」——兩個bug都要用返真正嘅`classifyAndVerify`(行齊晒個handler陣列,模擬真實優先次序)先浮到面,單獨test個function本身完全睇唔出。2個新測試,645/645測試通過,已push、已deploy。

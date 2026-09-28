@@ -2700,6 +2700,23 @@ test("common_factors_count handler registered", async () => {
   const worker = await import(TMP);
   assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "common_factors_count"));
 });
+// Real collision bug found 2026-09-28 (a from-scratch classifyAndVerify
+// test run against all 30 real Tickets-154-181 citations, not just each
+// handler tested in isolation): "20和32共有多少個公因數？" contains "共"
+// (as part of "共有") and 2 numbers, so word_problem_total's own much
+// looser trigger ALSO matched it -- and since word_problem_total was
+// registered EARLIER in QUESTION_TYPE_HANDLERS, it silently intercepted
+// this question and computed a wrong sum-based verdict instead of ever
+// reaching common_factors_count. Fixed by moving common_factors_count
+// before word_problem_total. This test exercises the REAL dispatch
+// order (classifyAndVerify), not just the handler in isolation, so it
+// would have caught this the first time.
+test("common_factors_count: reachable through the real handler dispatch order, not shadowed by word_problem_total", async () => {
+  const worker = await import(TMP);
+  const r = worker.classifyAndVerify({ printedQuestion: "20和32共有多少個公因數？", studentAnswer: "3" }, null);
+  assert.equal(r.handler, "common_factors_count", "word_problem_total must not intercept this question");
+  assert.equal(r.correct, true);
+});
 
 // Ticket 150 (real citation): min-add-to-prime.
 test("verifyMinAddToPrime: real citation", async () => {
@@ -3030,6 +3047,20 @@ test("verifyTrapezoidTwoSquaresArea: real citation", async () => {
   const printed = "右圖由一個梯形和兩個正方形組成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？ A. 10 cm² B. 20 cm² C. 60 cm² D. 62 cm²";
   const r = worker.verifyTrapezoidTwoSquaresArea(12, printed, "10");
   assert.equal(r.correct, true, "side1=6,side2=4,gap=12-6-4=2,area=(6+4)/2*2=10");
+});
+// Ticket 156 bug fix (2026-09-28, found via a from-scratch
+// classifyAndVerify test run against all 30 real Tickets-154-181
+// citations): the real citation is MC, so a real student answers with a
+// LETTER ("A"), not the bare number -- this was silently mis-scored
+// (compared "A" against the numeric expected value) before the fix.
+test("verifyTrapezoidTwoSquaresArea: also accepts the real MC-letter answer, not just a bare number", async () => {
+  const worker = await import(TMP);
+  const printed = "右圖由一個梯形和兩個正方形組成，兩個正方形的周界分別24 cm和16 cm，梯形的面積是多少cm²？ A. 10 cm² B. 20 cm² C. 60 cm² D. 62 cm²";
+  const r = worker.verifyTrapezoidTwoSquaresArea(12, printed, "A");
+  assert.equal(r.correct, true, "A is the option matching the computed area (10)");
+  const wrong = worker.verifyTrapezoidTwoSquaresArea(12, printed, "C");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "A");
 });
 test("trapezoid_two_squares_area handler registered and reachable", async () => {
   const worker = await import(TMP);

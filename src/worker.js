@@ -5913,6 +5913,25 @@ function verifyTrapezoidTwoSquaresArea(trapezoidBaseline, printedQuestion, stude
   const gap = trapezoidBaseline - side1 - side2;
   if (gap <= 0) return { correct: null, correctAnswer: "" };
   const expected = ((side1 + side2) / 2) * gap;
+  // Ticket 156 bug fix (2026-09-28, found via a from-scratch
+  // classifyAndVerify test against the real citation): the real citation
+  // is presented as MC (A/B/C/D), so a real student answers with a
+  // LETTER, not a bare number -- this originally only accepted a bare
+  // number, silently declining (or worse, mis-scoring) every real MC
+  // answer. Same MC-then-bare-number fallback pattern as Tickets 157/158.
+  const options = parseMcOptions(printed);
+  if (options.length >= 2) {
+    const matching = options.filter((o) => Math.abs(Number((o.text.match(/[\d.]+/) || [])[0]) - expected) < 0.01);
+    if (matching.length === 1) {
+      // Accept either the MC letter (how a real student answers this
+      // shape) OR the bare numeric value (already-passing tests, and any
+      // caller that strips MC option text before verifying) -- both are
+      // "correct" here, never just one.
+      const studentNum2 = parseNumericAnswer(answer);
+      const correct = answer === matching[0].letter || (studentNum2 !== null && Math.abs(studentNum2 - expected) < 0.01);
+      return { correct, correctAnswer: correct ? "" : matching[0].letter };
+    }
+  }
   const studentNum = parseNumericAnswer(answer);
   if (studentNum === null) return { correct: null, correctAnswer: "" };
   const correct = Math.abs(studentNum - expected) < 0.01;
@@ -7548,6 +7567,18 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyChainedVerticalArithmetic(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 148 (2026-09-28): common-factor count between two numbers.
+    // MUST run BEFORE word_problem_total -- real collision found 2026-09-28
+    // via a from-scratch classifyAndVerify test: "20和32共有多少個公因數？"
+    // contains "共" (as part of "共有") and 2 numbers, so word_problem_total's
+    // own generic trigger ALSO matches it and would silently compute a
+    // wrong sum-based verdict instead of declining to this more specific
+    // handler.
+    name: "common_factors_count",
+    detect: (item) => /\d+和\d+共有多少個公因數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCommonFactorsCount(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -7741,12 +7772,6 @@ const QUESTION_TYPE_HANDLERS = [
     name: "largest_factor_implies_number",
     detect: (item) => /最大因數是\s*\d+[\s\S]*?共有多少個因數/.test(String(item.printedQuestion || "")),
     verify: (item) => verifyLargestFactorImpliesNumber(item.printedQuestion, item.studentAnswer),
-  },
-  {
-    // Ticket 148 (2026-09-28): common-factor count between two numbers.
-    name: "common_factors_count",
-    detect: (item) => /\d+和\d+共有多少個公因數/.test(String(item.printedQuestion || "")),
-    verify: (item) => verifyCommonFactorsCount(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 150 (2026-09-28): minimum addition to reach the next prime.
