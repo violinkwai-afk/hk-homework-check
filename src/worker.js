@@ -2683,16 +2683,48 @@ const JEV_MODEL = "typesafe/jev-1.13";
 const JEV_CONFIDENT_CORRECT = 0.85;
 const JEV_CONFIDENT_WRONG = 0.1;
 
+// Ticket 190 (2026-09-28): Jev normally sees ONLY printedQuestion +
+// studentAnswer -- none of the ~13 structured diagram markers the OCR
+// step already extracts (LOCATION_GRID, PAPER_FOLD, PATH_GRAPH, etc.)
+// ever reach it, even when a marker IS present on the item but code's
+// own detect()/verify() pattern-matcher doesn't recognize this exact
+// phrasing (so the item falls through to Jev unresolved anyway). This
+// follows the exact same safe, already-proven pattern as wordBankHint
+// (Ticket 54) -- one extra piece of text context appended to the same
+// prompt, nothing structural changed. Jev still can't see the real
+// image; this only gives it the same extracted facts code would have
+// used, as a second, cheap chance before falling to the real
+// image-based AI-fallback.
+function buildDiagramMarkerHint(item) {
+  const parts = [];
+  if (item.paperFold) parts.push(`摺紙圖資料：摺次數=${item.paperFold.folds}；摺後長度=${item.paperFold.foldedLength}`);
+  if (item.pathGraph) parts.push(`路徑圖資料(直接連接嘅邊,唔係間接距離)：${Object.entries(item.pathGraph).map(([u, vs]) => Object.entries(vs).map(([v, w]) => `${u}-${v}=${w}`).join(";")).join(";")}`);
+  if (item.scheduleTable) parts.push(`星期時間表資料：${Object.entries(item.scheduleTable).map(([d, v]) => `${d}=${v}`).join("；")}`);
+  if (item.locationGrid) parts.push(`地點方位圖資料：${JSON.stringify(item.locationGrid)}`);
+  if (item.facingDirection) parts.push(`人物面向方向資料：${JSON.stringify(item.facingDirection)}`);
+  if (item.digitCards) parts.push(`數字卡資料：${item.digitCards.join(",")}`);
+  if (item.compassRoseMc) parts.push(`指南針選項資料：${JSON.stringify(item.compassRoseMc)}`);
+  if (item.squaresDiagonal) parts.push(`兩個正方形斜線圖資料：${JSON.stringify(item.squaresDiagonal)}`);
+  if (item.trapezoidBaseline) parts.push(`梯形底總長資料：${item.trapezoidBaseline}`);
+  if (item.parallelogramShadedWidth) parts.push(`陰影闊度資料：${item.parallelogramShadedWidth}`);
+  if (item.rectCutKite) parts.push(`長方形剪角資料：${JSON.stringify(item.rectCutKite)}`);
+  if (item.calendarGrid) parts.push(`月曆資料：${JSON.stringify(item.calendarGrid)}`);
+  if (item.pictogramData) parts.push(`象形圖資料：${JSON.stringify(item.pictogramData)}`);
+  if (!parts.length) return "";
+  return "呢一頁OCR仲抽取咗以下圖表資料(可能同呢一題有關，都可能冇關，自己判斷)：\n" + parts.join("\n");
+}
+
 function buildJevQuestions(pendingItems) {
   const questions = {};
   pendingItems.forEach((item) => {
+    const diagramHint = buildDiagramMarkerHint(item);
     questions[String(item.resultIndex)] = {
       type: "noul",
       // Ticket 54: wordBankHint (if present) appends the one piece of
       // cross-item context this item wouldn't otherwise have -- Jev
       // normally judges every item in total isolation, with no idea
       // another item on the same page used the identical bank phrase.
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}`,
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -9594,6 +9626,7 @@ function json(obj, status) {
 export {
   callJevPreCheck,
   buildJevQuestions,
+  buildDiagramMarkerHint,
   buildAiFallbackPrompt,
   mentionsMoneyDenomination,
   mentionsShapeGeometry,

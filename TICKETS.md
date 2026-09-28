@@ -789,3 +789,5 @@
 
 - ✅ **185. 螞蟻最短路徑(連線圖),已接落生產環境。** 真實citation(躍思P1 Q6,用戶協助核實拓樸結構)：地點A-G用彎曲路徑連接,每條路徑標住距離。首次手推個圖嘅邊時，(a)(b)都啱(D-F最短=6,F-C最短=5)，但(c)「B經(C/F/G)前往___要走6厘米」計出嚟係「經C」，同用戶俾嘅真答案「F」對唔上——用戶指出係我睇漏咗(c)嘅目的地其實係E唔係D，改正之後三條答案用真正Dijkstra演算法行一次,全部啱(D-F=6,F-C=5,B經F去E=6)。
   新增`PATH_GRAPH`標記(OCR輸出直接連接嘅邊+距離)、`extractPathGraph`、`pathGraphShortestDistances`(Dijkstra)、`verifyPathGraph`(Shape1:直接兩點最短路程;Shape2:MC揀邊個中途點令總距離啱啱好等於題目講嘅數)。9個新測試(包括classifyAndVerify真dispatch),657/657測試通過。
+
+- ✅ **190. Jev都攞到OCR結構化圖表marker(唔淨係printedQuestion),已接落生產環境。** 用戶提出:OCR已經幫某啲要睇圖嘅題目(例如鐘面、摺紙、路徑圖)抽取咗結構化資料,就算code嘅精準pattern-matcher未識答,Jev都應該攞埋呢啲資料用文字試一次,唔使一定要去到最貴嘅真AI-fallback先有機會。跟返Ticket 54(wordBankHint)一樣安全嘅做法——加一段文字落Jev嘅提問度,結構完全冇變。新增`buildDiagramMarkerHint`(逐個檢查item身上有冇14個已知marker,有就加一行可讀描述),喺`buildJevQuestions`入面同wordBankHint一齊加落prompt。5個新測試,660/660測試通過,已push。

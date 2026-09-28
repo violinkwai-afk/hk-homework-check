@@ -2314,6 +2314,30 @@ test("path_graph handler: registered and reachable through real classifyAndVerif
   assert.equal(worker.classifyAndVerify(item2, null).correct, true);
 });
 
+// Ticket 190 (2026-09-28): give Jev the same OCR-extracted diagram
+// markers code uses, so it has a second (text-only) chance before an
+// item falls through to the real image-based AI-fallback.
+test("buildDiagramMarkerHint: includes present markers, empty string when none present", async () => {
+  const worker = await import(TMP);
+  const hint = worker.buildDiagramMarkerHint({ paperFold: { folds: 1, foldedLength: 13 }, pathGraph: ANT_PATH_GRAPH });
+  assert.ok(hint.includes("摺次數=1"));
+  assert.ok(hint.includes("摺後長度=13"));
+  assert.ok(hint.includes("A-B=1") || hint.includes("B-A=1"));
+  assert.equal(worker.buildDiagramMarkerHint({ printedQuestion: "9+4=?" }), "");
+});
+
+test("buildJevQuestions: appends the diagram marker hint into the item's instructions", async () => {
+  const worker = await import(TMP);
+  const questions = worker.buildJevQuestions([{ resultIndex: 1, printedQuestion: "手工紙原來長___cm。", studentAnswer: "26", paperFold: { folds: 1, foldedLength: 13 } }]);
+  assert.ok(questions["1"].instructions.includes("摺後長度=13"));
+});
+
+test("buildJevQuestions: no hint text appended when the item has no markers", async () => {
+  const worker = await import(TMP);
+  const questions = worker.buildJevQuestions([{ resultIndex: 1, printedQuestion: "9+4=?", studentAnswer: "13" }]);
+  assert.ok(!questions["1"].instructions.includes("圖表資料"));
+});
+
 test("verifyScheduleTableQuery: declines (null) with no scheduleTable or unmatched phrasing", async () => {
   const worker = await import(TMP);
   assert.equal(worker.verifyScheduleTableQuery(null, "小怡在星期___有游泳班。", "一").correct, null);
