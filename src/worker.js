@@ -3938,7 +3938,12 @@ function verifyCalendarGridQuery(calendarGrid, printedQuestion, studentAnswer) {
   // named weekday -> which day. Checked BEFORE shape 2 since both
   // mention "星期X", but this one asks for a DAY, not a weekday name.
   m = printed.match(/第([一二三四五六七八九十])個星期([日一二三四五六])/);
-  if (m && /月.{0,5}日/.test(printed)) {
+  // Ticket 173: a real citation adds a further "放假...天" offset on top
+  // of this same Kth-weekday trigger -- that compound case must fall
+  // through to shape 6 below instead (found via a real test failure:
+  // this shape's own looser `/月.{0,5}日/` check also matches shape 6's
+  // "___月___日" answer template and caught it first).
+  if (m && /月.{0,5}日/.test(printed) && !/放假.{0,3}(?:\d+|[一二三四五六七八九十]+)天/.test(printed)) {
     const kMap = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
     const k = kMap[m[1]];
     const targetWeekday = WEEKDAY_NAMES_ZH.indexOf(m[2]);
@@ -3978,6 +3983,55 @@ function verifyCalendarGridQuery(calendarGrid, printedQuestion, studentAnswer) {
     const targetWeekday = weekdayOfDay(calendarGrid, targetDay);
     const correct = answer === WEEKDAY_NAMES_ZH[targetWeekday];
     return { correct, correctAnswer: correct ? "" : WEEKDAY_NAMES_ZH[targetWeekday] };
+  }
+
+  // Shape 5 (Ticket 172, 2026-09-28, real citation: a September-only
+  // grid, "3rd October was __Tuesday__."): cross-month day-of-week --
+  // the named date falls in the FOLLOWING month, past the printed
+  // grid's own boundary. weekdayOfDay's plain modular arithmetic already
+  // extends correctly past daysInMonth; this shape was previously
+  // blocked only by shape 2's own `targetDay <= daysInMonth` guard.
+  const WEEKDAY_NAMES_EN = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MONTH_NAMES_EN = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  m = printed.match(/(\d+)(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+was/i);
+  if (m) {
+    const crossDay = Number(m[1]);
+    const crossMonthIdx = MONTH_NAMES_EN.indexOf(m[2].toLowerCase()) + 1;
+    if (crossMonthIdx === month + 1) {
+      const targetWeekday = weekdayOfDay(calendarGrid, daysInMonth + crossDay);
+      const correct = answer.toLowerCase() === WEEKDAY_NAMES_EN[targetWeekday].toLowerCase();
+      return { correct, correctAnswer: correct ? "" : WEEKDAY_NAMES_EN[targetWeekday] };
+    }
+  }
+
+  // Shape 6 (Ticket 173, 2026-09-28, real citation: "小美在這個月的第
+  // 二個星期四參加學校旅行，旅行後放假一天；這天是___月___日(星期
+  // ___)"): compound of two already-built primitives -- find the Kth
+  // occurrence of a weekday (shape 3's own logic), then offset forward
+  // by N days and report the resulting month/day/weekday, rolling over
+  // into next month if needed.
+  m = printed.match(/第([一二三四五六七八九十])個星期([日一二三四五六])[\s\S]{0,20}放假(\d+|[一二三四五六七八九十]+)天/);
+  if (m) {
+    const kMap = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+    const k = kMap[m[1]];
+    const targetWeekday = WEEKDAY_NAMES_ZH.indexOf(m[2]);
+    const offsetDays = /^\d+$/.test(m[3]) ? Number(m[3]) : chineseNumeralToArabicSmall(m[3]);
+    let occurrence = 0, foundDay = null;
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (weekdayOfDay(calendarGrid, d) === targetWeekday) {
+        occurrence++;
+        if (occurrence === k) { foundDay = d; break; }
+      }
+    }
+    if (foundDay === null || !offsetDays) return { correct: null, correctAnswer: "" };
+    let resultDay = foundDay + offsetDays;
+    let resultMonth = month;
+    if (resultDay > daysInMonth) { resultDay -= daysInMonth; resultMonth += 1; }
+    const resultWeekdayIdx = weekdayOfDay(calendarGrid, foundDay + offsetDays);
+    const nums = (answer.match(/\d+/g) || []).map(Number);
+    const hasWeekday = WEEKDAY_NAMES_ZH.some((w, i) => i === resultWeekdayIdx && answer.includes(w));
+    const correct = nums.includes(resultMonth) && nums.includes(resultDay) && hasWeekday;
+    return { correct, correctAnswer: correct ? "" : `${resultMonth}月${resultDay}日(星期${WEEKDAY_NAMES_ZH[resultWeekdayIdx]})` };
   }
 
   return { correct: null, correctAnswer: "" };
@@ -5334,6 +5388,127 @@ function verifyCoprimeProductEqualsLcmMC(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : expectedLetter };
 }
 
+// Ticket 162 (2026-09-28, real citation: "如果△是一個整數，△4/5×2的
+// 答案約是16，那麼△表示的數可能是甚麼？" options 6/7/8/9 -> B(7), since
+// "△4/5" reads as the mixed number △-and-⅘, common in HK exams that
+// omit "又"): reverse-solve MC via closest-approximation -- compute
+// (option+4/5)×mult for each option, pick whichever is nearest the
+// stated approximate target.
+function verifyClosestApproximationMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/△(\d+)\/(\d+)×(\d+)的答案約是(\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [num, den, mult, target] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  let best = null, bestDiff = Infinity;
+  for (const o of options) {
+    const n = Number(o.text.trim());
+    if (!Number.isFinite(n)) continue;
+    const diff = Math.abs((n + num / den) * mult - target);
+    if (diff < bestDiff) { bestDiff = diff; best = o; }
+  }
+  if (!best) return { correct: null, correctAnswer: "" };
+  const correct = answer === best.letter;
+  return { correct, correctAnswer: correct ? "" : best.letter };
+}
+
+// Ticket 167 (2026-09-28, real citation: "Put 6 beads on the abacus...
+// To represent the largest three-digit odd number, the answer is
+// __501__.") -- extreme N-digit number under a DIGIT-SUM constraint
+// (not a given digit list, distinct from the already-built
+// construct_extreme_number handler).
+function verifyExtremeNumberByDigitSum(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/Put\s*(\d+)\s*beads.{0,80}(largest|smallest)\s*(three|four|five)-digit\s*(odd|even)?\s*number/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const beadSum = Number(m[1]);
+  const largest = m[2].toLowerCase() === "largest";
+  const digitCount = { three: 3, four: 4, five: 5 }[m[3].toLowerCase()];
+  const parity = m[4] ? m[4].toLowerCase() : null;
+  const min = 10 ** (digitCount - 1), max = 10 ** digitCount - 1;
+  let found = -1;
+  const range = largest ? [max, min, -1] : [min, max, 1];
+  for (let n = range[0]; largest ? n >= range[1] : n <= range[1]; n += range[2]) {
+    const digitSum = String(n).split("").reduce((a, d) => a + Number(d), 0);
+    if (digitSum !== beadSum) continue;
+    if (parity === "odd" && n % 2 === 0) continue;
+    if (parity === "even" && n % 2 === 1) continue;
+    found = n;
+    break;
+  }
+  if (found === -1) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === found, correctAnswer: studentNum === found ? "" : String(found) };
+}
+
+// Ticket 168 (2026-09-28, real citations: "1個$10可換$2 ___個" -> 5;
+// "5個$2可換$1 ___個" -> 10; "2個$1可換50¢ ___個" -> 4): currency
+// exchange-ratio arithmetic, unit-normalized to cents so dollar/cent
+// mixes ($1 vs 50¢) compare correctly. Only the simple single-target
+// ratio shape -- the two-coefficient case ("$5 = 2×$2 + 1×$1") found in
+// the same survey is a genuinely different, harder shape and isn't
+// attempted here.
+function normalizeCurrencyToCents(text) {
+  const dollarMatch = text.match(/\$(\d+(?:\.\d+)?)/);
+  if (dollarMatch) return Math.round(Number(dollarMatch[1]) * 100);
+  const centMatch = text.match(/(\d+)\s*[¢c]/i);
+  if (centMatch) return Number(centMatch[1]);
+  return null;
+}
+function verifyCoinExchangeRatio(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)個(\$\d+(?:\.\d+)?|\d+\s*[¢c])可換(\$\d+(?:\.\d+)?|\d+\s*[¢c])\s*_+\s*個/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const sourceCount = Number(m[1]);
+  const sourceVal = normalizeCurrencyToCents(m[2]);
+  const targetVal = normalizeCurrencyToCents(m[3]);
+  if (!sourceVal || !targetVal) return { correct: null, correctAnswer: "" };
+  const totalCents = sourceCount * sourceVal;
+  if (totalCents % targetVal !== 0) return { correct: null, correctAnswer: "" };
+  const expected = totalCents / targetVal;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 176 (2026-09-28, real citations: "Which expression below can
+// we use to calculate the answer? A 82−15−15 B 82−21 C 21−15
+// D 82−15−21" and "Which of the following expression has the same
+// result as '35−15−9'? A 35−9 B 35−15 C 15−9 D 20−9"): evaluates each MC
+// option as an arithmetic expression, finds the one matching a stated
+// target value (either an explicit number, or another expression's own
+// computed result).
+function verifyWhichExpressionComputesMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  let target = null;
+  const sameAsMatch = printed.match(/same result as ['"]?([\d+\-×x*÷/\s]+)['"]?/i);
+  if (sameAsMatch) target = evalArithmetic(sameAsMatch[1]);
+  if (target === null) {
+    const numMatch = printed.match(/answer is\s*(\d+)|=\s*(\d+)\s*[?？]/i);
+    if (numMatch) target = Number(numMatch[1] || numMatch[2]);
+  }
+  if (target === null || Number.isNaN(target)) return { correct: null, correctAnswer: "" };
+  const evaluated = options.map((o) => ({ ...o, value: evalArithmetic(o.text.replace(/\s+/g, "")) }));
+  if (evaluated.some((o) => o.value === null)) return { correct: null, correctAnswer: "" };
+  const matching = evaluated.filter((o) => o.value === target);
+  if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = matching[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 function verifyListFactors(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -6616,7 +6791,9 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       if (!item.calendarGrid || typeof item.calendarGrid !== "object") return false;
       const printed = String(item.printedQuestion || "");
-      return /星期/.test(printed);
+      // Ticket 172: the cross-month shape's real citation is fully
+      // English ("3rd October was ___"), with no "星期" at all.
+      return /星期/.test(printed) || /\d+(?:st|nd|rd|th)?\s+[A-Za-z]+\s+was/i.test(printed);
     },
     verify: (item) => verifyCalendarGridQuery(item.calendarGrid, item.printedQuestion, item.studentAnswer),
   },
@@ -6878,6 +7055,31 @@ const QUESTION_TYPE_HANDLERS = [
     name: "coprime_product_equals_lcm_mc",
     detect: (item) => /L\.C\.M\.|LCM/i.test(String(item.printedQuestion || "")) && parseMcOptions(String(item.printedQuestion || "")).length >= 2,
     verify: (item) => verifyCoprimeProductEqualsLcmMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 162 (2026-09-28): closest-approximation reverse-solve MC.
+    name: "closest_approximation_mc",
+    detect: (item) => /△\d+\/\d+×\d+的答案約是\d+/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyClosestApproximationMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 167 (2026-09-28): extreme N-digit number under a digit-sum
+    // constraint (not a given digit list).
+    name: "extreme_number_by_digit_sum",
+    detect: (item) => /Put\s*\d+\s*beads.{0,80}(?:largest|smallest)\s*(?:three|four|five)-digit/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyExtremeNumberByDigitSum(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 168 (2026-09-28): currency exchange-ratio arithmetic.
+    name: "coin_exchange_ratio",
+    detect: (item) => /\d+個(?:\$\d+(?:\.\d+)?|\d+\s*[¢c])可換(?:\$\d+(?:\.\d+)?|\d+\s*[¢c])\s*_+\s*個/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCoinExchangeRatio(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 176 (2026-09-28): which-expression-computes-the-target MC.
+    name: "which_expression_computes_mc",
+    detect: (item) => /same result as|which expression/i.test(String(item.printedQuestion || "")) && parseMcOptions(String(item.printedQuestion || "")).length >= 2,
+    verify: (item) => verifyWhichExpressionComputesMC(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 143 (2026-09-28): composite-number min-factor-count static fact.
@@ -8517,6 +8719,10 @@ export {
   verifyDualConstraintNumberFilter,
   verifyNthCommonMultiple,
   verifyCoprimeProductEqualsLcmMC,
+  verifyClosestApproximationMC,
+  verifyExtremeNumberByDigitSum,
+  verifyCoinExchangeRatio,
+  verifyWhichExpressionComputesMC,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,

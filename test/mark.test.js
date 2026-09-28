@@ -2774,3 +2774,72 @@ test("verifyMultiBoxDigitAnswer: real citation (十位/個位 split-box answer)"
   const r2 = worker.verifyMultiBoxDigitAnswer("48-15=", "33");
   assert.equal(r2.correct, true);
 });
+
+// Ticket 162 (real citation): closest-approximation reverse MC.
+test("verifyClosestApproximationMC: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "如果△是一個整數，△4/5×2的答案約是16，那麼△表示的數可能是甚麼？ A.6 B.7 C.8 D.9";
+  const r = worker.verifyClosestApproximationMC(printed, "B");
+  assert.equal(r.correct, true, "(7+4/5)*2=15.6, closest to 16");
+});
+test("closest_approximation_mc handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "closest_approximation_mc"));
+});
+
+// Ticket 167 (real citation).
+test("verifyExtremeNumberByDigitSum: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "Put 6 beads on the abacus... To represent the largest three-digit odd number, the answer is ___.";
+  const r = worker.verifyExtremeNumberByDigitSum(printed, "501");
+  assert.equal(r.correct, true, "501: digit sum 5+0+1=6, odd, largest such 3-digit number");
+});
+test("extreme_number_by_digit_sum handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "extreme_number_by_digit_sum"));
+});
+
+// Ticket 168 (real citations).
+test("verifyCoinExchangeRatio: real citations", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyCoinExchangeRatio("1個$10可換$2 ___個", "5").correct, true);
+  assert.equal(worker.verifyCoinExchangeRatio("5個$2可換$1 ___個", "10").correct, true);
+  assert.equal(worker.verifyCoinExchangeRatio("2個$1可換50¢ ___個", "4").correct, true);
+});
+test("coin_exchange_ratio handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "coin_exchange_ratio"));
+});
+
+// Ticket 172 (real citation shape, self-consistent grid values derived
+// by hand: firstWeekday=5 (Sept 1 = Friday) makes Oct 3 fall on Tuesday,
+// matching the real citation's own answer).
+test("verifyCalendarGridQuery: shape 5 -- cross-month day-of-week (real citation shape)", async () => {
+  const worker = await import(TMP);
+  const septGrid = { month: 9, firstWeekday: 5, daysInMonth: 30 };
+  const r = worker.verifyCalendarGridQuery(septGrid, "3rd October was ___.", "Tuesday");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyCalendarGridQuery(septGrid, "3rd October was ___.", "Monday");
+  assert.equal(wrong.correct, false);
+});
+
+// Ticket 173 (real citation shape, using the already-established May
+// grid from earlier CALENDAR_GRID tests -- 2nd Thursday of May = 13th,
+// +1 day = 14th, a Friday).
+test("verifyCalendarGridQuery: shape 6 -- Kth-weekday + day-offset compound", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCalendarGridQuery(MAY_CALENDAR, "小美在這個月的第二個星期四參加學校旅行，旅行後放假一天；這天是___月___日(星期___)", "5月14日(星期五)");
+  assert.equal(r.correct, true);
+});
+
+// Ticket 176 (real citation).
+test("verifyWhichExpressionComputesMC: real citation (same result as)", async () => {
+  const worker = await import(TMP);
+  const printed = "Which of the following expression has the same result as '35-15-9'? A.35-9 B.35-15 C.15-9 D.20-9";
+  const r = worker.verifyWhichExpressionComputesMC(printed, "D");
+  assert.equal(r.correct, true, "35-15-9=11, and 20-9=11");
+});
+test("which_expression_computes_mc handler registered", async () => {
+  const worker = await import(TMP);
+  assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "which_expression_computes_mc"));
+});
