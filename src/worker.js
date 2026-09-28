@@ -4435,6 +4435,36 @@ function verifyFacingDirectionQuery(facingDirection, printedQuestion, studentAns
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 181 (2026-09-28, real citation, P4 exam Q6: "哥哥的左方是西南
+// 方，他背向哪一個方向？" options A.東北/B.東南/C.西北/D.東方 -- student
+// picked B, correctly). Pure text, no diagram marker needed at all: if a
+// person's LEFT hand points at direction D, they face D rotated +90°
+// clockwise, and "背向" (facing away from / their back) is the opposite
+// of that -- net effect, back = D rotated -90° (i.e. 2 steps
+// counter-clockwise on the 8-point compass). Hand-verified: 左方=西南
+// (index 5) -2 steps -> index 3 = 東南, matching the real answer.
+const COMPASS_CYCLE8 = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+function verifyBackDirectionFromLeftHand(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = /左方是([東南西北]{1,2})方.{0,10}背向/.exec(printed);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const idx = COMPASS_CYCLE8.indexOf(m[1]);
+  if (idx === -1) return { correct: null, correctAnswer: "" };
+  const expectedDir = COMPASS_CYCLE8[(idx - 2 + 8) % 8];
+  const options = parseMcOptions(printed);
+  if (options.length >= 2) {
+    const matching = options.filter((o) => o.text.includes(expectedDir));
+    if (matching.length === 1) {
+      const correct = answer === matching[0].letter;
+      return { correct, correctAnswer: correct ? "" : matching[0].letter };
+    }
+  }
+  const correct = answer.includes(expectedDir);
+  return { correct, correctAnswer: correct ? "" : expectedDir };
+}
+
 // Ticket 119 (2026-09-28, real citation: "Each sandwich costs 3 dollars.
 // Each bottle of juice costs 7 dollars. Sue spends 15 dollars to buy one
 // sandwich and one bottle of juice. How much change does she receive?"
@@ -7348,6 +7378,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyFacingDirectionQuery(item.facingDirection, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 181 (2026-09-28): back-direction from a stated left-hand direction, pure text.
+    name: "back_direction_from_left_hand",
+    detect: (item) => /左方是[東南西北]{1,2}方.{0,10}背向/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyBackDirectionFromLeftHand(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 153 (2026-09-28): digit-card combinatorial construction.
     name: "digit_card_extreme_composite",
     detect: (item) => !!item.digitCards && /兩位的合成數/.test(String(item.printedQuestion || "")),
@@ -9294,6 +9330,7 @@ export {
   verifyLocationGridQuery,
   extractFacingDirection,
   verifyFacingDirectionQuery,
+  verifyBackDirectionFromLeftHand,
   extractDigitCards,
   verifyDigitCardExtremeComposite,
   extractShortDivisionMc,

@@ -2404,6 +2404,27 @@ test("facing_direction_query handler: registered and reachable", async () => {
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
 
+// Ticket 181 (2026-09-28, real citation, P4 exam Q6: "哥哥的左方是西南
+// 方，他背向哪一個方向？" options A.東北方 B.東南方 C.西北方 D.東方 --
+// student picked B, correctly).
+test("verifyBackDirectionFromLeftHand: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "哥哥的左方是西南方，他背向哪一個方向？ A. 東北方 B. 東南方 C. 西北方 D. 東方";
+  const r = worker.verifyBackDirectionFromLeftHand(printed, "B");
+  assert.equal(r.correct, true, "left=西南 -> facing=西北(+90°) -> back=東南(opposite)");
+  const wrong = worker.verifyBackDirectionFromLeftHand(printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "B");
+});
+test("back_direction_from_left_hand handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "back_direction_from_left_hand");
+  assert.ok(handler);
+  const item = { printedQuestion: "哥哥的左方是西南方，他背向哪一個方向？ A. 東北方 B. 東南方 C. 西北方 D. 東方", studentAnswer: "B" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
 // Ticket 119 (real citation): change from a 2-item purchase.
 test("verifyChangeFromTwoItemPurchase: real citation", async () => {
   const worker = await import(TMP);
