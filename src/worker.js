@@ -2029,6 +2029,28 @@ function mentionsShapeGeometry(pendingItems) {
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
+// Ticket 61 (2026-09-27): same lever as Ticket 59, applied to 2-D
+// (flat/plane) shapes instead of 3-D solids -- a genuinely separate
+// reference block/detector, not a generalisation of the 3-D one (the
+// keyword sets and the facts themselves don't overlap: "sides" not
+// "faces", no vertices-vs-edges-vs-faces triple).
+const SHAPE_2D_REFERENCE = `參考資料——常見平面形狀嘅真實幾何資料（幫你答平面形狀嘅通用知識題,唔好靠估）：
+三角形(triangle)：3條邊、3個頂點、3隻角(內角總和180度)。
+正方形(square)：4條相等邊、4隻直角。
+長方形(rectangle)：4條邊(兩對相等)、4隻直角。
+平行四邊形(parallelogram)：4條邊、兩對邊互相平行。
+菱形(rhombus)：4條相等邊、兩對邊互相平行。
+梯形(trapezium)：4條邊、得一對邊互相平行。
+五邊形(pentagon)：5條邊、5個頂點。
+六邊形(hexagon)：6條邊、6個頂點。
+八邊形(octagon)：8條邊、8個頂點。
+圓形(circle)：0條邊、0個頂點、彎曲嘅邊界。`;
+
+function mentionsShape2D(pendingItems) {
+  const re = /\btriangle\b|\bsquare\b|rectangle|parallelogram|\brhombus\b|trapezium|trapezoid|pentagon|hexagon|octagon|\bcircle\b|\bside\b|sides|三角形|正方形|長方形|平行四邊形|菱形|梯形|五邊形|六邊形|八邊形|圓形|多邊形/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
 // Ticket 60 (2026-09-27): "做法B" from the Tier-V-prompt plan -- unlike
 // Tickets 57/59's REFERENCE DATA (facts to look up), this is concrete
 // step-by-step MEASUREMENT GUIDANCE for question types that need the AI
@@ -2075,6 +2097,7 @@ function buildAiFallbackPrompt(pendingItems) {
   const referenceBlocks = [
     mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
     mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
+    mentionsShape2D(pendingItems) ? SHAPE_2D_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -6113,6 +6136,7 @@ export {
   buildAiFallbackPrompt,
   mentionsMoneyDenomination,
   mentionsShapeGeometry,
+  mentionsShape2D,
   buildTierVGuidance,
   parseOcrLine,
   recordCpuGuardUsage,

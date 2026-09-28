@@ -1539,3 +1539,21 @@ test("buildAiFallbackPrompt: no Tier V guidance added for an ordinary arithmetic
   const prompt = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "25÷5", studentAnswer: "5" }]);
   assert.doesNotMatch(prompt, /角度題：|水位\/量杯題：|間尺題：|鐘面題：/);
 });
+
+// Ticket 61 (2026-09-27): real 2-D shape geometry reference, same
+// pattern as Ticket 59's 3-D one but a genuinely separate keyword set
+// and fact table (sides/vertices, not faces/edges/vertices).
+test("buildAiFallbackPrompt: includes the real 2-D shape reference when a pending item is about flat shapes", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "How many sides does a hexagon have?", studentAnswer: "6" },
+  ]);
+  assert.match(prompt, /六邊形\(hexagon\)/);
+  assert.doesNotMatch(prompt, /圓柱體\(cylinder\)/, "2-D reference must not pull in the 3-D block");
+});
+
+test("mentionsShape2D: recognises real Chinese and English 2-D shape keywords, distinct from 3-D", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsShape2D([{ printedQuestion: "呢個係咪三角形？" }]), true);
+  assert.equal(worker.mentionsShape2D([{ printedQuestion: "How many faces does a cube have?" }]), false, "3-D 'faces' keyword must not trigger the 2-D reference");
+});
