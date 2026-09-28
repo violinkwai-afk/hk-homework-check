@@ -2741,3 +2741,36 @@ test("verifyWordProblemRateMultiplication: existing plain-integer shape still wo
   const r = worker.verifyWordProblemRateMultiplication("小克每天儲蓄30元，他五天共儲蓄多少元？", "150");
   assert.equal(r.correct, true);
 });
+
+// Ticket 166 (2026-09-28 REGRESSION, real citation: "50 | 100 | 150 |
+// 200 | 250 | 300 | 350 (Must be all correct)" -- confirms the EXISTING
+// verifySequenceFill already handles multi-blank skip-counting tables,
+// no new code needed).
+test("verifySequenceFill: real citation (skip-counting by 50s, 2 blanks)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifySequenceFill("50,□,150,200,□,300,350", "100,250");
+  assert.equal(r.correct, true);
+});
+
+// Ticket 170 (2026-09-28 REGRESSION, real citation: "15 + 33 + 24 = [ ]
+// + 24 = [ ]" -- confirms the EXISTING verifyChainedVerticalArithmetic
+// (Ticket 129) already handles the add-then-add chain shape, not just
+// add-then-subtract).
+test("verifyChainedVerticalArithmetic: real citation (add-then-add chain)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyChainedVerticalArithmetic("15+33[]+24[]", "48;72");
+  assert.equal(r.correct, true, "15+33=48, then 48+24=72");
+});
+
+// Ticket 171 (2026-09-28 REGRESSION, real citation: "2 5 + 2 1 →
+// [十位][個位]" -- confirms the EXISTING verifyMultiBoxDigitAnswer
+// already handles this split-box answer shape, assuming OCR renders the
+// printed expression with a trailing "=" per this project's established
+// convention).
+test("verifyMultiBoxDigitAnswer: real citation (十位/個位 split-box answer)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyMultiBoxDigitAnswer("25+21=", "46");
+  assert.equal(r.correct, true);
+  const r2 = worker.verifyMultiBoxDigitAnswer("48-15=", "33");
+  assert.equal(r2.correct, true);
+});
