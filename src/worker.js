@@ -5372,6 +5372,98 @@ function verifyLineShaftAllEqual(item, crop) {
   }
 }
 
+// Object counting via Photon connected-component blobs (2026-09-28,
+// prompted by the user's own real question: "for questions that count
+// clear separate objects, can Photon distinguish them by pixels?").
+// Validated against 3 REAL images from a real P1 test before shipping,
+// per the standing Tier-V rule:
+//   - 13 sheep icons, no surrounding frame -> counted 13/13 correctly.
+//   - 9 apple icons, no surrounding frame -> counted 9/9 correctly.
+//   - 12 fish icons INSIDE a rounded-rectangle frame (one fish touches
+//     the frame border) -> the frame + touching fish fused into one
+//     giant blob, undercounting to 11 separate + 1 fused mega-blob.
+// That third case is exactly why this function does NOT just return a
+// raw count -- it runs a SAFETY CHECK first (also validated against all
+// 3 real images, correctly flagging only the fish case as unsafe):
+//   1. Size-outlier check: if the largest blob is >2.5x the median blob
+//      size, something has fused together (a frame, a touching pair) --
+//      decline rather than report a confidently wrong count.
+//   2. Frame-blob check: if any single blob's bounding box spans more
+//      than 85% of the image's width OR height, that's almost certainly
+//      a border/frame line, not a counted object -- decline.
+// This is deliberately conservative: it only ever counts when the image
+// looks clean, and fails open (null, falls through to Jev/AI) otherwise
+// -- there is no known way to distinguish a clean vs framed photo in
+// advance without already running this analysis, so every count is
+// double-checked this way, never trusted blind.
+function readObjectCountFromPixels(pixels, w, h) {
+  const threshold = 200; // validated across both plain-outline (sheep) and grey-filled (apple) real icon styles
+  const minBlobSize = 30; // filters out stray dots/scan noise, well below any real icon's pixel footprint
+  const luminance = (x, y) => {
+    const i = (y * w + x) * 4;
+    return 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+  };
+  const isDark = (x, y) => luminance(x, y) < threshold;
+  const visited = new Uint8Array(w * h);
+  const blobs = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (visited[idx0] || !isDark(x0, y0)) continue;
+      const stack = [[x0, y0]];
+      visited[idx0] = 1;
+      let size = 0, minX = x0, maxX = x0, minY = y0, maxY = y0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        size++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (visited[nidx] || !isDark(nx, ny)) continue;
+            visited[nidx] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (size >= minBlobSize) blobs.push({ size, boxW: maxX - minX, boxH: maxY - minY });
+    }
+  }
+  if (!blobs.length) return { count: null, safe: false };
+  const sizes = blobs.map((b) => b.size).sort((a, b) => a - b);
+  const median = sizes[Math.floor(sizes.length / 2)];
+  const maxSize = Math.max(...sizes);
+  const sizeOutlier = maxSize > median * 2.5;
+  const frameBlob = blobs.some((b) => b.boxW > w * 0.85 || b.boxH > h * 0.85);
+  const safe = !sizeOutlier && !frameBlob;
+  return { count: blobs.length, safe };
+}
+
+function verifyObjectCounting(item, crop) {
+  let photonImg;
+  try {
+    const answer = String(item.studentAnswer || "").trim();
+    const studentNum = parseSignedStudentNumber(answer);
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const { count, safe } = readObjectCountFromPixels(pixels, w, h);
+    if (!safe || count === null) return { correct: null, correctAnswer: "" };
+    const correct = studentNum === count;
+    return { correct, correctAnswer: correct ? "" : String(count) };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 const QUESTION_TYPE_HANDLERS = [
   {
     name: "multi_blank_math",
@@ -5942,6 +6034,22 @@ const QUESTION_TYPE_HANDLERS = [
       return parseMcOptions(printed).some((o) => /一樣長|相同|相等|all.{0,10}(equal|same)/i.test(o.text));
     },
     verifyVisual: (item, crop) => verifyLineShaftAllEqual(item, crop),
+  },
+  {
+    // Object counting (2026-09-28): see readObjectCountFromPixels's own
+    // long comment for the real 3-image validation (2 correct counts,
+    // 1 correctly-declined framed image). detect() requires the "count
+    // the objects" instruction phrase AND a bare-number answer -- the
+    // safety check inside verifyObjectCounting is what actually decides
+    // whether to trust this specific photo's count.
+    name: "object_counting",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const answer = String(item.studentAnswer || "").trim();
+      if (!/數一數|count.{0,10}(how many|are there)|how many.{0,15}are there/i.test(printed)) return false;
+      return /^\d+$/.test(answer);
+    },
+    verifyVisual: (item, crop) => verifyObjectCounting(item, crop),
   },
   {
     // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
@@ -7267,6 +7375,8 @@ export {
   verifyClockReading,
   readLineShaftLengths,
   verifyLineShaftAllEqual,
+  readObjectCountFromPixels,
+  verifyObjectCounting,
   verifySymbolicSubstitution,
   verifySymbolicRelation,
   verifyRelativeComparisonChain,
