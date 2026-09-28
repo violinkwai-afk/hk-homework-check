@@ -3040,3 +3040,38 @@ test("write_algebraic_expression handler registered and reachable", async () => 
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 179 (2026-09-28, real citation, P4 exam Q1: "以上三個方向指示
+// 中，*(A/B/C)是正確的。" -- hand-derived from the real photo, see
+// extractCompassRoseMc's own comment for the full derivation. Student
+// circled B, correctly.
+test("verifyCompassRoseMc: real citation -- A is a mirrored (wrong) rose, B is correct, C is scrambled", async () => {
+  const worker = await import(TMP);
+  const printed = "以上三個方向指示中，*(A/B/C)是正確的。";
+  const compassRoseMc = {
+    A: ["西南", "南", "東南", "東", "東北", "北", "西北", "西"],
+    B: ["西", "西北", "北", "東北", "東", "東南", "南", "西南"],
+    C: ["西南", "東", "東南", "南", "西北", "西", "東北", "北"],
+  };
+  const r = worker.verifyCompassRoseMc(compassRoseMc, printed, "B");
+  assert.equal(r.correct, true, "B rotates to exactly the canonical clockwise compass order starting at 北");
+  const wrong = worker.verifyCompassRoseMc(compassRoseMc, printed, "A");
+  assert.equal(wrong.correct, false, "A is the mirror image -- only matches in reverse");
+  assert.equal(wrong.correctAnswer, "B");
+});
+test("compass_rose_mc handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "compass_rose_mc");
+  assert.ok(handler);
+  const item = {
+    printedQuestion: "以上三個方向指示中，*(A/B/C)是正確的。",
+    studentAnswer: "B",
+    compassRoseMc: {
+      A: ["西南", "南", "東南", "東", "東北", "北", "西北", "西"],
+      B: ["西", "西北", "北", "東北", "東", "東南", "南", "西南"],
+      C: ["西南", "東", "東南", "南", "西北", "西", "東北", "北"],
+    },
+  };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

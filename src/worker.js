@@ -1786,6 +1786,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係一張長方形卡紙,四個角各剪走一個大小形狀一樣嘅三角形,餘低中間一個菱形/風箏形,幅圖標住咗長方形嘅長闊,同埋其中一個被剪走嘅三角形嘅兩隻直角腳長度**，喺回覆最開始加一行「RECT_CUT_KITE: 長方形長=<數字>;長方形闊=<數字>;三角形腳1=<數字>;三角形腳2=<數字>」。如果冇呢類圖就完全唔使加呢行。
 
+**如果印刷咗幾個「8方位指南針」圖(每個圖係一個米字型,8條線由中心放射出去,每條線盡頭寫住一個方向:北/東北/東/東南/南/西南/西/西北,揀邊個圖先啱)**，喺回覆最開始加一行「COMPASS_ROSE_MC: A=<由最頂嗰個位置開始,順時針方向讀晒8個方向字,用","分隔>;B=<同上>;C=<同上>」(如果有D、E等更多選項都照樣加落去)。如果冇呢類圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2066,6 +2068,40 @@ function extractRectCutKite(text) {
   return { rectCutKite: ok ? { length, width, leg1, leg2 } : null, cleanedText };
 }
 
+// Ticket 179 (2026-09-28, real citation, P4 exam Q1, 二(2)圖形與空間:
+// "以上三個方向指示中，*(A/B/C)是正確的。" 3 eight-point compass roses --
+// hand-verified from the real photo before writing any code: reading
+// each rose's 8 labels clockwise starting from the top spoke and
+// rotating so "北" comes first, A becomes [北,西北,西,西南,南,東南,東,
+// 東北] (the REVERSE of the real compass order -- a mirrored/wrong
+// rose), B becomes exactly [北,東北,東,東南,南,西南,西,西北] (correct,
+// matches the student's own circled answer), C becomes
+// [北,西南,東,東南,南,西北,西,東北] (neither the forward nor reversed
+// order -- genuinely scrambled). No pixel/angle geometry needed at all:
+// each of the 8 spokes already carries its own direction word as
+// printed text, so the whole check reduces to "is this list, read
+// clockwise, a rotation of the canonical clockwise compass order".
+function extractCompassRoseMc(text) {
+  const m = /^COMPASS_ROSE_MC:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^COMPASS_ROSE_MC:.*$/gm, "");
+  if (!m) return { compassRoseMc: null, cleanedText };
+  const options = {};
+  const validDirs = new Set(["北", "東北", "東", "東南", "南", "西南", "西", "西北"]);
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const letter = part.slice(0, eqIdx).trim();
+    const dirs = part.slice(eqIdx + 1).split(",").map((s) => s.trim()).filter(Boolean);
+    // Require all 8 canonical directions exactly once each -- not just
+    // "8 tokens that individually look valid" -- so a garbled or
+    // duplicate-containing line is silently rejected rather than fed
+    // into the rotation check below with a bogus set.
+    const isValidPermutation = dirs.length === 8 && new Set(dirs).size === 8 && dirs.every((d) => validDirs.has(d));
+    if (letter && isValidPermutation) options[letter] = dirs;
+  }
+  return { compassRoseMc: Object.keys(options).length ? options : null, cleanedText };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2201,7 +2237,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { squaresDiagonal, cleanedText: cleanedText13 } = extractSquaresDiagonal(cleanedText12);
   const { trapezoidBaseline, cleanedText: cleanedText14 } = extractTrapezoidTwoSquares(cleanedText13);
   const { parallelogramShadedWidth, cleanedText: cleanedText15 } = extractParallelogramPartial(cleanedText14);
-  const { rectCutKite, cleanedText } = extractRectCutKite(cleanedText15);
+  const { rectCutKite, cleanedText: cleanedText16 } = extractRectCutKite(cleanedText15);
+  const { compassRoseMc, cleanedText } = extractCompassRoseMc(cleanedText16);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2209,7 +2246,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5836,6 +5873,32 @@ function verifyRectCutKiteArea(rectCutKite, printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : String(Math.round(expected * 100) / 100) };
 }
 
+// Ticket 179 (2026-09-28, real citation, P4 exam Q1: "以上三個方向指示
+// 中，*(A/B/C)是正確的。" -- see extractCompassRoseMc's own comment for
+// the full hand-derivation). Checks each option by rotating its 8-item
+// clockwise list so 北 comes first, then comparing to the canonical
+// clockwise compass order.
+const COMPASS_ROSE_CANONICAL = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+function verifyCompassRoseMc(compassRoseMc, printedQuestion, studentAnswer) {
+  if (!compassRoseMc) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/方向指示/.test(printed) || !/正確/.test(printed)) return { correct: null, correctAnswer: "" };
+  const letters = Object.keys(compassRoseMc);
+  if (letters.length < 2) return { correct: null, correctAnswer: "" };
+  const isCanonical = (dirs) => {
+    const northIdx = dirs.indexOf("北");
+    if (northIdx === -1) return false;
+    const rotated = [...dirs.slice(northIdx), ...dirs.slice(0, northIdx)];
+    return rotated.every((d, i) => d === COMPASS_ROSE_CANONICAL[i]);
+  };
+  const correctOnes = letters.filter((l) => isCanonical(compassRoseMc[l]));
+  if (correctOnes.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = correctOnes[0];
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 // Ticket 178 (2026-09-28, real citation, 4 items, P5 exam "代數：
 // 根據題意，列寫代數式" section): "write the algebraic expression" is a
 // different shape from every other verifier in this project -- the
@@ -7270,6 +7333,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyWriteAlgebraicExpression(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 179 (2026-09-28): 8-point compass rose "which one is correct" MC.
+    name: "compass_rose_mc",
+    detect: (item) => !!item.compassRoseMc && /方向指示/.test(String(item.printedQuestion || "")) && /正確/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCompassRoseMc(item.compassRoseMc, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8292,7 +8361,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8378,6 +8447,10 @@ async function handleMark(request, env) {
     // Ticket 177: same page-level shared-context pattern.
     if (qwenOutcome.rectCutKite) {
       qwenOutcome.items.forEach((item) => { item.rectCutKite = qwenOutcome.rectCutKite; });
+    }
+    // Ticket 179: same page-level shared-context pattern.
+    if (qwenOutcome.compassRoseMc) {
+      qwenOutcome.items.forEach((item) => { item.compassRoseMc = qwenOutcome.compassRoseMc; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9172,6 +9245,8 @@ export {
   extractRectCutKite,
   verifyRectCutKiteArea,
   verifyWriteAlgebraicExpression,
+  extractCompassRoseMc,
+  verifyCompassRoseMc,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

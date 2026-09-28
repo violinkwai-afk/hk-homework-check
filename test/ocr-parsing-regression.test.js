@@ -412,3 +412,23 @@ test("extractRectCutKite: returns null when no marker line is present", () => {
   assert.equal(rectCutKite, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 179 (2026-09-28): COMPASS_ROSE_MC marker extraction.
+test("extractCompassRoseMc: parses a real 3-option 8-direction line", () => {
+  const raw = "COMPASS_ROSE_MC: A=西南,南,東南,東,東北,北,西北,西;B=西,西北,北,東北,東,東南,南,西南;C=西南,東,東南,南,西北,西,東北,北\n1=以上三個方向指示中，*(A/B/C)是正確的。|B";
+  const { compassRoseMc, cleanedText } = mod.extractCompassRoseMc(raw);
+  assert.deepEqual(compassRoseMc.B, ["西", "西北", "北", "東北", "東", "東南", "南", "西南"]);
+  assert.equal(Object.keys(compassRoseMc).length, 3);
+  assert.doesNotMatch(cleanedText, /COMPASS_ROSE_MC/);
+});
+test("extractCompassRoseMc: rejects an option with an invalid direction word or wrong count", () => {
+  const raw = "COMPASS_ROSE_MC: A=北,東北,東,東南,南,西南,西,東北\n1=x|A";
+  const { compassRoseMc } = mod.extractCompassRoseMc(raw);
+  assert.equal(compassRoseMc, null, "A has 東北 twice and is missing 西北 -- still 8 tokens but not a valid direction set, should be silently rejected rather than trusted");
+});
+test("extractCompassRoseMc: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { compassRoseMc, cleanedText } = mod.extractCompassRoseMc(raw);
+  assert.equal(compassRoseMc, null);
+  assert.equal(cleanedText, raw);
+});
