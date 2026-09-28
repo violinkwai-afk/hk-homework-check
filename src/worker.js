@@ -14,7 +14,7 @@
 // /api/check is public/unauthenticated -- same per-IP rate limit pattern as
 // hk-maths, ported from the same source (the UK site's feedback-endpoint
 // anti-abuse code). Needs a RATE_LIMIT_KV binding; fails open if unbound.
-import { PhotonImage, crop, rotate, resize, SamplingFilter } from "@cf-wasm/photon/workerd";
+import { PhotonImage, crop, rotate, resize, SamplingFilter, normalize } from "@cf-wasm/photon/workerd";
 import { parseTelegramUpdate, telegramGetFile, telegramDownloadFile, telegramSendPhoto, telegramSendMessage, constantTimeEqual } from "./telegram.js";
 import { annotateImage } from "./annotate.js";
 
@@ -1602,14 +1602,37 @@ async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model,
 // interaction, not a model or prompt issue. Re-encoding smaller
 // specifically for the cheap-tier calls (client's own upload stays at
 // 1568px for whatever still needs it) works around it directly.
+// Vision enhancement item 6 (2026-09-28): a real parent's phone photo is
+// often dim/washed-out (indoor lighting, glare, an old printer's faded
+// ink) in a way a scanned worksheet never is -- Photon's normalize()
+// does a standard histogram auto-stretch (uses the image's OWN existing
+// brightest/darkest pixels as the new white/black points, no manual
+// contrast number to tune or get wrong, so it can't "over-adjust" an
+// already-good photo the way a fixed adjust_contrast(img, N) could).
+// Applied unconditionally (not just on the downscale path) so a photo
+// that's already ≤640px still benefits. Same fail-open discipline as
+// the rest of this function: any Photon error just skips the
+// enhancement, never blocks the request.
+function normalizeContrastForVision(photonImg) {
+  try {
+    normalize(photonImg);
+  } catch (e) {
+    // Best-effort only -- an already-fine photo (or a Photon error) just
+    // continues unenhanced, never blocks the pipeline.
+  }
+}
+
 function downscaleForCheapTier(img, maxDim) {
   let photonImg;
   try {
     const bytes = base64ToBytes(img.data);
     photonImg = PhotonImage.new_from_byteslice(bytes);
+    normalizeContrastForVision(photonImg);
     const w = photonImg.get_width();
     const h = photonImg.get_height();
-    if (Math.max(w, h) <= maxDim) return img;
+    if (Math.max(w, h) <= maxDim) {
+      return { data: bytesToBase64(photonImg.get_bytes_jpeg(80)), mediaType: "image/jpeg" };
+    }
     const scale = maxDim / Math.max(w, h);
     const resized = resize(photonImg, Math.round(w * scale), Math.round(h * scale), SamplingFilter.Lanczos3);
     try {
@@ -1618,8 +1641,9 @@ function downscaleForCheapTier(img, maxDim) {
       resized.free();
     }
   } catch (e) {
-    // Downscaling is a workaround, not a requirement -- if Photon itself
-    // fails for any reason, send the original image rather than block.
+    // Downscaling/enhancement is a workaround, not a requirement -- if
+    // Photon itself fails for any reason, send the original image
+    // rather than block.
     return img;
   } finally {
     if (photonImg) photonImg.free();
@@ -9941,4 +9965,5 @@ export {
   classifyAndVerify,
   QUESTION_TYPE_HANDLERS,
   cropItem,
+  downscaleForCheapTier,
 };

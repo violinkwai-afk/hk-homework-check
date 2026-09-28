@@ -1018,6 +1018,36 @@ test("Ticket 22 Stage A: cropItem returns real, valid, non-empty JPEG bytes for 
   }
 });
 
+// Vision enhancement item 6 (2026-09-28): downscaleForCheapTier now
+// also runs Photon's normalize() (histogram auto-stretch) on every
+// image, not just ones that need resizing -- exercises both paths.
+test("downscaleForCheapTier: returns real valid JPEG bytes on the resize path (large image)", async () => {
+  const worker = await import(TMP);
+  const img = { data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" };
+  const result = worker.downscaleForCheapTier(img, 400);
+  assert.equal(result.mediaType, "image/jpeg");
+  const bytes = Buffer.from(result.data, "base64");
+  assert.equal(bytes[0], 0xff);
+  assert.equal(bytes[1], 0xd8);
+  assert.notEqual(result.data, img.data, "should differ from the original -- resized and contrast-normalized");
+});
+
+test("downscaleForCheapTier: still returns real valid (contrast-normalized) JPEG bytes when no resize is needed", async () => {
+  const worker = await import(TMP);
+  const img = { data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" };
+  const result = worker.downscaleForCheapTier(img, 10000);
+  assert.equal(result.mediaType, "image/jpeg");
+  const bytes = Buffer.from(result.data, "base64");
+  assert.equal(bytes[0], 0xff);
+  assert.equal(bytes[1], 0xd8);
+});
+
+test("downscaleForCheapTier: fails open to the original image on garbage input, never throws", async () => {
+  const worker = await import(TMP);
+  const result = worker.downscaleForCheapTier({ data: Buffer.from("not a real image").toString("base64"), mediaType: "image/jpeg" }, 640);
+  assert.ok(result.data);
+});
+
 test("Ticket 22 Stage A: cropItem throws cleanly (caught by classifyAndVerify's fail-open path) when the item has no bbox", async () => {
   const worker = await import(TMP);
   const images = [{ data: REAL_JPEG_800x600.toString("base64"), mediaType: "image/jpeg" }];
