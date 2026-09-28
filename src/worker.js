@@ -3673,7 +3673,13 @@ function parseSignedStudentNumber(answer) {
 // correct 30×5. Finds both an ASCII number AND a Chinese-numeral count
 // (immediately before a common counting-unit character), in either
 // order, rather than assuming ASCII-only.
-const RATE_MULTIPLICATION_UNIT_RE = /([一二兩三四五六七八九十]+|\d+)(?=天|日|次|個|年|月|小時|星期|週|盒|包|本|支|條)/;
+// Ticket 161 (2026-09-28) added "米" to the unit list and fraction
+// support to both this regex and the rate/count parsing below -- real
+// citation: "絲帶每米售6又4/5元，買4又3/4米絲帶，共需付___元。"
+// (6又4/5 × 4又3/4 = 6.8×4.75 = 32.3, i.e. 32又3/10) exposed that
+// neither the rate nor the quantity could be a mixed-number fraction
+// before, and "米" (metre) wasn't a recognised unit word.
+const RATE_MULTIPLICATION_UNIT_RE = /([一二兩三四五六七八九十]+(?:又\d+\/\d+)?|\d+(?:又\d+\/\d+)?)(?=天|日|次|個|年|月|小時|星期|週|盒|包|本|支|條|米)/;
 // Ticket 56 (2026-09-27, real MCLQ 2A workbook survey): English "each
 // UNIT has N" pattern -- real quoted example: "6 tubes...each tube has
 // 5...how many in total?" (6×5=30). Structurally the REVERSE of the
@@ -3718,20 +3724,21 @@ function verifyWordProblemRateMultiplication(printedQuestion, studentAnswer) {
   }
   if (!answer || !/每/.test(printed) || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
 
-  const rateMatch = printed.match(/(?<!第)\d+/);
+  const rateMatch = printed.match(/(?<!第)\d+(?:又\d+\/\d+)?/);
   if (!rateMatch) return { correct: null, correctAnswer: "" };
-  const rate = Number(rateMatch[0]);
+  const rate = parseNumericAnswer(rateMatch[0]);
+  if (Number.isNaN(rate)) return { correct: null, correctAnswer: "" };
 
   const unitMatch = printed.slice(rateMatch.index + rateMatch[0].length).match(RATE_MULTIPLICATION_UNIT_RE) || printed.match(RATE_MULTIPLICATION_UNIT_RE);
   if (!unitMatch) return { correct: null, correctAnswer: "" };
   const countToken = unitMatch[1];
-  const count = /^\d+$/.test(countToken) ? Number(countToken) : parseChineseNumberWord(countToken);
+  const count = /^\d+(?:又\d+\/\d+)?$/.test(countToken) ? parseNumericAnswer(countToken) : parseChineseNumberWord(countToken);
   if (count === null || Number.isNaN(count)) return { correct: null, correctAnswer: "" };
 
   const expected = rate * count;
-  const studentNum = parseSignedStudentNumber(answer);
+  const studentNum = parseNumericAnswer(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
-  const correct = studentNum === expected;
+  const correct = Math.abs(studentNum - expected) < 1e-9;
   return { correct, correctAnswer: correct ? "" : String(expected) };
 }
 

@@ -2720,3 +2720,24 @@ test("coprime_product_equals_lcm_mc handler registered", async () => {
   const worker = await import(TMP);
   assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "coprime_product_equals_lcm_mc"));
 });
+
+// Ticket 161 (2026-09-28, real citation: "絲帶每米售6又4/5元，買4又3/4
+// 米絲帶，共需付___元。" -> 32又3/10 = 32.3): extends
+// verifyWordProblemRateMultiplication to support mixed-number fractions
+// for BOTH rate and quantity, plus the "米" unit word -- neither was
+// supported before (rate regex only matched a bare integer, and the
+// unit-word list didn't include 米).
+test("verifyWordProblemRateMultiplication: real citation with fractional rate AND fractional quantity", async () => {
+  const worker = await import(TMP);
+  const printed = "絲帶每米售6又4/5元，買4又3/4米絲帶，共需付___元。";
+  const r = worker.verifyWordProblemRateMultiplication(printed, "32又3/10");
+  assert.equal(r.correct, true, "6又4/5 (6.8) * 4又3/4 (4.75) = 32.3 = 32又3/10");
+  const wrong = worker.verifyWordProblemRateMultiplication(printed, "30");
+  assert.equal(wrong.correct, false);
+});
+
+test("verifyWordProblemRateMultiplication: existing plain-integer shape still works (no regression)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyWordProblemRateMultiplication("小克每天儲蓄30元，他五天共儲蓄多少元？", "150");
+  assert.equal(r.correct, true);
+});
