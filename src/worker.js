@@ -4919,6 +4919,88 @@ function verifyClockReading(item, crop) {
   }
 }
 
+// Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
+// visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
+// with arrowhead decorations pointing inward or outward at both ends,
+// which visually mislead about relative length even though the actual
+// straight shafts are equal. Validated TWICE before shipping, per the
+// standing Tier-V-verify-on-real-questions rule:
+//   1. Against the REAL source image (this exact question, p.39): a
+//      horizontal scanline through each line's vertical centre, taking
+//      the row with the single LONGEST continuous run of dark pixels
+//      (the straight shaft), correctly measured all 3 lines within 3px
+//      of each other (274/277/274px) -- the arrowhead strokes are
+//      diagonal, so they never contribute a long horizontal run at any
+//      one row, keeping them from contaminating the shaft measurement.
+//   2. Against a SYNTHETIC counter-test with 3 genuinely different
+//      lengths (200/260/320px, same arrowhead style) to confirm the
+//      method has real discriminative power and doesn't just always
+//      report "equal" -- measured 203/263/323px, correctly ranked and
+//      close to the true lengths (small constant offset from stroke
+//      width, consistent across all three).
+// Deliberately narrow in scope for this first version: only handles the
+// "are all N lines equal length" shape (the one real citation found so
+// far) -- declines (null) whenever the lines are NOT all equal, rather
+// than attempt an unverified "which one is longest" ranking against
+// labels this hasn't been tested on.
+function readLineShaftLengths(pixels, w, h, lineCount) {
+  const luminance = (x, y) => {
+    const i = (y * w + x) * 4;
+    return 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+  };
+  const isDark = (x, y) => luminance(x, y) < 150;
+  const bandH = Math.floor(h / lineCount);
+  const lengths = [];
+  for (let band = 0; band < lineCount; band++) {
+    let bestLen = 0;
+    for (let y = band * bandH; y < (band + 1) * bandH; y++) {
+      let curLen = 0, curStart = 0, rowBest = 0;
+      for (let x = 0; x < w; x++) {
+        if (isDark(x, y)) {
+          if (curLen === 0) curStart = x;
+          curLen++;
+          if (curLen > rowBest) rowBest = curLen;
+        } else {
+          curLen = 0;
+        }
+      }
+      if (rowBest > bestLen) bestLen = rowBest;
+    }
+    lengths.push(bestLen);
+  }
+  return lengths;
+}
+
+function verifyLineShaftAllEqual(item, crop) {
+  let photonImg;
+  try {
+    const printed = String(item.printedQuestion || "");
+    const options = parseMcOptions(printed);
+    if (!options.length) return { correct: null, correctAnswer: "" };
+    const allEqualOption = options.find((o) => /一樣長|相同|相等|all.{0,10}(equal|same)/i.test(o.text));
+    if (!allEqualOption) return { correct: null, correctAnswer: "" };
+    const lineLabelMatches = printed.match(/[直线線]\s*[A-Za-z]|line\s*[A-Za-z]/gi) || [];
+    const lineCount = new Set(lineLabelMatches.map((s) => s.trim().slice(-1).toUpperCase())).size;
+    if (lineCount < 2) return { correct: null, correctAnswer: "" };
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const lengths = readLineShaftLengths(pixels, w, h, lineCount);
+    if (lengths.some((l) => l < 10)) return { correct: null, correctAnswer: "" }; // a band with no real shaft found -- decline
+    const maxLen = Math.max(...lengths), minLen = Math.min(...lengths);
+    const allEqual = (maxLen - minLen) / maxLen < 0.05; // 5% tolerance for scan/print noise
+    if (!allEqual) return { correct: null, correctAnswer: "" }; // only the "all equal" shape is validated so far
+    const answer = String(item.studentAnswer || "").trim();
+    const correct = answer === allEqualOption.letter || answer.includes(allEqualOption.text);
+    return { correct, correctAnswer: correct ? "" : allEqualOption.letter };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 const QUESTION_TYPE_HANDLERS = [
   {
     name: "multi_blank_math",
@@ -5473,6 +5555,22 @@ const QUESTION_TYPE_HANDLERS = [
       return !!parseTimeAnswer(item.studentAnswer);
     },
     verifyVisual: (item, crop) => verifyClockReading(item, crop),
+  },
+  {
+    // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
+    // P/Q/R all equal length" MC. See readLineShaftLengths's own long
+    // comment above for the real+synthetic double validation. detect()
+    // requires BOTH ≥2 line labels AND an "all equal" MC option present
+    // -- verifyLineShaftAllEqual itself declines on everything else this
+    // hasn't been validated against (unequal lines, missing labels).
+    name: "line_shaft_all_equal",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const lineLabels = printed.match(/[直线線]\s*[A-Za-z]|line\s*[A-Za-z]/gi) || [];
+      if (new Set(lineLabels.map((s) => s.trim().slice(-1).toUpperCase())).size < 2) return false;
+      return parseMcOptions(printed).some((o) => /一樣長|相同|相等|all.{0,10}(equal|same)/i.test(o.text));
+    },
+    verifyVisual: (item, crop) => verifyLineShaftAllEqual(item, crop),
   },
   {
     // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
@@ -6701,6 +6799,8 @@ export {
   readClockHandsFromPixels,
   parseTimeAnswer,
   verifyClockReading,
+  readLineShaftLengths,
+  verifyLineShaftAllEqual,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
