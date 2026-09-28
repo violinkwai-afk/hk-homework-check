@@ -240,7 +240,7 @@ async function handleTestGpt5RealPhoto(request, env) {
     headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
     body: JSON.stringify({
       model: "openai/gpt-5",
-      max_tokens: 1500,
+      max_tokens: 4000,
       temperature: 0,
       reasoning: { effort: "low" },
       provider: { ignore: ["Alibaba"] },
