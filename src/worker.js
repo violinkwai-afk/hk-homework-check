@@ -1766,6 +1766,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個完整月份嘅日曆表格(有日一二三四五六做欄標題,逐個格仔填住日子數字)**，喺回覆最開始加一行「CALENDAR_GRID: 月份=<幾月>;首日星期=<日/一/二/三/四/五/六,即係呢個月1號係星期幾>;日數=<呢個月總共幾多日>」。如果冇呢類完整日曆表格就完全唔使加呢行。
 
+**如果呢頁印刷咗一個「星期時間表」(逐日星期配對一個活動/科目，例如「星期日=英文班,星期一=游泳班...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果冇呢類時間表就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1895,6 +1897,24 @@ function extractCalendarGrid(text) {
   return { calendarGrid: valid ? { month, firstWeekday, daysInMonth } : null, cleanedText };
 }
 
+// Ticket 135 (2026-09-28, real citation: a printed weekly schedule
+// "星期日=英文班;星期一=游泳班;...;星期六=休息"): extracts a
+// weekday-keyed activity lookup table.
+function extractScheduleTable(text) {
+  const m = /^SCHEDULE_TABLE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^SCHEDULE_TABLE:.*$/gm, "");
+  if (!m) return { scheduleTable: null, cleanedText };
+  const table = {};
+  for (const pair of m[1].split(";")) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx === -1) continue;
+    const day = pair.slice(0, eqIdx).trim();
+    const activity = pair.slice(eqIdx + 1).trim();
+    if (day && activity) table[day] = activity;
+  }
+  return { scheduleTable: Object.keys(table).length ? table : null, cleanedText };
+}
+
 // Shared by literal_keyword_mc (and any future MC-options consumer):
 // pulls "A. text B. text C. text..." style MC options straight out of an
 // item's own printedQuestion -- no new OCR field needed, since the
@@ -2009,7 +2029,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { wordBank, cleanedText: cleanedText4 } = extractWordBank(cleanedText3);
   const { puzzles: sudokuPuzzles, cleanedText: cleanedText5 } = extractSudokuPuzzles(cleanedText4);
   const { pictogramData, cleanedText: cleanedText6 } = extractPictogramData(cleanedText5);
-  const { calendarGrid, cleanedText } = extractCalendarGrid(cleanedText6);
+  const { calendarGrid, cleanedText: cleanedText7 } = extractCalendarGrid(cleanedText6);
+  const { scheduleTable, cleanedText } = extractScheduleTable(cleanedText7);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2017,7 +2038,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -3891,6 +3912,44 @@ function verifyCalendarGridQuery(calendarGrid, printedQuestion, studentAnswer) {
     const targetWeekday = weekdayOfDay(calendarGrid, targetDay);
     const correct = answer === WEEKDAY_NAMES_ZH[targetWeekday];
     return { correct, correctAnswer: correct ? "" : WEEKDAY_NAMES_ZH[targetWeekday] };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
+// Ticket 135 (2026-09-28, real citations: "小怡在星期___有游泳班。"
+// -> reverse-lookup which day has an activity; "如果明天是星期五，小怡
+// 今天的活動是*(戲劇班/書法班/中文班/籃球班)。" -> day-shift then
+// forward lookup): weekday-keyed schedule-table reasoning.
+function verifyScheduleTableQuery(scheduleTable, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !scheduleTable) return { correct: null, correctAnswer: "" };
+
+  // Shape 2 checked first: "如果明天/聽日是星期X，...今天的活動" --
+  // day-shift (yesterday of the stated day) then forward lookup.
+  const shiftMatch = printed.match(/(?:明天|聽日)是星期([日一二三四五六])[\s\S]{0,20}今(?:天|日)/);
+  if (shiftMatch) {
+    const tomorrowIdx = WEEKDAY_NAMES_ZH.indexOf(shiftMatch[1]);
+    const todayIdx = ((tomorrowIdx - 1) % 7 + 7) % 7;
+    const todayKey = `星期${WEEKDAY_NAMES_ZH[todayIdx]}`;
+    const expectedActivity = scheduleTable[todayKey];
+    if (!expectedActivity) return { correct: null, correctAnswer: "" };
+    const correct = answer === expectedActivity || answer.includes(expectedActivity);
+    return { correct, correctAnswer: correct ? "" : expectedActivity };
+  }
+
+  // Shape 1: "在星期___有<activity>。" -- reverse-lookup which day has
+  // the named activity.
+  if (/星期_+|星期\s*$/.test(printed) || /是星期/.test(printed)) {
+    const mentionedActivity = Object.values(scheduleTable).find((a) => printed.includes(a));
+    if (mentionedActivity) {
+      const dayKey = Object.keys(scheduleTable).find((d) => scheduleTable[d] === mentionedActivity);
+      if (!dayKey) return { correct: null, correctAnswer: "" };
+      const dayName = dayKey.replace("星期", "");
+      const correct = answer === dayName || answer.includes(dayName);
+      return { correct, correctAnswer: correct ? "" : dayName };
+    }
   }
 
   return { correct: null, correctAnswer: "" };
@@ -5853,6 +5912,15 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyCalendarGridQuery(item.calendarGrid, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 135 (2026-09-28): weekday-keyed schedule-table reasoning.
+    name: "schedule_table_query",
+    detect: (item) => {
+      if (!item.scheduleTable || typeof item.scheduleTable !== "object") return false;
+      return /星期/.test(String(item.printedQuestion || ""));
+    },
+    verify: (item) => verifyScheduleTableQuery(item.scheduleTable, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -6688,7 +6756,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -6737,6 +6805,11 @@ async function handleMark(request, env) {
     // pattern as pictogramData above.
     if (qwenOutcome.calendarGrid) {
       qwenOutcome.items.forEach((item) => { item.calendarGrid = qwenOutcome.calendarGrid; });
+    }
+    // Ticket 135: schedule table is page-level shared context, same
+    // pattern as calendarGrid above.
+    if (qwenOutcome.scheduleTable) {
+      qwenOutcome.items.forEach((item) => { item.scheduleTable = qwenOutcome.scheduleTable; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -7511,6 +7584,8 @@ export {
   verifyPictogramQuery,
   extractCalendarGrid,
   verifyCalendarGridQuery,
+  extractScheduleTable,
+  verifyScheduleTableQuery,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,

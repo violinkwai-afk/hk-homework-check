@@ -2183,3 +2183,38 @@ test("chineseNumeralToArabicSmall: parses 1-99 Chinese numerals", async () => {
   assert.equal(worker.chineseNumeralToArabicSmall("五"), 5);
   assert.equal(worker.chineseNumeralToArabicSmall("十"), 10);
 });
+
+// Ticket 135 (2026-09-28, real citations: "小怡在星期___有游泳班。" and
+// "如果明天是星期五，小怡今天的活動是*(戲劇班/書法班/中文班/籃球班)。").
+const XIAOYI_SCHEDULE = { "星期日": "英文班", "星期一": "游泳班", "星期二": "戲劇班", "星期三": "書法班", "星期四": "中文班", "星期五": "籃球班", "星期六": "休息" };
+
+test("verifyScheduleTableQuery: shape 1 -- reverse lookup which day has a named activity", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyScheduleTableQuery(XIAOYI_SCHEDULE, "小怡在星期___有游泳班。", "一");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyScheduleTableQuery(XIAOYI_SCHEDULE, "小怡在星期___有游泳班。", "二");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "一");
+});
+
+test("verifyScheduleTableQuery: shape 2 -- day-shift (yesterday of stated day) then forward lookup", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyScheduleTableQuery(XIAOYI_SCHEDULE, "如果明天是星期五，小怡今天的活動是*(戲劇班/書法班/中文班/籃球班)。", "中文班");
+  assert.equal(r.correct, true, "tomorrow=Friday -> today=Thursday -> 中文班");
+});
+
+test("verifyScheduleTableQuery: declines (null) with no scheduleTable or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyScheduleTableQuery(null, "小怡在星期___有游泳班。", "一").correct, null);
+  assert.equal(worker.verifyScheduleTableQuery(XIAOYI_SCHEDULE, "9 + 4 = ?", "13").correct, null);
+});
+
+test("schedule_table_query handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "schedule_table_query");
+  assert.ok(handler);
+  const item = { printedQuestion: "小怡在星期___有游泳班。", studentAnswer: "一", scheduleTable: XIAOYI_SCHEDULE };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});

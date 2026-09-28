@@ -270,3 +270,20 @@ test("extractCalendarGrid: returns null when no marker line is present", () => {
   assert.equal(calendarGrid, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 135 (2026-09-28): SCHEDULE_TABLE marker extraction. Real
+// citation: a weekly activity schedule (English班/游泳班/戲劇班/etc.).
+test("extractScheduleTable: parses a real schedule table line and strips it from the item text", () => {
+  const raw = "SCHEDULE_TABLE: 星期日=英文班;星期一=游泳班;星期二=戲劇班;星期三=書法班;星期四=中文班;星期五=籃球班;星期六=休息\n37=小怡在星期___有游泳班。|一";
+  const { scheduleTable, cleanedText } = mod.extractScheduleTable(raw);
+  assert.deepEqual(scheduleTable, { "星期日": "英文班", "星期一": "游泳班", "星期二": "戲劇班", "星期三": "書法班", "星期四": "中文班", "星期五": "籃球班", "星期六": "休息" });
+  assert.doesNotMatch(cleanedText, /SCHEDULE_TABLE/);
+  assert.match(cleanedText, /小怡在星期/);
+});
+
+test("extractScheduleTable: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { scheduleTable, cleanedText } = mod.extractScheduleTable(raw);
+  assert.equal(scheduleTable, null);
+  assert.equal(cleanedText, raw);
+});
