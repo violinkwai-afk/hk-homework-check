@@ -1511,3 +1511,31 @@ test("mentionsShapeGeometry: recognises real Chinese and English shape-geometry 
   assert.equal(worker.mentionsShapeGeometry([{ printedQuestion: "How many edges does a cube have?" }]), true);
   assert.equal(worker.mentionsShapeGeometry([{ printedQuestion: "25÷5" }]), false);
 });
+
+// Ticket 60 (2026-09-27): "做法B" -- concrete measurement-guidance
+// sentences (not reference data) added to the AI-fallback prompt for
+// question types that need real measurement, not a lookup fact.
+test("buildAiFallbackPrompt: includes angle measurement guidance when a pending item is about angles", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "Is this a right angle?", studentAnswer: "yes" },
+  ]);
+  assert.match(prompt, /角度題：/);
+});
+
+test("buildAiFallbackPrompt: includes clock guidance only when relevant, and can combine with an unrelated reference block", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "What time does the clock show?", studentAnswer: "3:15" },
+    { question: "2", printedQuestion: "How many faces does a cube have?", studentAnswer: "6" },
+  ]);
+  assert.match(prompt, /鐘面題：/);
+  assert.match(prompt, /正方體\(cube\)/);
+  assert.doesNotMatch(prompt, /水位\/量杯題/);
+});
+
+test("buildAiFallbackPrompt: no Tier V guidance added for an ordinary arithmetic item", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "25÷5", studentAnswer: "5" }]);
+  assert.doesNotMatch(prompt, /角度題：|水位\/量杯題：|間尺題：|鐘面題：/);
+});

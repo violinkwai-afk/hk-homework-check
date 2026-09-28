@@ -2029,6 +2029,44 @@ function mentionsShapeGeometry(pendingItems) {
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
+// Ticket 60 (2026-09-27): "做法B" from the Tier-V-prompt plan -- unlike
+// Tickets 57/59's REFERENCE DATA (facts to look up), this is concrete
+// step-by-step MEASUREMENT GUIDANCE for question types that need the AI
+// to actually measure something in the photo, not recall a fact. No
+// reference table could help these (see the parallel clock/Photon
+// investigation this same session for why) -- the only lever available
+// via the prompt is telling the AI HOW to look, not WHAT to know. Each
+// block only appended when a pending item's own text actually matches
+// that type, same cost-conscious pattern as the reference blocks above.
+// Lower risk than the reference-data keyword matches: a false keyword
+// match here just adds one irrelevant guidance sentence, it can't cause
+// a wrong verdict the way a QUESTION_TYPE_HANDLERS false-positive would.
+const TIER_V_GUIDANCE = {
+  angle: {
+    re: /\bangle\b|right angle|acute|obtuse|直角|銳角|鈍角|度數/i,
+    text: "角度題：搵返個角實際兩條邊嘅方向，同90度（直角）比較嚴唔嚴格垂直，唔好單憑「睇落似」就話啱。",
+  },
+  waterLevel: {
+    re: /water level|beaker|燒杯|量杯|水位/i,
+    text: "水位/量杯題：搵返個水面實際對齊緊邊一格刻度線，讀嗰個刻度嘅數值，唔好靠「大約」估。",
+  },
+  ruler: {
+    re: /\bruler\b|直尺|量度長度/i,
+    text: "間尺題：搵返量緊嗰樣嘢嘅起點同終點分別對齊間尺邊一格刻度，用終點刻度減起點刻度。",
+  },
+  clock: {
+    re: /\bclock\b|o'clock|時針|分針|鐘面/i,
+    text: "鐘面題：分別搵返時針同分針實際指緊邊個方向（分針通常較長），先讀分針對應嘅分鐘數，再睇時針落喺邊兩個數字之間判斷小時。",
+  },
+};
+
+function buildTierVGuidance(pendingItems) {
+  const texts = Object.values(TIER_V_GUIDANCE)
+    .filter((g) => pendingItems.some((it) => g.re.test(String(it.printedQuestion || "")) || g.re.test(String(it.studentAnswer || ""))))
+    .map((g) => g.text);
+  return texts.length ? "\n" + texts.map((t, i) => `2.${i + 1}. ${t}`).join("\n") : "";
+}
+
 function buildAiFallbackPrompt(pendingItems) {
   // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
@@ -2045,7 +2083,7 @@ ${itemsText}
 ${referenceBlock}
 要求：
 1. 相有機會打橫/倒轉，先確認閱讀方向。
-2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。
+2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。${buildTierVGuidance(pendingItems)}
 3. 只有答題位置確實有筆跡但太潦草/有歧義先"correct"設null，"note"簡短講原因。
 4. 只有"correct"為false先填"correctAnswer"，其他情況留空字串。
 5. 淨係回答上面列出嘅題號，唔好加返其他題目。
@@ -6075,6 +6113,7 @@ export {
   buildAiFallbackPrompt,
   mentionsMoneyDenomination,
   mentionsShapeGeometry,
+  buildTierVGuidance,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
