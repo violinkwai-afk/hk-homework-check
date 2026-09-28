@@ -2248,11 +2248,20 @@ test("verifyLocationGridQuery: shape 2 -- reverse lookup (real citation)", async
   assert.equal(r.correct, true, "加油站 is directly below 體育館 on screen; North=left means screen-down=West");
 });
 
-test("verifyLocationGridQuery: declines (null) on a true diagonal relationship, not validated", async () => {
+// Ticket 182 (2026-09-28): this used to assert a decline here, under the
+// theory that only an EXACT 45° diagonal (equal row/col offsets) could
+// be trusted. A real citation (P4 exam Q8, a classroom seat-grid) then
+// showed a skewed 2-row/3-col relationship whose own answer only makes
+// sense if it's still read as "upper-right" -- see screenDirectionBetween's
+// own comment. Angle-bucketing now resolves this fixture too, so the
+// test is updated to check the actually-correct resolved value instead
+// of a decline that turned out not to be justified.
+test("verifyLocationGridQuery: resolves a skewed (non-45°) diagonal via nearest-angle bucketing", async () => {
   const worker = await import(TMP);
-  // 巴士站=(2,1) and 碼頭=(0,2) differ in BOTH row and column -- a real diagonal.
-  const r = worker.verifyLocationGridQuery(PLAZA_GRID, "由巴士站向___方走，便可到達碼頭。", "東北");
-  assert.equal(r.correct, null);
+  // 巴士站=(2,1) and 碼頭=(0,2): 2 rows, 1 column -- 63.4° off horizontal,
+  // closer to the 45°(upper-right) bucket than to either cardinal.
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, "由巴士站向___方走，便可到達碼頭。", "東南");
+  assert.equal(r.correct, true, "screen upper-right, under north=左, resolves to 東南 (see the rotation table's derivation)");
 });
 
 test("verifyLocationGridQuery: declines (null) with no locationGrid or unmatched phrasing", async () => {
@@ -2337,6 +2346,40 @@ test("verifyLocationGridQuery: shape 3 -- also accepts 從 (not just 由), and r
   const printed = "詩詩從精品店前往巴士站。她先向___方走，經過噴水池後，轉向___方，便可到達巴士站。";
   const r = worker.verifyLocationGridQuery(FOUNTAIN_GRID, printed, "西北;東北");
   assert.equal(r.correct, true, "精品店->噴水池 is screen-lower-left(西北); 噴水池->巴士站 is screen-upper-left(東北)");
+});
+
+// Ticket 182 (2026-09-28, real citation, P4 exam Q8/Q9): a classroom
+// seat-grid whose printed compass points diagonally (screen down-left),
+// not at any cardinal screen direction -- the first real citation
+// needing a diagonal north-anchor, not just a diagonal RELATIONSHIP.
+// Grid coordinates hand-measured from the real photo (pixel-precise
+// column/row-line detection, cross-checked against both real answers
+// before writing any code): 美華(1,3) 天朗(1,6) B(1,9) 梓苗(3,3) A(3,6)
+// 佳欣(3,9) C(3,13) -- row/col are grid-LINE indices (seats sit at
+// intersections, not inside cells).
+const SEAT_GRID = {
+  northDir: "左下",
+  positions: {
+    "美華": { row: 1, col: 3 }, "天朗": { row: 1, col: 6 }, "B": { row: 1, col: 9 },
+    "梓苗": { row: 3, col: 3 }, "A": { row: 3, col: 6 }, "佳欣": { row: 3, col: 9 }, "C": { row: 3, col: 13 },
+  },
+};
+
+test("verifyLocationGridQuery: shape 6 -- direction itself is the blank, diagonal north (real citation, Q8)", async () => {
+  const worker = await import(TMP);
+  const printed = "天朗坐在梓苗的___方。";
+  const r = worker.verifyLocationGridQuery(SEAT_GRID, printed, "南");
+  assert.equal(r.correct, true, "天朗(1,6) is screen upper-right of 梓苗(3,3) (2 rows, 3 cols -- not exact 45°); under north=左下 that resolves to 南");
+});
+
+test("verifyLocationGridQuery: shape 2 -- also handles a diagonal-north grid, MC seat-letter candidates (real citation, Q9)", async () => {
+  const worker = await import(TMP);
+  const printed = "嘉玲坐在佳欣的西南方，即嘉玲坐在座位*(A/B/C)。";
+  const r = worker.verifyLocationGridQuery(SEAT_GRID, printed, "C");
+  assert.equal(r.correct, true, "C(3,13) is the only one of A/B/C (indeed the only named seat at all) that is 西南 of 佳欣(3,9) under north=左下");
+  const wrong = worker.verifyLocationGridQuery(SEAT_GRID, printed, "A");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "C");
 });
 
 // Location-grid shape 3 (2026-09-28, real citations, Q26/27 of the same

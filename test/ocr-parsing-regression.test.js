@@ -301,6 +301,14 @@ test("extractLocationGrid: parses a real irregular grid + north direction, strip
   assert.match(cleanedText, /由巴士站向/);
 });
 
+// Ticket 182 (2026-09-28): north can now be a diagonal screen direction
+// too (real citation: a classroom seat-grid whose compass points 左下).
+test("extractLocationGrid: accepts a diagonal north direction (real citation, seat-grid)", () => {
+  const raw = "LOCATION_GRID: 北方向=左下;美華=1,3;天朗=1,6;梓苗=3,3\n8=天朗坐在梓苗的___方。|南";
+  const { locationGrid } = mod.extractLocationGrid(raw);
+  assert.equal(locationGrid.northDir, "左下");
+});
+
 test("extractLocationGrid: returns null when no marker line is present", () => {
   const raw = "1=9+4=|13";
   const { locationGrid, cleanedText } = mod.extractLocationGrid(raw);

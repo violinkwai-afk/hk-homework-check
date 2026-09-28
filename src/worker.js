@@ -1768,7 +1768,7 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個「星期時間表」(逐日星期配對一個活動/科目，例如「星期日=英文班,星期一=游泳班...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果冇呢類時間表就完全唔使加呢行。
 
-**如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右,即係個指北針實際指緊邊個畫面方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
+**如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右/右上/右下/左下/左上,即係個指北針實際指緊邊個畫面方向——如果個箭嘴唔係啱啱指住正上/正下/正左/正右,而係指住斜角(例如45度左下),就要老實揀返最貼近嘅斜角選項,唔好將佢當成最近嘅正方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
 
 **如果幅圖入面有人物,身體/手臂明確指緊一個方向,並且有一個指北針(或者其他方式)可以確定嗰個人實際面向緊東南西北邊一個方向**，喺回覆最開始加一行「FACING_DIRECTION: 人物1=東/南/西/北;人物2=...」，列出每個可以判斷到面向方向嘅人物。如果冇辦法判斷或者冇呢類人物就完全唔使加呢行。
 
@@ -1959,7 +1959,7 @@ function extractLocationGrid(text) {
       if (rc.length === 2 && rc.every(Number.isFinite)) positions[key] = { row: rc[0], col: rc[1] };
     }
   }
-  const valid = ["上", "下", "左", "右"].includes(northDir) && Object.keys(positions).length >= 2;
+  const valid = ["上", "下", "左", "右", "右上", "右下", "左下", "左上"].includes(northDir) && Object.keys(positions).length >= 2;
   return { locationGrid: valid ? { northDir, positions } : null, cleanedText };
 }
 
@@ -4259,6 +4259,16 @@ const SCREEN_TO_REAL_ROTATION = {
 // self-consistency test in test/mark.test.js.
 const SCREEN_DIR_ORDER8 = ["上", "右上", "右", "右下", "下", "左下", "左", "左上"];
 const REAL_DIR_ORDER8 = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+// Ticket 182 (2026-09-28, real citation, P4 exam Q8/Q9, a classroom
+// seat-grid): the printed compass in THIS diagram points not at a
+// cardinal screen direction but at a diagonal one (screen down-left),
+// so northDir itself can now be one of the 8 SCREEN_DIR_ORDER8 values,
+// not just the original 4. The same generation loop below handles it --
+// add the 4 diagonal keys as empty objects first so they get populated
+// exactly like the cardinal ones.
+for (const diagonalNorth of ["右上", "右下", "左下", "左上"]) {
+  SCREEN_TO_REAL_ROTATION[diagonalNorth] = {};
+}
 for (const northDir of Object.keys(SCREEN_TO_REAL_ROTATION)) {
   const shift = SCREEN_DIR_ORDER8.indexOf(northDir);
   SCREEN_DIR_ORDER8.forEach((sd, i) => {
@@ -4271,17 +4281,25 @@ function screenDirectionBetween(from, to) {
   if (rowDiff === 0 && colDiff === 0) return null;
   if (rowDiff === 0) return colDiff > 0 ? "右" : "左";
   if (colDiff === 0) return rowDiff > 0 ? "下" : "上";
-  // A true diagonal is only trusted when the row/col offsets are EXACTLY
-  // equal in magnitude (a clean 45°) -- every real diagonal citation
-  // hand-verified so far (Ticket 180) had exactly this shape. A skewed
-  // offset (e.g. 2 rows but 1 column, the shape of an EARLIER already-
-  // decided "not validated, decline" test fixture) stays declined rather
-  // than being forced into one of the 8 buckets on a guessed tolerance.
-  if (Math.abs(rowDiff) !== Math.abs(colDiff)) return null;
-  if (rowDiff < 0 && colDiff > 0) return "右上";
-  if (rowDiff > 0 && colDiff > 0) return "右下";
-  if (rowDiff > 0 && colDiff < 0) return "左下";
-  return "左上";
+  // Ticket 182 (2026-09-28): a true diagonal is bucketed by its ANGLE
+  // into the nearest of the 8 compass points (45° sectors), rather than
+  // requiring row/col offsets to be exactly equal. The real citation
+  // that justified this (天朗 vs 梓苗 in a real classroom seat-grid) has
+  // a 2-row/3-column offset -- 33.7° off the true diagonal, not exactly
+  // 45° -- and the question's own answer (南) only comes out right when
+  // that's still read as "upper-right", confirming angle-bucketing (not
+  // exact-equality) is the right general model. This SUPERSEDES the
+  // earlier "exact equality only" rule from Ticket 180, which was an
+  // untested assumption, not something a real citation had required.
+  const angleDeg = ((Math.atan2(-rowDiff, colDiff) * 180) / Math.PI + 360) % 360;
+  if (angleDeg >= 22.5 && angleDeg < 67.5) return "右上";
+  if (angleDeg >= 67.5 && angleDeg < 112.5) return "上";
+  if (angleDeg >= 112.5 && angleDeg < 157.5) return "左上";
+  if (angleDeg >= 157.5 && angleDeg < 202.5) return "左";
+  if (angleDeg >= 202.5 && angleDeg < 247.5) return "左下";
+  if (angleDeg >= 247.5 && angleDeg < 292.5) return "下";
+  if (angleDeg >= 292.5 && angleDeg < 337.5) return "右下";
+  return "右"; // wraps 337.5..360 and 0..22.5 -- a near-horizontal (or near-vertical/etc) skew still snaps to its nearest cardinal bucket, same logic as every other range above
 }
 
 function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
@@ -4307,6 +4325,28 @@ function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
       const correct = answer === expected;
       return { correct, correctAnswer: correct ? "" : expected };
     }
+  }
+
+  // Shape 6 (2026-09-28, real citation, P4 exam Q8, a classroom seat-
+  // grid: "天朗坐在梓苗的___方。" -> 南): the DIRECTION itself is the
+  // blank this time -- both the subject (天朗) and the reference (梓苗)
+  // are named grid positions, given directly in the sentence. Guarded to
+  // only fire when the span between 的/方 has NO real direction word in
+  // it (mutually exclusive with Shapes 2/4/5 below, which all require
+  // one to be there), so ordering relative to them doesn't matter.
+  m = printed.match(/(.+?)坐在(.+?)的(.{0,5}?)方/);
+  if (m && !/[東南西北]/.test(m[3])) {
+    const subjectName = names.find((n) => m[1].includes(n));
+    const refName = names.find((n) => m[2].includes(n));
+    if (subjectName && refName && subjectName !== refName && positions[subjectName] && positions[refName]) {
+      const screenDir = screenDirectionBetween(positions[refName], positions[subjectName]);
+      if (screenDir) {
+        const expected = rotation[screenDir];
+        const correct = answer === expected;
+        return { correct, correctAnswer: correct ? "" : expected };
+      }
+    }
+    return { correct: null, correctAnswer: "" };
   }
 
   // Shape 4 (2026-09-28, real citation, P4 exam Q2: "餐廳在*(港鐵站/
@@ -7362,7 +7402,7 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       if (!item.locationGrid || typeof item.locationGrid !== "object") return false;
       const printed = String(item.printedQuestion || "");
-      return /由.+向.{0,3}方走|在.+的[東南西北]{1,2}方|[由從].+(?:前往|去).+經過.+後/.test(printed);
+      return /由.+向.{0,3}方走|在.+的[東南西北]{1,2}方|[由從].+(?:前往|去).+經過.+後|.+坐在.+的.{0,5}?方/.test(printed);
     },
     verify: (item) => verifyLocationGridQuery(item.locationGrid, item.printedQuestion, item.studentAnswer),
   },
