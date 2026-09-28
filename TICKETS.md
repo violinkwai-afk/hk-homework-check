@@ -676,3 +676,17 @@
 - ✅ **184. 真bug:第156項(梯形面積)冇支援MC字母答案,得返純數字。** 真實citation係MC格式(A/B/C/D),真學生會填字母,但個function淨係識比對純數字,一填「A」就攞去同計出嚟嘅數字(10)直接比較,梗係唔會啱——即係一個真實MC題,舊code**永遠答唔中**(無論真定假)。跟返157/158項一樣嘅做法補咗MC字母支援,仲要保留返舊有純數字測試(157/158用嘅測試本身就用緊字母,冇呢個盲點;156嗰個舊測試用緊純數字,冇撞到先前一直未發現)。
 
 修完之後30條全部再過一次`classifyAndVerify`,而家真係30/30。呢次證明咗「單一function嘅unit test過晒」唔代表「真正production dispatch都啱」——兩個bug都要用返真正嘅`classifyAndVerify`(行齊晒個handler陣列,模擬真實優先次序)先浮到面,單獨test個function本身完全睇唔出。2個新測試,645/645測試通過,已push、已deploy。
+
+## 2026年9月28號:DeepSeek R1、GPT-5(reasoning_effort=low)同一份30條題再測
+
+用戶想知reasoning model(識「諗」嗰種)喺呢個task表現點,同埋要求公道嘅測速方法。查證咗GPT-5、Gemini 3.1 Pro、DeepSeek R1三個全部係reasoning model(OpenRouter listing確認),原本100 token嘅短答案設計對佢哋唔公道——改用`reasoning_effort:"low"`(叫佢診少啲)加max_tokens=800,同一條題兩個model同時問(fairness)。
+
+**第一次撞板**:30條逐條sequential問,curl 300秒都仲未答完——reasoning model就算「low」都好慢。改咗做全部30條一齊parallel問(fairness唔受影響,同一條題兩個model仲係同一刻問)。
+
+**真實結果(30條,$0.132總洗費)**:
+- **DeepSeek R1**:**23/30(77%)完全燒晒800 token喺reasoning度,乜都答唔到**(`finish_reason:"length"`,raw内容係空)——即係就算「low」effort都仲係太多嘢諗,完全唔啱做呢種快速判斷。剩返嘅7條入面3條啱、4條老實答唔知,0條答錯(但樣本太細,冇乜意義)。平均每次**53秒**,總成本$0.059。
+- **GPT-5**:全部30條都答到(冇一條燒晒budget),**23/30(76.7%)啱、1條錯、6條老實答唔知**——準繩度同答錯率都明顯好過Qwen/Gemini(30條入面淨係1條錯,同Jev嘅謹慎程度接近)。但平均每次**55秒**,總成本$0.073。
+
+**結論**:GPT-5準繩度好,但55秒一條題**完全唔切實際**(家長唔會肯等成分鐘先批改一條題)。DeepSeek R1呢個task完全用唔到(七成幾call燒晒budget都答唔到)。而家個結論:呢類reasoning model準,但慢到用唔到,唔適合做batch快速判斷嗰層——同之前搵到嘅其他reasoning model一樣嘅問題class(Qwen3.6-flash、之前嘅DeepSeek變種都係燒budget)。
+
+臨時route `/api/test-reasoning-judge-batch` 用完即刻拆走(commit `9ff8052`)。
