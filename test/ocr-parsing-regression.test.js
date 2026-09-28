@@ -287,3 +287,23 @@ test("extractScheduleTable: returns null when no marker line is present", () => 
   assert.equal(scheduleTable, null);
   assert.equal(cleanedText, raw);
 });
+
+// Location-grid marker extraction. Real citation: a location grid with
+// North pointing left, positions confirmed by hand against the source
+// image (row 3 is irregular -- only 2 cells, under columns 1-2).
+test("extractLocationGrid: parses a real irregular grid + north direction, strips the marker line", () => {
+  const raw = "LOCATION_GRID: 北方向=左;體育館=0,0;商場=0,1;碼頭=0,2;加油站=1,0;酒店=1,1;樂園=1,2;巴士站=2,1;港鐵站=2,2\n24=由巴士站向___方走，便可到達酒店。|東";
+  const { locationGrid, cleanedText } = mod.extractLocationGrid(raw);
+  assert.equal(locationGrid.northDir, "左");
+  assert.deepEqual(locationGrid.positions["巴士站"], { row: 2, col: 1 });
+  assert.deepEqual(locationGrid.positions["酒店"], { row: 1, col: 1 });
+  assert.doesNotMatch(cleanedText, /LOCATION_GRID/);
+  assert.match(cleanedText, /由巴士站向/);
+});
+
+test("extractLocationGrid: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { locationGrid, cleanedText } = mod.extractLocationGrid(raw);
+  assert.equal(locationGrid, null);
+  assert.equal(cleanedText, raw);
+});

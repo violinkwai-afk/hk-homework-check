@@ -2218,3 +2218,76 @@ test("schedule_table_query handler: registered and reachable", async () => {
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Location-grid compass-direction reasoning (found 2026-09-28, real
+// citations from a P2 exam's Q24/25). Grid positions confirmed by hand
+// against the source image: the grid is IRREGULAR (row 3 has only 2
+// cells, under columns 1-2), and the printed compass shows North
+// pointing LEFT on the page.
+const PLAZA_GRID = {
+  northDir: "左",
+  positions: {
+    "體育館": { row: 0, col: 0 }, "商場": { row: 0, col: 1 }, "碼頭": { row: 0, col: 2 },
+    "加油站": { row: 1, col: 0 }, "酒店": { row: 1, col: 1 }, "樂園": { row: 1, col: 2 },
+    "巴士站": { row: 2, col: 1 }, "港鐵站": { row: 2, col: 2 },
+  },
+};
+
+test("verifyLocationGridQuery: shape 1 -- direct direction X->Y (real citation)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, "由巴士站向___方走，便可到達酒店。", "東");
+  assert.equal(r.correct, true, "巴士站 is directly below 酒店 on screen; North=left means screen-up=East");
+  const wrong = worker.verifyLocationGridQuery(PLAZA_GRID, "由巴士站向___方走，便可到達酒店。", "北");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "東");
+});
+
+test("verifyLocationGridQuery: shape 2 -- reverse lookup (real citation)", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, "___在體育館的西方。", "加油站");
+  assert.equal(r.correct, true, "加油站 is directly below 體育館 on screen; North=left means screen-down=West");
+});
+
+test("verifyLocationGridQuery: declines (null) on a true diagonal relationship, not validated", async () => {
+  const worker = await import(TMP);
+  // 巴士站=(2,1) and 碼頭=(0,2) differ in BOTH row and column -- a real diagonal.
+  const r = worker.verifyLocationGridQuery(PLAZA_GRID, "由巴士站向___方走，便可到達碼頭。", "東北");
+  assert.equal(r.correct, null);
+});
+
+test("verifyLocationGridQuery: declines (null) with no locationGrid or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyLocationGridQuery(null, "由巴士站向___方走，便可到達酒店。", "東").correct, null);
+  assert.equal(worker.verifyLocationGridQuery(PLAZA_GRID, "9 + 4 = ?", "13").correct, null);
+});
+
+// Rotation-table internal-consistency check for the 3 north-orientations
+// NOT covered by a real citation (only "左" is real-world validated
+// above) -- verifies the geometry is at least self-consistent: whichever
+// screen direction North is defined to point at must itself map back to
+// "北" under that same rotation table.
+test("verifyLocationGridQuery: rotation table is self-consistent for every north orientation (a location in the declared north screen-direction always resolves to 北)", async () => {
+  const worker = await import(TMP);
+  const A = { row: 1, col: 1 };
+  const screenPositionFor = {
+    "上": { row: 0, col: 1 }, // B directly above A
+    "右": { row: 1, col: 2 }, // B directly right of A
+    "下": { row: 2, col: 1 }, // B directly below A
+    "左": { row: 1, col: 0 }, // B directly left of A
+  };
+  for (const northDir of ["上", "右", "下", "左"]) {
+    const grid = { northDir, positions: { A, B: screenPositionFor[northDir] } };
+    const r = worker.verifyLocationGridQuery(grid, "由A向___方走，便可到達B。", "北");
+    assert.equal(r.correct, true, `northDir=${northDir}: a location in that exact screen direction must resolve to 北`);
+  }
+});
+
+test("location_grid_query handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "location_grid_query");
+  assert.ok(handler);
+  const item = { printedQuestion: "由巴士站向___方走，便可到達酒店。", studentAnswer: "東", locationGrid: PLAZA_GRID };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});

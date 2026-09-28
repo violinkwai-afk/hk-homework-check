@@ -1768,6 +1768,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個「星期時間表」(逐日星期配對一個活動/科目，例如「星期日=英文班,星期一=游泳班...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果冇呢類時間表就完全唔使加呢行。
 
+**如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右,即係個指北針實際指緊邊個畫面方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1915,6 +1917,36 @@ function extractScheduleTable(text) {
   return { scheduleTable: Object.keys(table).length ? table : null, cleanedText };
 }
 
+// Location-grid direction reasoning (found 2026-09-28 while working
+// through a real P2 exam's Q24/25 -- see verifyLocationGridQuery's own
+// comment below for the full validation story): extracts a
+// north-direction reference plus each location's (row, col) position.
+// Deliberately keyed by explicit coordinates rather than assuming a
+// dense rectangular grid -- the real citation's own grid is IRREGULAR
+// (row 3 only has 2 cells, offset under columns 1-2, not starting at
+// column 0), so a "just count columns" assumption would have been wrong.
+function extractLocationGrid(text) {
+  const m = /^LOCATION_GRID:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^LOCATION_GRID:.*$/gm, "");
+  if (!m) return { locationGrid: null, cleanedText };
+  const parts = m[1].split(";").map((s) => s.trim()).filter(Boolean);
+  let northDir = null;
+  const positions = {};
+  for (const part of parts) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const value = part.slice(eqIdx + 1).trim();
+    if (key === "北方向") northDir = value;
+    else {
+      const rc = value.split(",").map((n) => Number(n.trim()));
+      if (rc.length === 2 && rc.every(Number.isFinite)) positions[key] = { row: rc[0], col: rc[1] };
+    }
+  }
+  const valid = ["上", "下", "左", "右"].includes(northDir) && Object.keys(positions).length >= 2;
+  return { locationGrid: valid ? { northDir, positions } : null, cleanedText };
+}
+
 // Shared by literal_keyword_mc (and any future MC-options consumer):
 // pulls "A. text B. text C. text..." style MC options straight out of an
 // item's own printedQuestion -- no new OCR field needed, since the
@@ -2030,7 +2062,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { puzzles: sudokuPuzzles, cleanedText: cleanedText5 } = extractSudokuPuzzles(cleanedText4);
   const { pictogramData, cleanedText: cleanedText6 } = extractPictogramData(cleanedText5);
   const { calendarGrid, cleanedText: cleanedText7 } = extractCalendarGrid(cleanedText6);
-  const { scheduleTable, cleanedText } = extractScheduleTable(cleanedText7);
+  const { scheduleTable, cleanedText: cleanedText8 } = extractScheduleTable(cleanedText7);
+  const { locationGrid, cleanedText } = extractLocationGrid(cleanedText8);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2038,7 +2071,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -3949,6 +3982,80 @@ function verifyScheduleTableQuery(scheduleTable, printedQuestion, studentAnswer)
       const dayName = dayKey.replace("星期", "");
       const correct = answer === dayName || answer.includes(dayName);
       return { correct, correctAnswer: correct ? "" : dayName };
+    }
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
+// Location-grid compass-direction reasoning (found 2026-09-28, real
+// citations: "由巴士站向___方走，便可到達酒店。" -> 東 (East); "___在
+// 體育館的西方。" -> 加油站). Validated by hand against the REAL grid
+// before writing any code: the grid is IRREGULAR (row 3 has only 2
+// cells, positioned under columns 1-2, not starting at column 0) --
+// 巴士站=(2,1) sits DIRECTLY BELOW 酒店=(1,1) (a real connector line
+// confirms this in the source image), and the printed compass shows
+// North pointing LEFT on the page (北←), not up. Working through both
+// citations by hand confirmed the rotation model below is exactly
+// right: with North=left, page-up=East, page-right=South,
+// page-down=West, page-left=North (a 90° counter-clockwise rotation of
+// the ordinary up=North compass). Deliberately narrow: only handles
+// locations that share an exact row or column (the only relationship
+// actually seen) -- declines on true diagonal relationships, which
+// haven't been validated.
+const SCREEN_TO_REAL_ROTATION = {
+  "上": { "上": "北", "右": "東", "下": "南", "左": "西" }, // north=up (no rotation, the ordinary case)
+  "右": { "上": "西", "右": "北", "下": "東", "左": "南" }, // north=right (90° clockwise)
+  "下": { "上": "南", "右": "西", "下": "北", "左": "東" }, // north=down (180°)
+  "左": { "上": "東", "右": "南", "下": "西", "左": "北" }, // north=left (90° counter-clockwise) -- the real citation's own case
+};
+
+function screenDirectionBetween(from, to) {
+  if (from.row === to.row) return to.col > from.col ? "右" : "左";
+  if (from.col === to.col) return to.row > from.row ? "下" : "上";
+  return null; // true diagonal -- not validated, caller must decline
+}
+
+function verifyLocationGridQuery(locationGrid, printedQuestion, studentAnswer) {
+  if (!locationGrid) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const { northDir, positions } = locationGrid;
+  const rotation = SCREEN_TO_REAL_ROTATION[northDir];
+  if (!rotation) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(positions);
+  const mentioned = names.filter((n) => printed.includes(n));
+
+  // Shape 1: "由X向___方走，便可到達Y" -- direct direction X -> Y.
+  let m = printed.match(/由(.+?)向.{0,3}方走.{0,10}到達(.+?)[。.]/);
+  if (m) {
+    const fromName = names.find((n) => m[1].includes(n));
+    const toName = names.find((n) => m[2].includes(n));
+    if (fromName && toName && positions[fromName] && positions[toName]) {
+      const screenDir = screenDirectionBetween(positions[fromName], positions[toName]);
+      if (!screenDir) return { correct: null, correctAnswer: "" }; // diagonal, not validated
+      const expected = rotation[screenDir];
+      const correct = answer === expected;
+      return { correct, correctAnswer: correct ? "" : expected };
+    }
+  }
+
+  // Shape 2: "___在Y的Z方。" -- reverse lookup: which location is in
+  // direction Z from Y.
+  m = printed.match(/在(.+?)的([東南西北])方/);
+  if (m) {
+    const refName = names.find((n) => m[1].includes(n));
+    const targetRealDir = m[2];
+    if (refName && positions[refName]) {
+      // Find which screen-direction, under this grid's rotation, maps to targetRealDir.
+      const screenDir = Object.keys(rotation).find((sd) => rotation[sd] === targetRealDir);
+      if (!screenDir) return { correct: null, correctAnswer: "" };
+      const refPos = positions[refName];
+      const candidate = names.find((n) => n !== refName && screenDirectionBetween(refPos, positions[n]) === screenDir);
+      if (!candidate) return { correct: null, correctAnswer: "" };
+      const correct = answer === candidate || answer.includes(candidate);
+      return { correct, correctAnswer: correct ? "" : candidate };
     }
   }
 
@@ -5921,6 +6028,17 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyScheduleTableQuery(item.scheduleTable, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Location-grid compass-direction reasoning (found 2026-09-28,
+    // Q24/25 of a real P2 exam).
+    name: "location_grid_query",
+    detect: (item) => {
+      if (!item.locationGrid || typeof item.locationGrid !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /由.+向.{0,3}方走|在.+的[東南西北]方/.test(printed);
+    },
+    verify: (item) => verifyLocationGridQuery(item.locationGrid, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -6756,7 +6874,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -6810,6 +6928,11 @@ async function handleMark(request, env) {
     // pattern as calendarGrid above.
     if (qwenOutcome.scheduleTable) {
       qwenOutcome.items.forEach((item) => { item.scheduleTable = qwenOutcome.scheduleTable; });
+    }
+    // Location-grid direction reasoning: page-level shared context, same
+    // pattern as scheduleTable above.
+    if (qwenOutcome.locationGrid) {
+      qwenOutcome.items.forEach((item) => { item.locationGrid = qwenOutcome.locationGrid; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -7586,6 +7709,8 @@ export {
   verifyCalendarGridQuery,
   extractScheduleTable,
   verifyScheduleTableQuery,
+  extractLocationGrid,
+  verifyLocationGridQuery,
   chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,
