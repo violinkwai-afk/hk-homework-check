@@ -3935,6 +3935,86 @@ function verifySymbolicRelation(printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 116 (2026-09-28, real citation: "To walk the same distance,
+// Sarah takes 3 seconds longer than Linda, but 2 seconds shorter than
+// Jessie. Among the three people, ___ walks the fastest." -> Linda,
+// since less time = faster): relative-comparison-chain word problem.
+// Sets up relative values against the middle-named person (0) and finds
+// the min/max -- English-only for now, no real Chinese citation for
+// this exact "A longer than B but shorter than C" shape yet.
+function verifyRelativeComparisonChain(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/([A-Z][a-z]+)\s+takes\s+(\d+)\s+seconds?\s+longer\s+than\s+([A-Z][a-z]+),?\s*(?:but\s+)?(\d+)\s+seconds?\s+shorter\s+than\s+([A-Z][a-z]+)/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, A, n1, B, n2, C] = m;
+  if (new Set([A, B, C]).size !== 3) return { correct: null, correctAnswer: "" };
+  const values = { [B]: 0, [A]: Number(n1), [C]: Number(n1) + Number(n2) };
+  const askFastest = /fastest|走得最快|行得最快/i.test(printed);
+  const askSlowest = /slowest|走得最慢|行得最慢/i.test(printed);
+  if (!askFastest && !askSlowest) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(values);
+  const targetVal = askFastest ? Math.min(...names.map((n) => values[n])) : Math.max(...names.map((n) => values[n]));
+  const winners = names.filter((n) => values[n] === targetVal);
+  if (winners.length !== 1) return { correct: null, correctAnswer: "" };
+  const expected = winners[0];
+  const correct = answer === expected || answer.includes(expected);
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
+// Ticket 113 (2026-09-28, real citation: "The swimming pool is 25 m
+// long. Nick swims back and forth twice. How many metres does he
+// swim?" -> 25×2×2=100): "back and forth N times" compound multiplier --
+// "back and forth" itself means ×2 (a round trip), then multiplied again
+// by however many times it's repeated. English-only -- no real Chinese
+// "來回" citation collected for this exact shape yet (only the general
+// concept was inferred, not directly quoted).
+function verifyCompoundMultiplierWordProblem(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/back and forth/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const baseMatch = printed.match(/is\s+(\d+)\s*m\b/i);
+  if (!baseMatch) return { correct: null, correctAnswer: "" };
+  const base = Number(baseMatch[1]);
+  let repeat = null;
+  if (/\btwice\b/i.test(printed)) repeat = 2;
+  else if (/\bonce\b/i.test(printed)) repeat = 1;
+  else {
+    const rm = printed.match(/(\d+)\s*times\b/i);
+    if (rm) repeat = Number(rm[1]);
+  }
+  if (!repeat) return { correct: null, correctAnswer: "" };
+  const expected = base * 2 * repeat;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 84 (2026-09-28, real citation: "Box A ≤9 pieces, Box B ≤5
+// pieces, total=12. At least how many in Box A? A.4 B.5 C.7 D.9" ->
+// min(A) = total - max(B) = 7): min-from-two-capacity-constraints.
+// Narrow assumption (true for this citation, unverified the other way):
+// the question always asks about the FIRST-named entity, so its minimum
+// is total minus the SECOND entity's own maximum.
+function verifyMinFromTwoCapacityConstraints(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/at least/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const maxMatches = [...printed.matchAll(/≤\s*(\d+)/g)].map((mm) => Number(mm[1]));
+  if (maxMatches.length !== 2) return { correct: null, correctAnswer: "" };
+  const totalMatch = printed.match(/total\s*[=:]?\s*(\d+)/i);
+  if (!totalMatch) return { correct: null, correctAnswer: "" };
+  const total = Number(totalMatch[1]);
+  const expected = total - maxMatches[1];
+  if (expected < 0) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -5681,6 +5761,28 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifySymbolicRelation(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 116 (2026-09-28): relative-comparison-chain word problem.
+    name: "relative_comparison_chain",
+    detect: (item) => /takes\s+\d+\s+seconds?\s+longer\s+than.{0,20}seconds?\s+shorter\s+than/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyRelativeComparisonChain(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 113 (2026-09-28): "back and forth N times" compound
+    // multiplier word problem.
+    name: "compound_multiplier_word_problem",
+    detect: (item) => /back and forth/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyCompoundMultiplierWordProblem(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 84 (2026-09-28): min-from-two-capacity-constraints.
+    name: "min_from_two_capacity_constraints",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /at least/i.test(printed) && (printed.match(/≤\s*\d+/g) || []).length === 2;
+    },
+    verify: (item) => verifyMinFromTwoCapacityConstraints(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -6884,6 +6986,9 @@ export {
   verifyLineShaftAllEqual,
   verifySymbolicSubstitution,
   verifySymbolicRelation,
+  verifyRelativeComparisonChain,
+  verifyCompoundMultiplierWordProblem,
+  verifyMinFromTwoCapacityConstraints,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,

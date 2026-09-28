@@ -1869,3 +1869,68 @@ test("symbolic_relation handler: registered and reachable, doesn't confuse □ (
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Ticket 116 (2026-09-28, real citation: "Sarah takes 3 seconds longer
+// than Linda, but 2 seconds shorter than Jessie. Among the three
+// people, ___ walks the fastest." -> Linda).
+test("verifyRelativeComparisonChain: resolves fastest/slowest from a relative-difference chain", async () => {
+  const worker = await import(TMP);
+  const printed = "To walk the same distance, Sarah takes 3 seconds longer than Linda, but 2 seconds shorter than Jessie. Among the three people, ___ walks the fastest.";
+  const r = worker.verifyRelativeComparisonChain(printed, "Linda");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyRelativeComparisonChain(printed, "Jessie");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "Linda");
+});
+
+test("relative_comparison_chain handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "relative_comparison_chain");
+  assert.ok(handler);
+  const item = { printedQuestion: "Sarah takes 3 seconds longer than Linda, but 2 seconds shorter than Jessie. Among the three people, ___ walks the fastest.", studentAnswer: "Linda" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 113 (2026-09-28, real citation: "The swimming pool is 25 m
+// long. Nick swims back and forth twice. How many metres does he
+// swim?" -> 100).
+test("verifyCompoundMultiplierWordProblem: 'back and forth N times' = base * 2 * N", async () => {
+  const worker = await import(TMP);
+  const printed = "The swimming pool is 25 m long. Nick swims back and forth twice. How many metres does he swim?";
+  const r = worker.verifyCompoundMultiplierWordProblem(printed, "100");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyCompoundMultiplierWordProblem(printed, "50");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "100");
+});
+
+test("compound_multiplier_word_problem handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "compound_multiplier_word_problem");
+  assert.ok(handler);
+  const item = { printedQuestion: "The swimming pool is 25 m long. Nick swims back and forth twice. How many metres does he swim?", studentAnswer: "100" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 84 (2026-09-28, real citation: "Box A ≤9 pieces, Box B ≤5
+// pieces, total=12. At least how many in Box A?" -> 7).
+test("verifyMinFromTwoCapacityConstraints: min(first box) = total - max(second box)", async () => {
+  const worker = await import(TMP);
+  const printed = "Box A ≤9 pieces, Box B ≤5 pieces, total=12. At least how many pieces are in Box A?";
+  const r = worker.verifyMinFromTwoCapacityConstraints(printed, "7");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyMinFromTwoCapacityConstraints(printed, "4");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "7");
+});
+
+test("min_from_two_capacity_constraints handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "min_from_two_capacity_constraints");
+  assert.ok(handler);
+  const item = { printedQuestion: "Box A ≤9 pieces, Box B ≤5 pieces, total=12. At least how many pieces are in Box A?", studentAnswer: "7" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
