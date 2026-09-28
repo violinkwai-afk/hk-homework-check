@@ -2004,3 +2004,23 @@ test("fact_family_generation handler: registered and reachable", async () => {
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 74/90 (2026-09-28, real citations: "Three odd numbers arranged
+// smallest→greatest: 67, ?, 81. May be: ... C.73 ..." and "子良的學號比9
+// 小，又比5大，而且是一個單數" -> 7): extends the existing
+// verifyNumberBetween with an optional parity constraint stacked on top
+// of the range check.
+test("verifyNumberBetween: with an odd/even constraint stacked on the range check", async () => {
+  const worker = await import(TMP);
+  const oddPrinted = "子良的學號比9小，又比5大，而且是一個單數。";
+  assert.equal(worker.verifyNumberBetween(oddPrinted, "7").correct, true);
+  assert.equal(worker.verifyNumberBetween(oddPrinted, "6").correct, false, "6 is in range but even -- must fail the odd constraint");
+  assert.equal(worker.verifyNumberBetween(oddPrinted, "3").correct, false, "3 is odd but out of range");
+});
+
+test("verifyNumberBetween: plain range check (no parity keyword) is unaffected by the extension", async () => {
+  const worker = await import(TMP);
+  const printed = "Write a number between 3 and 8.";
+  assert.equal(worker.verifyNumberBetween(printed, "5").correct, true);
+  assert.equal(worker.verifyNumberBetween(printed, "4").correct, true, "even numbers must still pass when no parity keyword is present");
+});

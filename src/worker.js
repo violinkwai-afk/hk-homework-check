@@ -4215,15 +4215,38 @@ function verifyNumberBetween(printedQuestion, studentAnswer) {
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
   const m = /(?:介乎|喺)\s*(\d+)\s*(?:同|和|與)\s*(\d+)\s*之間|\bbetween\s+(\d+)\s+and\s+(\d+)\b/i.exec(printed);
-  if (!m) return { correct: null, correctAnswer: "" };
-  const lo = Number(m[1] ?? m[3]), hi = Number(m[2] ?? m[4]);
+  let lo, hi;
+  if (m) {
+    lo = Number(m[1] ?? m[3]);
+    hi = Number(m[2] ?? m[4]);
+  } else {
+    // Ticket 74/90 (2026-09-28, real citation: "子良的學號比9小，又比5
+    // 大" -> range (5,9)): a separate "比A小...比B大" phrasing shape,
+    // order-independent (either bound may be stated first).
+    const smallMatch = printed.match(/比\s*(\d+)\s*小/);
+    const bigMatch = printed.match(/比\s*(\d+)\s*大/);
+    if (!smallMatch || !bigMatch) return { correct: null, correctAnswer: "" };
+    lo = Number(bigMatch[1]);
+    hi = Number(smallMatch[1]);
+  }
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) return { correct: null, correctAnswer: "" };
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
-  const correct = studentNum > lo && studentNum < hi;
+  let correct = studentNum > lo && studentNum < hi;
+  // Ticket 74/90 (2026-09-28, real citations: "Three odd numbers
+  // arranged smallest→greatest: 67, ?, 81. May be: ... C.73 ..." and
+  // "子良的學號比9小，又比5大，而且是一個單數" -> 7): an optional PARITY
+  // constraint stacked on top of the range check -- only applied when
+  // the question also states odd/even, and only when it states exactly
+  // one of the two (both or neither leaves the plain range check as-is).
+  const wantsOdd = /單數|奇數|\bodd\b/i.test(printed);
+  const wantsEven = /雙數|偶數|\beven\b/i.test(printed);
+  if (wantsOdd && !wantsEven) correct = correct && Math.abs(studentNum % 2) === 1;
+  else if (wantsEven && !wantsOdd) correct = correct && studentNum % 2 === 0;
   // Range-membership has no single "the" correct answer (any value
-  // strictly between lo/hi qualifies) -- correctAnswer stays empty even
-  // when wrong, since there's nothing honest and singular to fill in.
+  // strictly between lo/hi qualifying the stated parity is correct) --
+  // correctAnswer stays empty even when wrong, since there's nothing
+  // honest and singular to fill in.
   return { correct, correctAnswer: "" };
 }
 
