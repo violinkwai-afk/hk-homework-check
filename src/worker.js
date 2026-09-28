@@ -1790,6 +1790,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係一張紙(長方形)對摺嘅過程圖(由原本嘅長方形,經過一次或者多次對摺,變到最後嘅形狀,圖入面標住咗最後對摺完嘅長度)**，喺回覆最開始加一行「PAPER_FOLD: 摺次數=<對摺咗幾多次,由圖入面箭嘴/步驟數清楚數,通常係1>;摺後長度=<圖入面標住嘅最後長度數字>」。如果冇呢類摺紙圖就完全唔使加呢行。
 
+**如果幅圖係幾個地點(用英文字母/名稱標住)用彎彎曲曲嘅路徑線連接埋一齊,每條連接線都標住咗距離(例如"2厘米"),要計最短路程果類圖**，喺回覆最開始加一行「PATH_GRAPH: A-B=<距離>;B-C=<距離>;...」(每條直接連接嘅路徑一組,兩個地點用"-"連接,用"="接距離數字,唔同路徑之間用";"分隔;淨係列直接有線連住嘅兩個地點,唔使自己計間接距離)。如果冇呢類路徑圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2140,6 +2142,106 @@ function verifyPaperFold(paperFold, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : String(expected) };
 }
 
+// Ticket 185 (2026-09-28, real citation, 躍思P1 Q6: 螞蟻喺A-G幾個地點之間
+// 嘅路徑圖, 距離用厘米標住). Hand-verified against all 3 real sub-answers
+// (D-F最短=6, F-C最短=5, B經F去E=6) using the exact edge set below,
+// confirmed programmatically with a real Dijkstra run before writing
+// verifyPathGraph -- see TICKETS.md Ticket 185 for the full derivation
+// (an earlier reading of the graph mismatched on sub-question (c) until
+// the user corrected the destination node from D to E).
+function extractPathGraph(text) {
+  const m = /^PATH_GRAPH:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PATH_GRAPH:.*$/gm, "");
+  if (!m) return { pathGraph: null, cleanedText };
+  const edges = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const nodesPart = part.slice(0, eqIdx).trim();
+    const dashIdx = nodesPart.indexOf("-");
+    if (dashIdx === -1) continue;
+    const u = nodesPart.slice(0, dashIdx).trim();
+    const v = nodesPart.slice(dashIdx + 1).trim();
+    const weight = Number(part.slice(eqIdx + 1).trim());
+    if (!u || !v || !Number.isFinite(weight) || weight <= 0) continue;
+    edges[u] = edges[u] || {};
+    edges[v] = edges[v] || {};
+    edges[u][v] = weight;
+    edges[v][u] = weight;
+  }
+  return { pathGraph: Object.keys(edges).length ? edges : null, cleanedText };
+}
+
+// Plain Dijkstra over the small hand-drawn graphs these citations use
+// (single-digit node counts) -- returns {node: shortestDistanceFromStart}.
+function pathGraphShortestDistances(adj, start) {
+  const dist = {};
+  Object.keys(adj).forEach((n) => { dist[n] = Infinity; });
+  if (!(start in dist)) return dist;
+  dist[start] = 0;
+  const visited = new Set();
+  while (visited.size < Object.keys(adj).length) {
+    let u = null;
+    let best = Infinity;
+    for (const n of Object.keys(adj)) {
+      if (!visited.has(n) && dist[n] < best) { best = dist[n]; u = n; }
+    }
+    if (u === null) break;
+    visited.add(u);
+    for (const [v, w] of Object.entries(adj[u])) {
+      if (dist[u] + w < dist[v]) dist[v] = dist[u] + w;
+    }
+  }
+  return dist;
+}
+
+function verifyPathGraph(pathGraph, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !pathGraph) return { correct: null, correctAnswer: "" };
+  const nodes = Object.keys(pathGraph);
+  const nodePattern = nodes.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  if (!nodePattern) return { correct: null, correctAnswer: "" };
+
+  // Shape 2: "從X出發，經*(A/B/C)前往Y要走N厘米" -- MC, find which
+  // single-letter waypoint makes dist(start,waypoint)+dist(waypoint,end)
+  // equal the stated total N.
+  const viaRe = new RegExp(`從\\s*(${nodePattern})\\s*出發[\\s\\S]{0,6}經\\s*\\*?\\(([^)]+)\\)[\\s\\S]{0,6}前往\\s*(${nodePattern})[\\s\\S]{0,10}要走\\s*(\\d+(?:\\.\\d+)?)`);
+  const viaMatch = printed.match(viaRe);
+  if (viaMatch) {
+    const [, start, optionsStr, end, totalStr] = viaMatch;
+    const total = Number(totalStr);
+    const options = optionsStr.split("/").map((s) => s.trim()).filter(Boolean);
+    const distFromStart = pathGraphShortestDistances(pathGraph, start);
+    const distToEnd = pathGraphShortestDistances(pathGraph, end);
+    const matching = options.filter((opt) => {
+      const d = (distFromStart[opt] || 0) + (distToEnd[opt] || 0);
+      return nodes.includes(opt) && Math.abs(d - total) < 0.01;
+    });
+    if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+    const correct = answer === matching[0];
+    return { correct, correctAnswer: correct ? "" : matching[0] };
+  }
+
+  // Shape 1: "X和Y的最短路程是___" or "從X出發前往Y，最少要走___" --
+  // plain shortest-path query between two named nodes.
+  const pairRe = new RegExp(`(${nodePattern})[\\s\\S]{0,10}(?:和|出發前往|前往)[\\s\\S]{0,4}(${nodePattern})`);
+  const pairMatch = printed.match(pairRe);
+  if (pairMatch && (/最短路程/.test(printed) || /最少要走/.test(printed))) {
+    const [, start, end] = pairMatch;
+    if (start === end) return { correct: null, correctAnswer: "" };
+    const dist = pathGraphShortestDistances(pathGraph, start);
+    const expected = dist[end];
+    if (!Number.isFinite(expected)) return { correct: null, correctAnswer: "" };
+    const studentNum = parseNumericAnswer(answer);
+    if (studentNum === null) return { correct: null, correctAnswer: "" };
+    const correct = Math.abs(studentNum - expected) < 0.01;
+    return { correct, correctAnswer: correct ? "" : String(expected) };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
 // 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
 // extracts the available digit-card set for combinatorial construction
@@ -2277,7 +2379,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { parallelogramShadedWidth, cleanedText: cleanedText15 } = extractParallelogramPartial(cleanedText14);
   const { rectCutKite, cleanedText: cleanedText16 } = extractRectCutKite(cleanedText15);
   const { compassRoseMc, cleanedText: cleanedText17 } = extractCompassRoseMc(cleanedText16);
-  const { paperFold, cleanedText } = extractPaperFold(cleanedText17);
+  const { paperFold, cleanedText: cleanedText18 } = extractPaperFold(cleanedText17);
+  const { pathGraph, cleanedText } = extractPathGraph(cleanedText18);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2285,7 +2388,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -7598,6 +7701,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyPaperFold(item.paperFold, item.studentAnswer),
   },
   {
+    // Ticket 185 (2026-09-28): shortest-path graph reasoning.
+    name: "path_graph",
+    detect: (item) => !!item.pathGraph && /最短路程|最少要走|要走\s*\d/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyPathGraph(item.pathGraph, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -8626,7 +8735,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -8720,6 +8829,10 @@ async function handleMark(request, env) {
     // Ticket 188: same page-level shared-context pattern.
     if (qwenOutcome.paperFold) {
       qwenOutcome.items.forEach((item) => { item.paperFold = qwenOutcome.paperFold; });
+    }
+    // Ticket 185: same page-level shared-context pattern.
+    if (qwenOutcome.pathGraph) {
+      qwenOutcome.items.forEach((item) => { item.pathGraph = qwenOutcome.pathGraph; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -9519,6 +9632,8 @@ export {
   verifyCompassRoseMc,
   extractPaperFold,
   verifyPaperFold,
+  extractPathGraph,
+  verifyPathGraph,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

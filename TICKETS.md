@@ -786,3 +786,6 @@
   新增4個測試(2個shape測試+1個classifyAndVerify真dispatch測試+已有嘅declines測試維持通過),648/648測試通過。
 
 - ✅ **188. 摺紙對摺求原長,已接落生產環境。** 真實citation(躍思P1 Q7,用戶2026-09-28更正答案由23cm改做26cm):「家文把一張手工紙如上圖般對摺，對摺後的長度是13cm，手工紙原來長___cm。」答案26cm——確認原本嘅簡單假設先啱:單一次對摺,原長=摺後長度×2(13×2=26)。新增`PAPER_FOLD`標記(OCR輸出摺次數+摺後長度)、`extractPaperFold`、`verifyPaperFold`(原長=摺後長度×2^摺次數,支援多次摺)。4個新測試(包括classifyAndVerify真dispatch),652/652測試通過,已push。
+
+- ✅ **185. 螞蟻最短路徑(連線圖),已接落生產環境。** 真實citation(躍思P1 Q6,用戶協助核實拓樸結構)：地點A-G用彎曲路徑連接,每條路徑標住距離。首次手推個圖嘅邊時，(a)(b)都啱(D-F最短=6,F-C最短=5)，但(c)「B經(C/F/G)前往___要走6厘米」計出嚟係「經C」，同用戶俾嘅真答案「F」對唔上——用戶指出係我睇漏咗(c)嘅目的地其實係E唔係D，改正之後三條答案用真正Dijkstra演算法行一次,全部啱(D-F=6,F-C=5,B經F去E=6)。
+  新增`PATH_GRAPH`標記(OCR輸出直接連接嘅邊+距離)、`extractPathGraph`、`pathGraphShortestDistances`(Dijkstra)、`verifyPathGraph`(Shape1:直接兩點最短路程;Shape2:MC揀邊個中途點令總距離啱啱好等於題目講嘅數)。9個新測試(包括classifyAndVerify真dispatch),657/657測試通過。

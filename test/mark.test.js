@@ -2263,6 +2263,57 @@ test("paper_fold handler: registered and reachable through real classifyAndVerif
   assert.equal(worker.classifyAndVerify(item, null).correct, true);
 });
 
+// Ticket 185 (2026-09-28, real citation, 躍思P1 Q6: 螞蟻喺A-G幾個地點嘅
+// 路徑圖,距離用厘米標住). Edge set hand-verified programmatically (real
+// Dijkstra run) against all 3 real sub-answers before this test was
+// written -- see TICKETS.md Ticket 185 for the derivation, including
+// the real mismatch (destination misread as D instead of E for
+// sub-question (c)) caught and corrected mid-session.
+const ANT_PATH_GRAPH = { "A": { "B": 1, "F": 2 }, "B": { "A": 1, "C": 2, "G": 2 }, "C": { "B": 2, "D": 4 }, "D": { "C": 4, "G": 2, "E": 3 }, "F": { "A": 2, "E": 3 }, "G": { "B": 2, "D": 2 }, "E": { "F": 3, "D": 3 } };
+
+test("verifyPathGraph: shape 1 -- plain shortest path between two named nodes", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyPathGraph(ANT_PATH_GRAPH, "D和F的最短路程是___厘米。", "6");
+  assert.equal(r.correct, true, "D-E-F = 3+3 = 6");
+  const r2 = worker.verifyPathGraph(ANT_PATH_GRAPH, "螞蟻從F出發前往C，最少要走___厘米。", "5");
+  assert.equal(r2.correct, true, "F-A-B-C = 2+1+2 = 5");
+  const wrong = worker.verifyPathGraph(ANT_PATH_GRAPH, "D和F的最短路程是___厘米。", "8");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "6");
+});
+
+test("verifyPathGraph: shape 2 -- MC via-waypoint matching a stated total", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyPathGraph(ANT_PATH_GRAPH, "螞蟻從B出發，經*(C/F/G)前往E要走6厘米。", "F");
+  assert.equal(r.correct, true, "B-A-F + F-E = 3+3 = 6, only F matches");
+  const wrong = worker.verifyPathGraph(ANT_PATH_GRAPH, "螞蟻從B出發，經*(C/F/G)前往E要走6厘米。", "C");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "F");
+});
+
+test("verifyPathGraph: declines (null) with no pathGraph or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyPathGraph(null, "D和F的最短路程是___厘米。", "6").correct, null);
+  assert.equal(worker.verifyPathGraph(ANT_PATH_GRAPH, "9 + 4 = ?", "13").correct, null);
+});
+
+test("extractPathGraph: parses the PATH_GRAPH marker line and strips it from the text", async () => {
+  const worker = await import(TMP);
+  const { pathGraph, cleanedText } = worker.extractPathGraph("PATH_GRAPH: A-B=1;B-C=2\n1. 題目|答案");
+  assert.deepEqual(pathGraph, { A: { B: 1 }, B: { A: 1, C: 2 }, C: { B: 2 } });
+  assert.ok(!cleanedText.includes("PATH_GRAPH"));
+});
+
+test("path_graph handler: registered and reachable through real classifyAndVerify dispatch", async () => {
+  const worker = await import(TMP);
+  const item1 = { printedQuestion: "D和F的最短路程是___厘米。", studentAnswer: "6", pathGraph: ANT_PATH_GRAPH };
+  const item2 = { printedQuestion: "螞蟻從B出發，經*(C/F/G)前往E要走6厘米。", studentAnswer: "F", pathGraph: ANT_PATH_GRAPH };
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "path_graph");
+  assert.ok(handler);
+  assert.equal(worker.classifyAndVerify(item1, null).correct, true);
+  assert.equal(worker.classifyAndVerify(item2, null).correct, true);
+});
+
 test("verifyScheduleTableQuery: declines (null) with no scheduleTable or unmatched phrasing", async () => {
   const worker = await import(TMP);
   assert.equal(worker.verifyScheduleTableQuery(null, "小怡在星期___有游泳班。", "一").correct, null);
