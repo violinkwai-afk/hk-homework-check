@@ -2024,3 +2024,79 @@ test("verifyNumberBetween: plain range check (no parity keyword) is unaffected b
   assert.equal(worker.verifyNumberBetween(printed, "5").correct, true);
   assert.equal(worker.verifyNumberBetween(printed, "4").correct, true, "even numbers must still pass when no parity keyword is present");
 });
+
+// Ticket 118 (2026-09-28, real citation: "There are 42 blue chairs, 36
+// red chairs and 15 yellow chairs in the office. How many chairs are
+// there in the office altogether?" -> 93): confirms the EXISTING
+// verifyWordProblemTotal already generalizes to N>=2 addends (its own
+// `nums.length < 2` check was never actually restricted to exactly 2) --
+// no new code needed, just locking this real 3-addend citation in as a
+// regression test.
+test("verifyWordProblemTotal: already generalizes to 3+ addends (real citation, no new code needed)", async () => {
+  const worker = await import(TMP);
+  const printed = "There are 42 blue chairs, 36 red chairs and 15 yellow chairs in the office. How many chairs are there in the office altogether?";
+  const r = worker.verifyWordProblemTotal(printed, "93");
+  assert.equal(r.correct, true);
+});
+
+// Ticket 117 (2026-09-28, real citation: "the longer hand on a clock
+// face points to 12 while the shorter hand points to 5. The cartoon
+// programme starts at ___ o'clock." -> 5).
+test("verifyTextualClockDescription: reads hand positions directly from text, no image needed", async () => {
+  const worker = await import(TMP);
+  const printed = "When a cartoon programme starts, the longer hand on a clock face points to 12 while the shorter hand points to 5. The cartoon programme starts at ___ o'clock.";
+  const r = worker.verifyTextualClockDescription(printed, "5");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyTextualClockDescription(printed, "6");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "5 o'clock");
+});
+
+test("textual_clock_description handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "textual_clock_description");
+  assert.ok(handler);
+  const item = { printedQuestion: "the longer hand on a clock face points to 12 while the shorter hand points to 5. The cartoon programme starts at ___ o'clock.", studentAnswer: "5" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 122 (2026-09-28, real citation: "If a box of oranges is shared
+// equally among 10 people, there will be one orange left. What is the
+// possible number of oranges in the box? A.10 B.19 C.20 D.21" -> D).
+test("verifyModularRemainderMC: filters MC options by the stated remainder condition", async () => {
+  const worker = await import(TMP);
+  const printed = "If a box of oranges is shared equally among 10 people, there will be one orange left. What is the possible number of oranges in the box? A.10 B.19 C.20 D.21";
+  const r = worker.verifyModularRemainderMC(printed, "D");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyModularRemainderMC(printed, "A");
+  assert.equal(wrong.correct, false);
+});
+
+test("modular_remainder_mc handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "modular_remainder_mc");
+  assert.ok(handler);
+  const item = { printedQuestion: "If a box of oranges is shared equally among 10 people, there will be one orange left. What is the possible number of oranges in the box? A.10 B.19 C.20 D.21", studentAnswer: "D" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
+
+// Ticket 123 (2026-09-28, real citation: "In a classroom, there are 80
+// students. If 19 students go to the library and 57 students go home,
+// how many students are still in the classroom?" -> 4).
+test("verifySequentialSubtractionRemaining: subtracts each departing group in turn", async () => {
+  const worker = await import(TMP);
+  const printed = "In a classroom, there are 80 students. If 19 students go to the library and 57 students go home, how many students are still in the classroom?";
+  const r = worker.verifySequentialSubtractionRemaining(printed, "4");
+  assert.equal(r.correct, true);
+});
+
+test("sequential_subtraction_remaining handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "sequential_subtraction_remaining");
+  assert.ok(handler);
+  const item = { printedQuestion: "In a classroom, there are 80 students. If 19 students go to the library and 57 students go home, how many students are still in the classroom?", studentAnswer: "4" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});

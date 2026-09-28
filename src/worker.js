@@ -4265,7 +4265,12 @@ function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
   if (!/(至少|最少)/.test(printed) && !/at least/i.test(printed)) return { correct: null, correctAnswer: "" };
-  const perMatch = printed.match(/每[^\d]{0,10}(\d+)/);
+  // Ticket 120 (2026-09-28, 2nd real citation: "There are 25 chocolates
+  // in a box. Sue wants to have 100 chocolates. She has to buy at least
+  // ___ box(es)." -> ⌈100/25⌉=4): the per-unit rate isn't always stated
+  // via 每/"per" -- "N in a box" is a distinct real English phrasing for
+  // the same per-unit-quantity role.
+  const perMatch = printed.match(/每[^\d]{0,10}(\d+)/) || printed.match(/(\d+)\s*\S*\s*in a box/i);
   if (!perMatch) return { correct: null, correctAnswer: "" };
   const divisor = Number(perMatch[1]);
   if (!divisor) return { correct: null, correctAnswer: "" };
@@ -4274,6 +4279,88 @@ function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
   const dividend = allNums.find((n) => n !== divisor);
   if (dividend === undefined) return { correct: null, correctAnswer: "" };
   const expected = Math.ceil(dividend / divisor);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Ticket 117 (2026-09-28, real citation: "When a cartoon programme
+// starts, the longer hand on a clock face points to 12 while the
+// shorter hand points to 5. The cartoon programme starts at ___
+// o'clock." -> 5): a real find that TEXT can describe clock-hand
+// positions directly -- this is pure regex/text reasoning, NOT the
+// usual Tier V "must look at the photo" clock type, and was likely
+// being misrouted to AI/Tier V before this handler existed. Narrowly
+// scoped to the "on the hour" case only (minute/long hand pointing
+// exactly at 12) -- the only shape actually seen; other minute-hand
+// positions would need interval-to-minutes math this hasn't been
+// validated against.
+function verifyTextualClockDescription(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const longMatch = printed.match(/long(?:er)?\s+hand.{0,20}points?\s+to\s+(\d+)/i);
+  const shortMatch = printed.match(/short(?:er)?\s+hand.{0,20}points?\s+to\s+(\d+)/i);
+  if (!longMatch || !shortMatch) return { correct: null, correctAnswer: "" };
+  if (Number(longMatch[1]) !== 12) return { correct: null, correctAnswer: "" };
+  const hourRaw = Number(shortMatch[1]);
+  const expectedHour = hourRaw === 0 ? 12 : hourRaw;
+  const studentTime = parseTimeAnswer(answer) || (() => {
+    const n = parseSignedStudentNumber(answer);
+    return Number.isNaN(n) ? null : { hour: n === 0 ? 12 : n, minute: 0 };
+  })();
+  if (!studentTime) return { correct: null, correctAnswer: "" };
+  const correct = studentTime.hour === expectedHour && studentTime.minute === 0;
+  return { correct, correctAnswer: correct ? "" : `${expectedHour} o'clock` };
+}
+
+// Ticket 122 (2026-09-28, real citation: "If a box of oranges is shared
+// equally among 10 people, there will be one orange left. What is the
+// possible number of oranges in the box? A.10 B.19 C.20 D.21" -> D,
+// since 21 mod 10 == 1): modular-remainder "possible quantity" MC --
+// filters options by the stated remainder condition. Declines when the
+// filter doesn't leave exactly one option.
+function verifyModularRemainderMC(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  // Remainder count is often spelled out ("there will be ONE orange
+  // left", the real citation) rather than a digit -- small-number words
+  // must be supported, not just "\d+".
+  const wordToNum = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 };
+  const remainderToken = "(\\d+|one|two|three|four|five|six|seven|eight|nine)";
+  const re = new RegExp(`(?:shared|divided)\\s+equally\\s+among\\s+(\\d+)[\\s\\S]{0,40}?${remainderToken}\\s+\\S+\\s+left|among\\s+(\\d+)\\s+people[\\s\\S]{0,40}?${remainderToken}\\s+\\S+\\s+left`, "i");
+  const m = printed.match(re);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const divisor = Number(m[1] ?? m[3]);
+  const remainderRaw = (m[2] ?? m[4] ?? "").toLowerCase();
+  const remainder = /^\d+$/.test(remainderRaw) ? Number(remainderRaw) : wordToNum[remainderRaw];
+  if (!divisor || remainder === undefined) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const matching = options.filter((o) => /^\d+$/.test(o.text.trim()) && Number(o.text.trim()) % divisor === remainder);
+  if (matching.length !== 1) return { correct: null, correctAnswer: "" };
+  const expectedLetter = matching[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Ticket 123 (2026-09-28, real citation: "In a classroom, there are 80
+// students. If 19 students go to the library and 57 students go home,
+// how many students are still in the classroom?" -> 80-19-57=4):
+// sequential-subtraction "how many remain" word problem. Keyed on
+// still/仍然/留在, kept separate from the existing 相差(difference)/
+// 共(total) triggers so it can't collide with either.
+function verifySequentialSubtractionRemaining(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/\bstill\b|仍然|留在/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
+  if (nums.length < 2) return { correct: null, correctAnswer: "" };
+  const [first, ...rest] = nums;
+  const expected = rest.reduce((acc, n) => acc - n, first);
+  if (expected < 0) return { correct: null, correctAnswer: "" };
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
@@ -5918,6 +6005,28 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyFactFamilyGeneration(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 117 (2026-09-28): textual clock-hand description -- pure
+    // text, not the usual Tier V "look at the photo" clock type.
+    name: "textual_clock_description",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /long(?:er)?\s+hand.{0,20}points?\s+to\s+\d+/i.test(printed) && /short(?:er)?\s+hand.{0,20}points?\s+to\s+\d+/i.test(printed);
+    },
+    verify: (item) => verifyTextualClockDescription(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 122 (2026-09-28): modular-remainder "possible quantity" MC.
+    name: "modular_remainder_mc",
+    detect: (item) => /(?:shared|divided)\s+equally\s+among\s+\d+|among\s+\d+\s+people/i.test(String(item.printedQuestion || "")) && /left/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyModularRemainderMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 123 (2026-09-28): sequential-subtraction "how many remain".
+    name: "sequential_subtraction_remaining",
+    detect: (item) => /\bstill\b|仍然|留在/i.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySequentialSubtractionRemaining(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -7127,6 +7236,9 @@ export {
   verifyEquationTruthMC,
   verifyOpenDecomposition,
   verifyFactFamilyGeneration,
+  verifyTextualClockDescription,
+  verifyModularRemainderMC,
+  verifySequentialSubtractionRemaining,
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
