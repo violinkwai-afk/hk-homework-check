@@ -1772,6 +1772,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖入面有人物,身體/手臂明確指緊一個方向,並且有一個指北針(或者其他方式)可以確定嗰個人實際面向緊東南西北邊一個方向**，喺回覆最開始加一行「FACING_DIRECTION: 人物1=東/南/西/北;人物2=...」，列出每個可以判斷到面向方向嘅人物。如果冇辦法判斷或者冇呢類人物就完全唔使加呢行。
 
+**如果題目有一組「數字卡」(印刷咗一組獨立嘅數字,要求學生揀其中幾張砌成一個新數字)**，喺回覆最開始加一行「DIGIT_CARDS: 數字1,數字2,數字3,...」，列晒成組數字卡實際嘅數字(用","分隔)。如果冇呢類數字卡就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1972,6 +1974,18 @@ function extractFacingDirection(text) {
   return { facingDirection: Object.keys(dirs).length ? dirs : null, cleanedText };
 }
 
+// Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
+// 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}):
+// extracts the available digit-card set for combinatorial construction
+// questions.
+function extractDigitCards(text) {
+  const m = /^DIGIT_CARDS:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^DIGIT_CARDS:.*$/gm, "");
+  if (!m) return { digitCards: null, cleanedText };
+  const cards = m[1].split(",").map((s) => s.trim()).filter((s) => /^\d$/.test(s)).map(Number);
+  return { digitCards: cards.length ? cards : null, cleanedText };
+}
+
 // Shared by literal_keyword_mc (and any future MC-options consumer):
 // pulls "A. text B. text C. text..." style MC options straight out of an
 // item's own printedQuestion -- no new OCR field needed, since the
@@ -2089,7 +2103,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { calendarGrid, cleanedText: cleanedText7 } = extractCalendarGrid(cleanedText6);
   const { scheduleTable, cleanedText: cleanedText8 } = extractScheduleTable(cleanedText7);
   const { locationGrid, cleanedText: cleanedText9 } = extractLocationGrid(cleanedText8);
-  const { facingDirection, cleanedText } = extractFacingDirection(cleanedText9);
+  const { facingDirection, cleanedText: cleanedText10 } = extractFacingDirection(cleanedText9);
+  const { digitCards, cleanedText } = extractDigitCards(cleanedText10);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2097,7 +2112,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5509,6 +5524,40 @@ function verifyWhichExpressionComputesMC(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : expectedLetter };
 }
 
+// Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
+// 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1} ->
+// enumerate all valid 2-digit numbers (leading digit ≠ 0) formable from
+// picking 2 of the given cards, filter to composite only, take the
+// max/min per the question's own wording.
+function isCompositeNumber(n) {
+  if (n < 4) return false;
+  for (let i = 2; i * i <= n; i++) if (n % i === 0) return true;
+  return false;
+}
+function verifyDigitCardExtremeComposite(digitCards, printedQuestion, studentAnswer) {
+  if (!digitCards) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/兩位的合成數/.test(printed)) return { correct: null, correctAnswer: "" };
+  const wantMax = /最大/.test(printed), wantMin = /最小/.test(printed);
+  if (wantMax === wantMin) return { correct: null, correctAnswer: "" };
+  let best = null;
+  for (let i = 0; i < digitCards.length; i++) {
+    for (let j = 0; j < digitCards.length; j++) {
+      if (i === j) continue;
+      const tens = digitCards[i], units = digitCards[j];
+      if (tens === 0) continue;
+      const n = tens * 10 + units;
+      if (!isCompositeNumber(n)) continue;
+      if (best === null || (wantMax ? n > best : n < best)) best = n;
+    }
+  }
+  if (best === null) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === best, correctAnswer: studentNum === best ? "" : String(best) };
+}
+
 function verifyListFactors(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -6829,6 +6878,12 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyFacingDirectionQuery(item.facingDirection, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 153 (2026-09-28): digit-card combinatorial construction.
+    name: "digit_card_extreme_composite",
+    detect: (item) => !!item.digitCards && /兩位的合成數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDigitCardExtremeComposite(item.digitCards, item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 119 (2026-09-28): change from a 2-item purchase, prices
     // stated inline in the sentence (not a printed price table).
     name: "change_from_two_item_purchase",
@@ -7851,7 +7906,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -7915,6 +7970,11 @@ async function handleMark(request, env) {
     // pattern as locationGrid above.
     if (qwenOutcome.facingDirection) {
       qwenOutcome.items.forEach((item) => { item.facingDirection = qwenOutcome.facingDirection; });
+    }
+    // Digit-card combinatorial construction: page-level shared context,
+    // same pattern as facingDirection above.
+    if (qwenOutcome.digitCards) {
+      qwenOutcome.items.forEach((item) => { item.digitCards = qwenOutcome.digitCards; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -8695,6 +8755,8 @@ export {
   verifyLocationGridQuery,
   extractFacingDirection,
   verifyFacingDirectionQuery,
+  extractDigitCards,
+  verifyDigitCardExtremeComposite,
   verifyChangeFromTwoItemPurchase,
   verifyResourceConstrainedMax,
   verifyChainedTwoStepBlank,

@@ -325,3 +325,20 @@ test("extractFacingDirection: returns null when no marker line is present", () =
   assert.equal(facingDirection, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 153 (2026-09-28): DIGIT_CARDS marker extraction. Real citation:
+// digit cards {9,0,7,1}.
+test("extractDigitCards: parses a real digit-card line and strips it from the item text", () => {
+  const raw = "DIGIT_CARDS: 9,0,7,1\n21=利用以下的數卡，選出其中2張組成一個兩位的合成數，這個數最大是多少？|91";
+  const { digitCards, cleanedText } = mod.extractDigitCards(raw);
+  assert.deepEqual(digitCards, [9, 0, 7, 1]);
+  assert.doesNotMatch(cleanedText, /DIGIT_CARDS/);
+  assert.match(cleanedText, /利用以下的數卡/);
+});
+
+test("extractDigitCards: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { digitCards, cleanedText } = mod.extractDigitCards(raw);
+  assert.equal(digitCards, null);
+  assert.equal(cleanedText, raw);
+});

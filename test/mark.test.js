@@ -2843,3 +2843,22 @@ test("which_expression_computes_mc handler registered", async () => {
   const worker = await import(TMP);
   assert.ok(worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "which_expression_computes_mc"));
 });
+
+// Ticket 153 (2026-09-28, real citation: "利用以下的數卡，選出其中2張
+// 組成一個兩位的合成數，這個數最大是多少？" digit cards {9,0,7,1}).
+test("verifyDigitCardExtremeComposite: real citation", async () => {
+  const worker = await import(TMP);
+  const printed = "利用以下的數卡，選出其中2張組成一個兩位的合成數，這個數最大是多少？";
+  const r = worker.verifyDigitCardExtremeComposite([9, 0, 7, 1], printed, "91");
+  assert.equal(r.correct, true, "91=7*13 is composite, and it's the largest 2-digit composite formable from {9,0,7,1} with leading digit != 0");
+  const wrong = worker.verifyDigitCardExtremeComposite([9, 0, 7, 1], printed, "97");
+  assert.equal(wrong.correct, false, "97 is prime, not composite");
+});
+test("digit_card_extreme_composite handler registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "digit_card_extreme_composite");
+  assert.ok(handler);
+  const item = { printedQuestion: "利用以下的數卡，選出其中2張組成一個兩位的合成數，這個數最大是多少？", studentAnswer: "91", digitCards: [9, 0, 7, 1] };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+});
