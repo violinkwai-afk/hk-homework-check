@@ -3839,6 +3839,36 @@ function verifyReverseShapeFromFaceProperties(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : names[names.length - 1] };
 }
 
+// Ticket 78/89 (2026-09-28, real citations across two workbooks):
+// "N in front of me, what position am I" -- position = N + 1. Also
+// covers the paired form "N in front of me, X is Kth AND LAST, who am
+// I/what's the total" (real example: "5 people in front of me. Mr.
+// Cheung is 12th and last." -> position = 5+1 = 6th; total = 12, since
+// "Kth and last" directly states the group size). English-only for now
+// (no real Chinese-ordinal citation collected for this exact shape) --
+// covers both "7th"-style and spelled-out ordinal words since a real MC
+// example used "Sixth/Seventh/Eighth/Ninth".
+const ORDINAL_WORDS_EN = ["zeroth", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth"];
+function parseOrdinalToNumber(text) {
+  const s = String(text || "").trim().toLowerCase();
+  const m = /^(\d+)(?:st|nd|rd|th)?$/.exec(s);
+  if (m) return Number(m[1]);
+  const idx = ORDINAL_WORDS_EN.indexOf(s);
+  return idx > 0 ? idx : NaN;
+}
+
+function verifyOrdinalFromCountInFront(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const frontMatch = printed.match(/(\d+)\s*(?:cars?|people|students?|children)\b.{0,15}in front/i);
+  if (!frontMatch) return { correct: null, correctAnswer: "" };
+  const expected = Number(frontMatch[1]) + 1;
+  const studentNum = parseOrdinalToNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -5459,6 +5489,19 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyReverseShapeFromFaceProperties(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 78/89 (2026-09-28): "N in front of me, what position" --
+    // detect() requires both the count-in-front phrase AND a parseable
+    // ordinal answer (numeric/Nth/spelled-out), so a bare wrong-shaped
+    // answer correctly falls through instead of matching then declining.
+    name: "ordinal_from_count_in_front",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/\d+\s*(?:cars?|people|students?|children)\b.{0,15}in front/i.test(printed)) return false;
+      return !Number.isNaN(parseOrdinalToNumber(item.studentAnswer));
+    },
+    verify: (item) => verifyOrdinalFromCountInFront(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "math_equation",
     detect: (item) => detectSubject(item.printedQuestion, item.studentAnswer) === "math",
     verify: (item) => ({ ...verifyMath(item.printedQuestion, item.studentAnswer) }),
@@ -6653,6 +6696,8 @@ export {
   extractPictogramData,
   verifyPictogramQuery,
   verifyReverseShapeFromFaceProperties,
+  parseOrdinalToNumber,
+  verifyOrdinalFromCountInFront,
   readClockHandsFromPixels,
   parseTimeAnswer,
   verifyClockReading,

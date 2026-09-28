@@ -1794,3 +1794,35 @@ test("reverse_shape_from_face_properties handler: registered and reachable", asy
   assert.equal(handler.verify(item).correct, true);
   assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
 });
+
+// Ticket 78/89 (2026-09-28, real citations: "6 cars in front of his car.
+// His car is the ___ car." -> 7th; MC "8 people in front of her.
+// Position? A.Sixth B.Seventh C.Eighth D.Ninth" -> Ninth).
+test("verifyOrdinalFromCountInFront: position = count-in-front + 1, numeric and spelled-out forms", async () => {
+  const worker = await import(TMP);
+  const r1 = worker.verifyOrdinalFromCountInFront("6 cars in front of his car. His car is the ___ car.", "7");
+  assert.equal(r1.correct, true);
+  const r2 = worker.verifyOrdinalFromCountInFront("8 people in front of her. What is her position?", "Ninth");
+  assert.equal(r2.correct, true);
+  const wrong = worker.verifyOrdinalFromCountInFront("6 cars in front of his car. His car is the ___ car.", "6th");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "7");
+});
+
+test("parseOrdinalToNumber: numeric, Nth-suffixed, and spelled-out ordinal words", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.parseOrdinalToNumber("7"), 7);
+  assert.equal(worker.parseOrdinalToNumber("7th"), 7);
+  assert.equal(worker.parseOrdinalToNumber("Seventh"), 7);
+  assert.ok(Number.isNaN(worker.parseOrdinalToNumber("cylinder")));
+});
+
+test("ordinal_from_count_in_front handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "ordinal_from_count_in_front");
+  assert.ok(handler, "ordinal_from_count_in_front handler must be registered");
+  const item = { printedQuestion: "6 cars in front of his car. His car is the ___ car.", studentAnswer: "7" };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});
