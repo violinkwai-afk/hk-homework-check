@@ -253,3 +253,20 @@ test("extractPictogramData: returns null when no marker line is present, doesn't
   assert.equal(pictogramData, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 134 (2026-09-28): CALENDAR_GRID marker extraction. Real
+// citation: a printed "五月" calendar, day 1 falling on Saturday, 31 days.
+test("extractCalendarGrid: parses a real calendar grid line and strips it from the item text", () => {
+  const raw = "CALENDAR_GRID: 月份=5;首日星期=六;日數=31\n31=五月有___個星期一。|5";
+  const { calendarGrid, cleanedText } = mod.extractCalendarGrid(raw);
+  assert.deepEqual(calendarGrid, { month: 5, firstWeekday: 6, daysInMonth: 31 });
+  assert.doesNotMatch(cleanedText, /CALENDAR_GRID/);
+  assert.match(cleanedText, /五月有/);
+});
+
+test("extractCalendarGrid: returns null when no marker line is present", () => {
+  const raw = "1=9+4=|13";
+  const { calendarGrid, cleanedText } = mod.extractCalendarGrid(raw);
+  assert.equal(calendarGrid, null);
+  assert.equal(cleanedText, raw);
+});

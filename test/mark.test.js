@@ -2121,3 +2121,65 @@ test("matching_value_expression_set_mc handler: registered and reachable", async
   assert.equal(handler.detect(item), true);
   assert.equal(handler.verify(item).correct, true);
 });
+
+// Ticket 134 (2026-09-28, real citations from a printed "五月" calendar
+// grid: day 1 = Saturday, 31 days). All 4 real question shapes computed
+// and cross-checked by hand against the actual printed grid before
+// writing these tests: Mondays fall on 3/10/17/24/31 (5 of them); day 19
+// is a Wednesday; the 4th Saturday is the 22nd; June 1 (day 32) is a Tuesday.
+const MAY_CALENDAR = { month: 5, firstWeekday: 6, daysInMonth: 31 }; // 六=Saturday
+
+test("verifyCalendarGridQuery: shape 1 -- count of a named weekday in the month", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCalendarGridQuery(MAY_CALENDAR, "五月有___個星期一。", "5");
+  assert.equal(r.correct, true, "Mondays: 3,10,17,24,31 = 5");
+  const wrong = worker.verifyCalendarGridQuery(MAY_CALENDAR, "五月有___個星期一。", "4");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "5");
+});
+
+test("verifyCalendarGridQuery: shape 2 -- a specific day (Chinese numeral) -> weekday name", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCalendarGridQuery(MAY_CALENDAR, "小美在五月十九日生日，那天是星期___。", "三");
+  assert.equal(r.correct, true, "day 19 is a Wednesday (三)");
+  const wrong = worker.verifyCalendarGridQuery(MAY_CALENDAR, "小美在五月十九日生日，那天是星期___。", "二");
+  assert.equal(wrong.correct, false);
+});
+
+test("verifyCalendarGridQuery: shape 3 -- Kth occurrence of a weekday -> which day", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCalendarGridQuery(MAY_CALENDAR, "小美在第四個星期六參加義工服務。那天是___月___日。", "5月22日");
+  assert.equal(r.correct, true, "1st Sat=1, 2nd=8, 3rd=15, 4th=22");
+});
+
+test("verifyCalendarGridQuery: shape 4 -- next month's day 1 -> weekday name", async () => {
+  const worker = await import(TMP);
+  const r = worker.verifyCalendarGridQuery(MAY_CALENDAR, "6月的第一天是星期___", "二");
+  assert.equal(r.correct, true, "day 32 (June 1) = Tuesday");
+});
+
+test("verifyCalendarGridQuery: declines (null) with no calendarGrid or unmatched phrasing", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.verifyCalendarGridQuery(null, "五月有___個星期一。", "5").correct, null);
+  assert.equal(worker.verifyCalendarGridQuery(MAY_CALENDAR, "9 + 4 = ?", "13").correct, null);
+});
+
+test("calendar_grid_query handler: registered and reachable", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "calendar_grid_query");
+  assert.ok(handler);
+  const item = { printedQuestion: "五月有___個星期一。", studentAnswer: "5", calendarGrid: MAY_CALENDAR };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9 + 4 = ?", studentAnswer: "13" }), false);
+});
+
+// chineseNumeralToArabicSmall: needed for shape 2's "十九日" citation.
+test("chineseNumeralToArabicSmall: parses 1-99 Chinese numerals", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.chineseNumeralToArabicSmall("十九"), 19);
+  assert.equal(worker.chineseNumeralToArabicSmall("二十"), 20);
+  assert.equal(worker.chineseNumeralToArabicSmall("二十一"), 21);
+  assert.equal(worker.chineseNumeralToArabicSmall("五"), 5);
+  assert.equal(worker.chineseNumeralToArabicSmall("十"), 10);
+});

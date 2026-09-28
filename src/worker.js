@@ -1764,6 +1764,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁有一個「象形圖」(pictogram，用一個個小圖示代表數量，例如"每個圖示代表1小時"或者"每個圖代表1朵"，然後逐個類別/日子擺幾多個圖示)**，喺回覆最開始加一行「PICTOGRAM: 單位=<每個圖示代表幾多>;類別1=數量1;類別2=數量2;...」（類別同數量之間用"="，唔同類別之間用";"分隔），列晒成個象形圖每一個類別實際有幾多個圖示。如果冇呢類象形圖就完全唔使加呢行。
 
+**如果呢頁印刷咗一個完整月份嘅日曆表格(有日一二三四五六做欄標題,逐個格仔填住日子數字)**，喺回覆最開始加一行「CALENDAR_GRID: 月份=<幾月>;首日星期=<日/一/二/三/四/五/六,即係呢個月1號係星期幾>;日數=<呢個月總共幾多日>」。如果冇呢類完整日曆表格就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1865,6 +1867,32 @@ function extractPictogramData(text) {
     else counts[name] = value;
   }
   return { pictogramData: Object.keys(counts).length ? { unit, counts } : null, cleanedText };
+}
+
+// Ticket 134 (2026-09-28, real citation: a printed "五月" calendar grid,
+// day 1 falling on Saturday, 31 days -- confirmed the FIRST complete
+// real example of this marker after it was proposed but unbuilt since
+// Ticket 97): extracts month/firstWeekday/daysInMonth so every
+// day-of-week question about the calendar becomes plain modular
+// arithmetic instead of needing to OCR every individual cell.
+const WEEKDAY_NAMES_ZH = ["日", "一", "二", "三", "四", "五", "六"];
+function extractCalendarGrid(text) {
+  const m = /^CALENDAR_GRID:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^CALENDAR_GRID:.*$/gm, "");
+  if (!m) return { calendarGrid: null, cleanedText };
+  const parts = m[1].split(";").map((s) => s.trim()).filter(Boolean);
+  let month = null, firstWeekday = null, daysInMonth = null;
+  for (const part of parts) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const value = part.slice(eqIdx + 1).trim();
+    if (key === "月份") month = Number(value);
+    else if (key === "首日星期") firstWeekday = WEEKDAY_NAMES_ZH.indexOf(value);
+    else if (key === "日數") daysInMonth = Number(value);
+  }
+  const valid = Number.isFinite(month) && firstWeekday !== null && firstWeekday >= 0 && Number.isFinite(daysInMonth) && daysInMonth > 0;
+  return { calendarGrid: valid ? { month, firstWeekday, daysInMonth } : null, cleanedText };
 }
 
 // Shared by literal_keyword_mc (and any future MC-options consumer):
@@ -1980,7 +2008,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { passageText, cleanedText: cleanedText3 } = extractPassageText(cleanedText2);
   const { wordBank, cleanedText: cleanedText4 } = extractWordBank(cleanedText3);
   const { puzzles: sudokuPuzzles, cleanedText: cleanedText5 } = extractSudokuPuzzles(cleanedText4);
-  const { pictogramData, cleanedText } = extractPictogramData(cleanedText5);
+  const { pictogramData, cleanedText: cleanedText6 } = extractPictogramData(cleanedText5);
+  const { calendarGrid, cleanedText } = extractCalendarGrid(cleanedText6);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -1988,7 +2017,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -3765,6 +3794,103 @@ function verifyPictogramQuery(pictogramData, printedQuestion, studentAnswer) {
     if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
     const expected = Object.values(counts).reduce((a, b) => a + b, 0) * unit;
     return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
+// Ticket 134 (2026-09-28, real citations from a printed "五月" calendar
+// grid, day 1 = Saturday, 31 days): calendar-grid day-of-week reasoning
+// -- once the grid is reduced to {month, firstWeekday, daysInMonth}, all
+// 4 real question shapes below become plain modular arithmetic. Uses
+// the same Sunday=0..Saturday=6 convention as WEEKDAY_NAMES_ZH (matches
+// this project's already-documented HK-curriculum week-starts-Sunday
+// convention, Ticket 97/107).
+// Small Chinese-numeral parser (1-99 only -- sufficient for calendar day
+// numbers), since no existing helper covers this range (the existing
+// chinese_large_numeral_to_arabic handler is for large 萬/億-scale
+// numerals, a different problem). Handles 十九=19, 二十=20, 二十一=21,
+// and bare 一..九.
+const CJK_DIGITS = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9 };
+function chineseNumeralToArabicSmall(text) {
+  const s = String(text || "").trim();
+  if (!s) return null;
+  if (s === "十") return 10;
+  const tenIdx = s.indexOf("十");
+  if (tenIdx === -1) return CJK_DIGITS[s] ?? null;
+  const tensDigit = tenIdx === 0 ? 1 : CJK_DIGITS[s[0]];
+  const unitsPart = s.slice(tenIdx + 1);
+  const unitsDigit = unitsPart ? (CJK_DIGITS[unitsPart] ?? null) : 0;
+  if (tensDigit == null || unitsDigit == null) return null;
+  return tensDigit * 10 + unitsDigit;
+}
+
+function weekdayOfDay(calendarGrid, day) {
+  return ((calendarGrid.firstWeekday + (day - 1)) % 7 + 7) % 7;
+}
+
+function verifyCalendarGridQuery(calendarGrid, printedQuestion, studentAnswer) {
+  if (!calendarGrid) return { correct: null, correctAnswer: "" };
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const { month, daysInMonth } = calendarGrid;
+
+  // Shape 1: "五月有___個星期一" -- count occurrences of a named weekday.
+  let m = printed.match(/有\s*_{0,3}\s*個星期([日一二三四五六])/);
+  if (m) {
+    const targetWeekday = WEEKDAY_NAMES_ZH.indexOf(m[1]);
+    let count = 0;
+    for (let d = 1; d <= daysInMonth; d++) if (weekdayOfDay(calendarGrid, d) === targetWeekday) count++;
+    const studentNum = parseSignedStudentNumber(answer);
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    return { correct: studentNum === count, correctAnswer: studentNum === count ? "" : String(count) };
+  }
+
+  // Shape 3: "第四個星期六...那天是___月___日" -- Kth occurrence of a
+  // named weekday -> which day. Checked BEFORE shape 2 since both
+  // mention "星期X", but this one asks for a DAY, not a weekday name.
+  m = printed.match(/第([一二三四五六七八九十])個星期([日一二三四五六])/);
+  if (m && /月.{0,5}日/.test(printed)) {
+    const kMap = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
+    const k = kMap[m[1]];
+    const targetWeekday = WEEKDAY_NAMES_ZH.indexOf(m[2]);
+    let occurrence = 0, foundDay = null;
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (weekdayOfDay(calendarGrid, d) === targetWeekday) {
+        occurrence++;
+        if (occurrence === k) { foundDay = d; break; }
+      }
+    }
+    if (foundDay === null) return { correct: null, correctAnswer: "" };
+    const nums = (answer.match(/\d+/g) || []).map(Number);
+    const correct = nums.includes(month) && nums.includes(foundDay);
+    return { correct, correctAnswer: correct ? "" : `${month}月${foundDay}日` };
+  }
+
+  // Shape 4: a DIFFERENT month than the one shown is named, asking for
+  // day 1's weekday -- only supported for exactly next-month (the only
+  // real citation: "6月的第一天是星期___" against a May grid).
+  const monthMatch = printed.match(/(\d+)\s*月.{0,10}第一天.{0,5}星期/);
+  if (monthMatch && Number(monthMatch[1]) === month + 1) {
+    const targetWeekday = weekdayOfDay(calendarGrid, daysInMonth + 1);
+    const correct = answer === WEEKDAY_NAMES_ZH[targetWeekday];
+    return { correct, correctAnswer: correct ? "" : WEEKDAY_NAMES_ZH[targetWeekday] };
+  }
+
+  // Shape 2: "十九日...那天是星期___" -- a specific day of THIS month ->
+  // weekday name (numeral or spelled-out Chinese day number, real
+  // citation: "五月十九日"). Checked last since shapes 3/4 are more
+  // specific sub-patterns that also happen to mention a day number.
+  m = printed.match(/(\d+)\s*日.{0,15}是星期/);
+  const cjkDayMatch = printed.match(/([一二三四五六七八九十]+)日.{0,15}是星期/);
+  let targetDay = null;
+  if (m) targetDay = Number(m[1]);
+  else if (cjkDayMatch) targetDay = chineseNumeralToArabicSmall(cjkDayMatch[1]);
+  if (targetDay && targetDay >= 1 && targetDay <= daysInMonth) {
+    const targetWeekday = weekdayOfDay(calendarGrid, targetDay);
+    const correct = answer === WEEKDAY_NAMES_ZH[targetWeekday];
+    return { correct, correctAnswer: correct ? "" : WEEKDAY_NAMES_ZH[targetWeekday] };
   }
 
   return { correct: null, correctAnswer: "" };
@@ -5716,6 +5842,17 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyPictogramQuery(item.pictogramData, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 134 (2026-09-28): calendar-grid day-of-week reasoning, same
+    // page-level-shared-context pattern as pictogram_data_query above.
+    name: "calendar_grid_query",
+    detect: (item) => {
+      if (!item.calendarGrid || typeof item.calendarGrid !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /星期/.test(printed);
+    },
+    verify: (item) => verifyCalendarGridQuery(item.calendarGrid, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -6551,7 +6688,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -6595,6 +6732,11 @@ async function handleMark(request, env) {
     // entry (pictogram_data_query), so a direct item attachment is enough.
     if (qwenOutcome.pictogramData) {
       qwenOutcome.items.forEach((item) => { item.pictogramData = qwenOutcome.pictogramData; });
+    }
+    // Ticket 134: calendar grid is page-level shared context, same
+    // pattern as pictogramData above.
+    if (qwenOutcome.calendarGrid) {
+      qwenOutcome.items.forEach((item) => { item.calendarGrid = qwenOutcome.calendarGrid; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -7367,6 +7509,9 @@ export {
   buildTierVGuidance,
   extractPictogramData,
   verifyPictogramQuery,
+  extractCalendarGrid,
+  verifyCalendarGridQuery,
+  chineseNumeralToArabicSmall,
   verifyReverseShapeFromFaceProperties,
   parseOrdinalToNumber,
   verifyOrdinalFromCountInFront,
