@@ -235,3 +235,21 @@ test("extractSudokuPuzzles: a malformed line (wrong cell count) is silently drop
   const { puzzles } = mod.extractSudokuPuzzles(raw);
   assert.deepEqual(puzzles, []);
 });
+
+// Ticket 68 (2026-09-28): pictogram (象形圖) marker extraction. Real
+// citations: P2 exam Q38-42 (days-of-week hours-online chart), P3 exam
+// Q36 (flower-count-in-a-vase chart) -- both found independently.
+test("extractPictogramData: extracts unit + per-category counts, strips the marker line", () => {
+  const raw = "PICTOGRAM: 單位=1;星期日=5;星期一=0;星期二=1\n1=How many days had zero hours?|2";
+  const { pictogramData, cleanedText } = mod.extractPictogramData(raw);
+  assert.deepEqual(pictogramData, { unit: 1, counts: { "星期日": 5, "星期一": 0, "星期二": 1 } });
+  assert.doesNotMatch(cleanedText, /PICTOGRAM/);
+  assert.match(cleanedText, /How many days had zero hours/);
+});
+
+test("extractPictogramData: returns null when no marker line is present, doesn't touch normal text", () => {
+  const raw = "1=9+4=|13";
+  const { pictogramData, cleanedText } = mod.extractPictogramData(raw);
+  assert.equal(pictogramData, null);
+  assert.equal(cleanedText, raw);
+});

@@ -1606,3 +1606,82 @@ test("buildAiFallbackPrompt: includes calendar reference blocks only when the qu
   assert.doesNotMatch(unrelated, /常年\(common year\)/);
   assert.doesNotMatch(unrelated, /二月28日/);
 });
+
+// Ticket 68 (2026-09-28): pictogram (象形圖) data-query verifier. Found
+// independently in two real materials -- a P2 exam (days-of-week hours
+// online) and a P3 exam (flower counts in a vase) -- both asking count/
+// max/min/difference/ratio/total questions against an icon chart. Uses
+// clean self-built numbers (no ties) rather than the real exam's exact
+// counts, since re-reading the source image precisely enough to be sure
+// of every icon count wasn't practical -- the QUESTION SHAPES/phrasing
+// below are real quotes, the numbers are a safe synthetic stand-in.
+test("verifyPictogramQuery: shape 1 -- count of zero-value categories", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "星期日": 5, "星期一": 0, "星期二": 1, "星期三": 0 } };
+  const r = worker.verifyPictogramQuery(data, "希敏上星期有___天沒有上網。", "2");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyPictogramQuery(data, "希敏上星期有___天沒有上網。", "1");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "2");
+});
+
+test("verifyPictogramQuery: shape 2 -- max/min category name, declines on a tie", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "星期日": 5, "星期一": 2, "星期二": 1 } };
+  const r = worker.verifyPictogramQuery(data, "希敏在上星期___上網所用的時間是最多的。", "星期日");
+  assert.equal(r.correct, true);
+  const wrong = worker.verifyPictogramQuery(data, "希敏在上星期___上網所用的時間是最多的。", "星期一");
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.correctAnswer, "星期日");
+  const tie = { unit: 1, counts: { "星期日": 5, "星期六": 5, "星期二": 1 } };
+  const declined = worker.verifyPictogramQuery(tie, "邊日最多?", "星期日");
+  assert.equal(declined.correct, null, "a genuine tie must decline, not guess");
+});
+
+test("verifyPictogramQuery: shape 3 -- sum of two named categories", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "貓形花": 4, "玫瑰花": 3, "菊花": 2 } };
+  const r = worker.verifyPictogramQuery(data, "貓形花和玫瑰花共有___朵。", "7");
+  assert.equal(r.correct, true);
+});
+
+test("verifyPictogramQuery: shape 4 -- difference between two named categories (unit-scaled)", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 2, counts: { "星期六": 5, "星期四": 3 } };
+  const r = worker.verifyPictogramQuery(data, "希敏在上星期六上網所用的時間比上星期四多幾多小時。", "4");
+  assert.equal(r.correct, true, "(5-3) icons * unit=2 hours each = 4 hours");
+});
+
+test("verifyPictogramQuery: shape 5 -- ratio between two named categories, declines when not evenly divisible", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "星期六": 6, "星期四": 3 } };
+  const r = worker.verifyPictogramQuery(data, "希敏在上星期六上網所用的時間是上星期四的___倍。", "2");
+  assert.equal(r.correct, true);
+  const uneven = { unit: 1, counts: { "星期六": 5, "星期四": 3 } };
+  const declined = worker.verifyPictogramQuery(uneven, "星期六是星期四的___倍。", "2");
+  assert.equal(declined.correct, null, "5/3 isn't a whole number -- must decline rather than round/guess");
+});
+
+test("verifyPictogramQuery: shape 6 -- grand total across all categories, no category named", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "貓形花": 4, "玫瑰花": 3, "菊花": 2 } };
+  const r = worker.verifyPictogramQuery(data, "花瓶內共有花___朵。", "9");
+  assert.equal(r.correct, true);
+});
+
+test("verifyPictogramQuery: declines (null) when the question doesn't match any known shape", async () => {
+  const worker = await import(TMP);
+  const data = { unit: 1, counts: { "貓形花": 4, "玫瑰花": 3 } };
+  const r = worker.verifyPictogramQuery(data, "貓形花係咪紅色嘅?", "係");
+  assert.equal(r.correct, null);
+});
+
+test("pictogram_data_query handler: registered and reachable via QUESTION_TYPE_HANDLERS", async () => {
+  const worker = await import(TMP);
+  const handler = worker.QUESTION_TYPE_HANDLERS.find((h) => h.name === "pictogram_data_query");
+  assert.ok(handler, "pictogram_data_query handler must be registered");
+  const item = { printedQuestion: "花瓶內共有花___朵。", studentAnswer: "9", pictogramData: { unit: 1, counts: { "貓形花": 4, "玫瑰花": 3, "菊花": 2 } } };
+  assert.equal(handler.detect(item), true);
+  assert.equal(handler.verify(item).correct, true);
+  assert.equal(handler.detect({ printedQuestion: "9+4=", studentAnswer: "13" }), false, "no pictogramData on the item must not match");
+});

@@ -1762,6 +1762,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁有印刷咗一個「詞語庫」（一組可以填嘅詞語/短語,規定每個淨係用一次,例如"a cup of/a bar of/a bowl of/a piece of/a basket of/a packet of"）**，喺回覆最開始加一行「WORD_BANK: 詞1;詞2;詞3;...」，列晒成組詞語庫嘅每一個詞（用";"分隔）。如果冇呢類詞語庫就完全唔使加呢行。
 
+**如果呢頁有一個「象形圖」(pictogram，用一個個小圖示代表數量，例如"每個圖示代表1小時"或者"每個圖代表1朵"，然後逐個類別/日子擺幾多個圖示)**，喺回覆最開始加一行「PICTOGRAM: 單位=<每個圖示代表幾多>;類別1=數量1;類別2=數量2;...」（類別同數量之間用"="，唔同類別之間用";"分隔），列晒成個象形圖每一個類別實際有幾多個圖示。如果冇呢類象形圖就完全唔使加呢行。
+
 **如果印刷題目入面見到「Sudoku」呢個字，同時見到格仔大小提示（例如"4x4"）係4x4嘅**，呢題唔使跟返平時「題號=印刷題目|答案」嘅格式，改用「SUDOKU: 題號|印刷格仔16個|學生完整填晒嘅格仔16個」（一共兩條"|"，分開三部分）——兩組16個數字都係由左至右、由上至下（第一行4個、第二行4個、如此類推），**同一組入面**嘅16個數字之間用","分隔，空格用"0"代表。「印刷格仔」係原本印刷咗嘅提示數字（冇印刷嘅位填0）；「學生完整填晒嘅格仔」係連埋印刷同學生手寫，成個4x4已經填晒嘅完整版本（如果學生仲有位冇填，嗰格都填0）。如果張相見到「Sudoku」但格仔大小唔係4x4（例如3x3），就完全唔使理呢題，當冇見過（因為而家淨係識判斷4x4）。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1838,6 +1840,31 @@ function extractSudokuPuzzles(text) {
     return "";
   });
   return { puzzles, cleanedText };
+}
+
+// Ticket 68 (2026-09-28, found independently in two separate real
+// materials -- a P2 exam and a P3 exam -- both asking count/max/min/
+// difference/ratio/total questions against a pictogram): extracts the
+// icon-count-per-category shared context so all of those become plain
+// arithmetic instead of a "must look at the image" judgement call. Same
+// marker-line pattern as extractPriceTable.
+function extractPictogramData(text) {
+  const m = /^PICTOGRAM:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PICTOGRAM:.*$/gm, "");
+  if (!m) return { pictogramData: null, cleanedText };
+  const parts = m[1].split(";").map((s) => s.trim()).filter(Boolean);
+  let unit = 1;
+  const counts = {};
+  for (const part of parts) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = part.slice(0, eqIdx).trim();
+    const value = Number(part.slice(eqIdx + 1).trim());
+    if (!Number.isFinite(value)) continue;
+    if (name === "單位") unit = value;
+    else counts[name] = value;
+  }
+  return { pictogramData: Object.keys(counts).length ? { unit, counts } : null, cleanedText };
 }
 
 // Shared by literal_keyword_mc (and any future MC-options consumer):
@@ -1952,7 +1979,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { priceTable, cleanedText: cleanedText2 } = extractPriceTable(cleanedText1);
   const { passageText, cleanedText: cleanedText3 } = extractPassageText(cleanedText2);
   const { wordBank, cleanedText: cleanedText4 } = extractWordBank(cleanedText3);
-  const { puzzles: sudokuPuzzles, cleanedText } = extractSudokuPuzzles(cleanedText4);
+  const { puzzles: sudokuPuzzles, cleanedText: cleanedText5 } = extractSudokuPuzzles(cleanedText4);
+  const { pictogramData, cleanedText } = extractPictogramData(cleanedText5);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -1960,7 +1988,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -3636,6 +3664,76 @@ function verifyPriceTableLookup(priceTable, printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Pictogram (象形圖) data query -- Ticket 68, found independently in TWO
+// real materials (a P2 exam and a P3 exam), both asking count/max/min/
+// difference/ratio/total questions against an icon-count-per-category
+// chart. Six real, narrow shapes only; declines (never guesses) whenever
+// the phrasing doesn't clearly match one of them, or when max/min is a
+// tie -- same discipline as verifyPriceTableLookup above.
+function verifyPictogramQuery(pictogramData, printedQuestion, studentAnswer) {
+  if (!pictogramData || !pictogramData.counts) return { correct: null, correctAnswer: "" };
+  const { unit, counts } = pictogramData;
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const categoryNames = Object.keys(counts);
+  const mentioned = categoryNames.filter((n) => printed.includes(n));
+  const studentNum = parseSignedStudentNumber(answer);
+
+  // Shape 1: how many categories have a zero count (real example: "希敏
+  // 上星期有___天沒有上網").
+  if (/沒有|冇/.test(printed) || (/how many/i.test(printed) && /zero|none/i.test(printed))) {
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const zeroCount = Object.values(counts).filter((c) => c === 0).length;
+    return { correct: studentNum === zeroCount, correctAnswer: studentNum === zeroCount ? "" : String(zeroCount) };
+  }
+
+  // Shape 2: which category has the max/min value -- the answer is a
+  // NAME, not a number. Declines on a tie rather than guessing.
+  const isMax = /最多|most|greatest/i.test(printed);
+  const isMin = /最少|least|fewest|smallest/i.test(printed);
+  if (isMax || isMin) {
+    const entries = Object.entries(counts);
+    const target = isMax ? Math.max(...entries.map(([, v]) => v)) : Math.min(...entries.map(([, v]) => v));
+    const winners = entries.filter(([, v]) => v === target).map(([k]) => k);
+    if (winners.length !== 1) return { correct: null, correctAnswer: "" };
+    const expectedName = winners[0];
+    const correct = answer.includes(expectedName) || expectedName.includes(answer);
+    return { correct, correctAnswer: correct ? "" : expectedName };
+  }
+
+  // Shapes 3-5 all need exactly TWO categories explicitly named in the
+  // printed question text.
+  if (mentioned.length === 2) {
+    const [a, b] = mentioned;
+    const va = counts[a], vb = counts[b];
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    if (/倍|times/i.test(printed)) {
+      if (vb === 0 || va % vb !== 0) return { correct: null, correctAnswer: "" };
+      const expected = va / vb;
+      return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+    }
+    if (/多|少|more|fewer|less/i.test(printed)) {
+      const expected = Math.abs(va - vb) * unit;
+      return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+    }
+    if (/共有|altogether|total/i.test(printed)) {
+      const expected = (va + vb) * unit;
+      return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+    }
+    return { correct: null, correctAnswer: "" };
+  }
+
+  // Shape 6: grand total across ALL categories -- no specific category named.
+  if (mentioned.length === 0 && /共|altogether|total/i.test(printed)) {
+    if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+    const expected = Object.values(counts).reduce((a, b) => a + b, 0) * unit;
+    return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Word problem: total ÷ quantity = per-unit amount (real example:
 // `p2_math_test_2023_2024.pdf` p1 Q12 -- "媽媽用32元買了8盒豆漿，每盒
 // 豆漿售___元。" -> 32÷8=4). Same narrow-trigger discipline as
@@ -4921,6 +5019,23 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyPriceTableLookup(item.priceTable, item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 68 (2026-09-28): same page-level-shared-context pattern as
+    // price_table_lookup above, for pictogram (象形圖) data. detect()
+    // requires the pictogram data to actually be present on this item
+    // AND the question to match one of verifyPictogramQuery's 6 known
+    // shapes -- narrower detect() here would be redundant since the
+    // verify function already declines (returns null) on anything else,
+    // but checking a cheap keyword up front avoids running the handler
+    // on every unrelated item on a pictogram page.
+    name: "pictogram_data_query",
+    detect: (item) => {
+      if (!item.pictogramData || typeof item.pictogramData !== "object" || !item.pictogramData.counts) return false;
+      const printed = String(item.printedQuestion || "");
+      return /最多|最少|most|least|greatest|fewest|smallest|沒有|冇|共有|共|altogether|total|倍|times/i.test(printed);
+    },
+    verify: (item) => verifyPictogramQuery(item.pictogramData, item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -5602,7 +5717,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -5640,6 +5755,12 @@ async function handleMark(request, env) {
     // below, which needs the bank list directly on the page result too.
     if (qwenOutcome.wordBank) {
       qwenOutcome.items.forEach((item) => { item.wordBank = qwenOutcome.wordBank; });
+    }
+    // Ticket 68: pictogram data is page-level shared context, same
+    // pattern as priceTable -- consumed via a per-item QUESTION_TYPE_HANDLERS
+    // entry (pictogram_data_query), so a direct item attachment is enough.
+    if (qwenOutcome.pictogramData) {
+      qwenOutcome.items.forEach((item) => { item.pictogramData = qwenOutcome.pictogramData; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -6408,6 +6529,8 @@ export {
   mentionsYearType,
   mentionsMonthLength,
   buildTierVGuidance,
+  extractPictogramData,
+  verifyPictogramQuery,
   readClockHandsFromPixels,
   parseTimeAnswer,
   verifyClockReading,
