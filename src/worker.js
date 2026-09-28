@@ -130,17 +130,6 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
-    // TEMPORARY debug route (2026-09-28) -- one-use, calls Qwen and
-    // Gemini (the 2 models already used elsewhere in this pipeline, as
-    // OCR-transcription and/or image-judge) directly as TEXT-ONLY judges
-    // (no image, same task shape as the Jev batch test) against a
-    // caller-supplied batch of items, one call PER item so real per-
-    // question latency and per-question cost can both be recorded (a
-    // single batched call can't give real per-item timing). Remove after
-    // this comparison is done, same convention as Ticket 41's routes.
-    if (url.pathname === "/api/test-model-judge-batch" && request.method === "POST") {
-      return handleTestModelJudgeBatch(request, env);
-    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -220,59 +209,6 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
-}
-
-// TEMPORARY (2026-09-28) -- see the route registration's own comment.
-// Accepts { items: [{resultIndex, printedQuestion, studentAnswer}] },
-// calls each of PRODUCTION_OCR_MODEL (Qwen) and OCR_TEXT_MODEL (Gemini)
-// once PER item with a text-only judge prompt (same task Jev was given),
-// records real elapsed ms and real OpenRouter usage.cost per call, and
-// returns everything so it can be compared against known-correct
-// answers and against the earlier Jev batch result by hand.
-function buildTextOnlyJudgePrompt(item) {
-  return `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？只回覆JSON，格式：{"correct": true}或{"correct": false}或{"correct": null}（null代表你唔夠信心判斷，寧願老實話唔知都唔好亂估）。唔好加任何其他文字、解釋。`;
-}
-async function callTextOnlyJudge(model, prompt, openrouterKey) {
-  const t0 = Date.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
-    body: JSON.stringify({
-      model,
-      max_tokens: 100,
-      temperature: 0,
-      provider: { ignore: ["Alibaba"] },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  const elapsedMs = Date.now() - t0;
-  const data = await res.json();
-  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
-  let verdict = null;
-  try {
-    const m = content.match(/\{[^}]*\}/);
-    if (m) verdict = JSON.parse(m[0]).correct;
-    if (verdict === undefined) verdict = null;
-  } catch (e) { verdict = null; }
-  return { elapsedMs, verdict, costUsd: (data.usage && data.usage.cost) || null, raw: content.slice(0, 200), ok: res.ok, status: res.status };
-}
-async function handleTestModelJudgeBatch(request, env) {
-  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { items } = await request.json();
-  const results = [];
-  for (const it of items) {
-    const prompt = buildTextOnlyJudgePrompt(it);
-    const [qwen, gemini] = await Promise.all([
-      callTextOnlyJudge(PRODUCTION_OCR_MODEL, prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
-      callTextOnlyJudge(OCR_TEXT_MODEL, prompt, openrouterKey).catch((e) => ({ error: String(e && e.message || e) })),
-    ]);
-    results.push({ resultIndex: it.resultIndex, qwen, gemini });
-  }
-  return json({ results });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
