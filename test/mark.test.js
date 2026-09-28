@@ -1572,3 +1572,37 @@ test("buildAiFallbackPrompt: money guidance tells the AI to read the printed den
   assert.match(prompt, /印刷數字先係最準嘅資訊來源/);
   assert.match(prompt, /洋紫荊/, "the Ticket 57 reference data must still appear as a fallback");
 });
+
+// Ticket 64 (2026-09-28): calendar/leap-year and days-per-month reference
+// data, found by a background survey fork re-reading MCLQ 2A's Time/
+// Calendar chapter (real citations: book p.63 "leap year" Feb-28th
+// question, book p.64 common/leap-year fill-in-the-blank).
+test("mentionsYearType / YEAR_TYPE_REFERENCE: fires on real leap-year question wording", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsYearType([{ printedQuestion: "The above calendar is of March in a leap year." }]), true);
+  assert.equal(worker.mentionsYearType([{ printedQuestion: "This year is a *common/leap year, there are ___ days this year." }]), true);
+  assert.equal(worker.mentionsYearType([{ printedQuestion: "Tom saved $50 last year." }]), false);
+});
+
+test("mentionsMonthLength: requires BOTH a month name AND day-count context, not a bare month mention", async () => {
+  const worker = await import(TMP);
+  assert.equal(worker.mentionsMonthLength([{ printedQuestion: "Which month has the smallest number of days? May/June/July/August" }]), true);
+  assert.equal(worker.mentionsMonthLength([{ printedQuestion: "In March, Tom saved $50." }]), false, "a bare month mention in an unrelated word problem must not trigger the calendar reference");
+});
+
+test("buildAiFallbackPrompt: includes calendar reference blocks only when the question actually needs them", async () => {
+  const worker = await import(TMP);
+  const withLeap = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "This year is a *common/leap year, there are ___ days this year.", studentAnswer: "366" },
+  ]);
+  assert.match(withLeap, /常年\(common year\)：全年365日/);
+  const withMonths = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "Which month has the smallest number of days? May/June/July", studentAnswer: "June" },
+  ]);
+  assert.match(withMonths, /二月28日\(閏年29日\)/);
+  const unrelated = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" },
+  ]);
+  assert.doesNotMatch(unrelated, /常年\(common year\)/);
+  assert.doesNotMatch(unrelated, /二月28日/);
+});

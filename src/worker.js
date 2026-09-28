@@ -2096,6 +2096,42 @@ const TIER_V_GUIDANCE = {
   },
 };
 
+// Ticket 64 (2026-09-28): same "give the AI real facts instead of relying
+// on pretrained recall" lever as Tickets 57/59/61, found by a background
+// survey fork re-reading MCLQ 2A's Time/Calendar chapter specifically for
+// static reference-fact gaps. Both facts below are confirmed against ≥1
+// real question each (see TICKETS.md for page citations) -- leap-year day
+// counts and days-per-month are exactly the kind of fixed lookup fact an
+// AI model can misremember, unlike routine hour/minute arithmetic (the
+// fork explicitly checked and found no evidence that's a real weak spot,
+// so it's deliberately NOT added here).
+const YEAR_TYPE_REFERENCE = `參考資料——常年與閏年嘅真實日數（幫你答同日曆/年份有關嘅題,唔好靠估）：
+常年(common year)：全年365日，二月有28日。
+閏年(leap year)：全年366日，二月有29日(多咗一日)。
+分辨方法：題目/日曆已經講明「呢個係閏年」或者顯示二月有29日,就當閏年(366日)計；否則當常年(365日)計。`;
+
+function mentionsYearType(pendingItems) {
+  const re = /leap year|common year|閏年|平年|常年/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+const DAYS_PER_MONTH_REFERENCE = `參考資料——每個月嘅真實日數（幫你答同月份日數有關嘅題,唔好靠估）：
+一月31日、二月28日(閏年29日)、三月31日、四月30日、五月31日、六月30日、
+七月31日、八月31日、九月30日、十月31日、十一月30日、十二月31日。`;
+
+// Requires BOTH a month name AND a day-count/date context word -- a bare
+// month name alone (e.g. "In March, Tom saved $50") is common in unrelated
+// word problems and shouldn't drag in a calendar reference block that has
+// nothing to do with the question.
+function mentionsMonthLength(pendingItems) {
+  const monthRe = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b|一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月/i;
+  const dayContextRe = /\bdays?\b|日數|幾日|多少日|日曆|calendar/i;
+  return pendingItems.some((it) => {
+    const text = `${it.printedQuestion || ""} ${it.studentAnswer || ""}`;
+    return monthRe.test(text) && dayContextRe.test(text);
+  });
+}
+
 function buildTierVGuidance(pendingItems) {
   const texts = Object.values(TIER_V_GUIDANCE)
     .filter((g) => pendingItems.some((it) => g.re.test(String(it.printedQuestion || "")) || g.re.test(String(it.studentAnswer || ""))))
@@ -2112,6 +2148,8 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
     mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
     mentionsShape2D(pendingItems) ? SHAPE_2D_REFERENCE : null,
+    mentionsYearType(pendingItems) ? YEAR_TYPE_REFERENCE : null,
+    mentionsMonthLength(pendingItems) ? DAYS_PER_MONTH_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -6367,6 +6405,8 @@ export {
   mentionsMoneyDenomination,
   mentionsShapeGeometry,
   mentionsShape2D,
+  mentionsYearType,
+  mentionsMonthLength,
   buildTierVGuidance,
   readClockHandsFromPixels,
   parseTimeAnswer,
