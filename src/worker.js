@@ -130,6 +130,16 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // TEMPORARY debug route (2026-09-28) -- one-use, real-cost/real-speed
+    // check for GPT-5 as a drop-in replacement for callAiFallbackJudge:
+    // uses the REAL buildAiFallbackPrompt (same prompt production sends
+    // Qwen) and a REAL homework photo (not a text description), so both
+    // the cost and latency numbers reflect an actual "parent sends one
+    // photo" call, not an isolated per-question text-only judge call.
+    // Remove after this is done, same convention as Ticket 41's routes.
+    if (url.pathname === "/api/test-gpt5-real-photo" && request.method === "POST") {
+      return handleTestGpt5RealPhoto(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -209,6 +219,53 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
+}
+
+// TEMPORARY (2026-09-28) -- see the route registration's own comment.
+// Accepts { items: [{question, printedQuestion, studentAnswer}], imageBase64,
+// mediaType }, builds the REAL buildAiFallbackPrompt, and calls GPT-5
+// with the actual image attached (reasoning_effort=low, matching the
+// earlier text-only comparison's fairness setting).
+async function handleTestGpt5RealPhoto(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { items, imageBase64, mediaType } = await request.json();
+  const prompt = buildAiFallbackPrompt(items);
+  const t0 = Date.now();
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
+    body: JSON.stringify({
+      model: "openai/gpt-5",
+      max_tokens: 1500,
+      temperature: 0,
+      reasoning: { effort: "low" },
+      provider: { ignore: ["Alibaba"] },
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: `data:${mediaType || "image/jpeg"};base64,${imageBase64}` } },
+        ],
+      }],
+    }),
+  });
+  const elapsedMs = Date.now() - t0;
+  const data = await res.json();
+  if (!res.ok) return json({ error: "http_" + res.status, detail: data, elapsedMs }, 502);
+  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
+  return json({
+    elapsedMs,
+    costUsd: (data.usage && data.usage.cost) || null,
+    reasoningTokens: (data.usage && data.usage.completion_tokens_details && data.usage.completion_tokens_details.reasoning_tokens) || null,
+    promptTokens: data.usage && data.usage.prompt_tokens,
+    completionTokens: data.usage && data.usage.completion_tokens,
+    finishReason: data.choices && data.choices[0] && data.choices[0].finish_reason,
+    rawContent: content,
+  });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
