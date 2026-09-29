@@ -1844,6 +1844,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 香港硬幣認面額提示(用嚟分辨邊個係邊個,唔好淨係睇個「數字」就估,細心睇形狀顏色邊緣)：$2(12邊波浪形,銀色)、$0.2(波浪形,金色)呢兩個先係波浪邊;$10係圓形(唔係波浪形),銀色中心+金色外環雙色設計;$5、$1、$0.5都係圓形銀/金色,滾花邊;$0.1(1毫)最細,圓形金色,平邊。$0.1同$10喺數字上都印住個「10」,好容易撞——分辨方法係睇成隻硬幣嘅大細(1毫最細)、顏色(1毫純金色,$10銀心金環雙色)、形狀，唔好淨係睇印住嘅數字就當係$10。
 如果冇呢類兌換空格題就完全唔使加呢行。
 
+**如果幅圖係一個棒形圖(bar chart)，有一條印刷咗數字刻度嘅軸(例如"0,2,4,6,8,10,12"，刻度數字之間相隔固定)，同埋幾條唔同長度嘅棒代表唔同類別**，喺回覆最開始加一行「BAR_CHART: 方向=<垂直/水平>;刻度最小值=<軸上面最細嗰個印刷數字>;刻度最大值=<軸上面最大嗰個印刷數字>;刻度間距=<相鄰兩個刻度數字相差幾多>;類別=<第一條棒代表嘅類別文字>,<第二條>,...」(方向：棒係垂直向上企定係水平向右伸,由圖嘅實際畫法判斷,唔好靠估；類別要跟返啲棒實際印刷/排列嘅先後次序，由圖入面軸邊嘅文字標籤讀，例如月份/名稱)。呢一行只需要讀返軸嘅刻度同類別文字，唔使自己目測估計每條棒嘅數值。如果冇呢類棒形圖就完全唔使加呢行。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -2500,6 +2502,43 @@ function extractObjectHeights(text) {
   return { objectHeights: Object.keys(heights).length ? heights : null, cleanedText };
 }
 
+// Ticket 199 (2026-09-30, real citation: 26週數學訓練 P3 Topic 25 Q,
+// P.64 "浩明上半年看書的數量" -- Y-axis 0-12 step 2, months 1-6 read
+// 10,4,6,12,8,2 books). Unlike every OCR-marker ticket before it
+// (185-198), this one is a genuine HYBRID: the axis calibration (what
+// number each gridline represents) can only come from reading printed
+// text, but the actual bar VALUES are never printed anywhere -- they
+// only exist as each bar's pixel height relative to that axis, which
+// only pixel geometry (not OCR) can measure. So OCR here is
+// deliberately asked to transcribe ONLY the axis numbers/labels (a
+// legitimate "read what's printed" task, same discipline as every
+// other marker), never to estimate what a bar's value is itself (that
+// would cross into judgment, which this project keeps out of OCR's
+// job everywhere else too) -- extractBarChart below gives
+// verifyBarChart just the calibration; verifyBarChart then measures
+// bars from the real image the same way Tickets 197/198 measure
+// shapes/beads.
+function extractBarChart(text) {
+  const m = /^BAR_CHART:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^BAR_CHART:.*$/gm, "");
+  if (!m) return { barChart: null, cleanedText };
+  const fields = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    fields[part.slice(0, eqIdx).trim()] = part.slice(eqIdx + 1).trim();
+  }
+  const direction = fields["方向"] === "水平" ? "horizontal" : fields["方向"] === "垂直" ? "vertical" : null;
+  const min = Number(fields["刻度最小值"]);
+  const max = Number(fields["刻度最大值"]);
+  const step = Number(fields["刻度間距"]);
+  const categories = fields["類別"] ? fields["類別"].split(",").map((s) => s.trim()).filter(Boolean) : [];
+  if (!direction || !Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || step <= 0 || max <= min || !categories.length) {
+    return { barChart: null, cleanedText };
+  }
+  return { barChart: { direction, min, max, step, categories }, cleanedText };
+}
+
 function verifyObjectHeights(objectHeights, printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
@@ -2680,7 +2719,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { clockOptions, cleanedText: cleanedText20 } = extractClockOptions(cleanedText19);
   const { coinBlanks, cleanedText: cleanedText21 } = extractCoinBlanks(cleanedText20);
   const { distanceValues, cleanedText: cleanedText22 } = extractDistanceValues(cleanedText21);
-  const { objectHeights, cleanedText } = extractObjectHeights(cleanedText22);
+  const { objectHeights, cleanedText: cleanedText23 } = extractObjectHeights(cleanedText22);
+  const { barChart, cleanedText } = extractBarChart(cleanedText23);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2688,7 +2728,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -8247,6 +8287,210 @@ function verifyAbacusReading(item, crop) {
   }
 }
 
+// Ticket 199 (2026-09-30): reads each bar's real value from a bar
+// chart, using the OCR-read axis calibration (extractBarChart above)
+// plus pure pixel geometry to find the axis line and measure each
+// bar's own top edge -- see extractBarChart's own comment for why this
+// ticket is a genuine hybrid (OCR reads the printed axis numbers only;
+// geometry measures the bars, since no bar's actual value is ever
+// printed anywhere).
+//
+// Real citation (26週數學訓練 P3, "浩明上半年看書的數量"): Y-axis
+// 0-12 step 2, vertical bars for 1-6月 reading 10,4,6,12,8,2.
+// Calibration method found and verified directly against this real
+// photo: the chart's own Y-AXIS LINE (a solid, continuously-dark
+// vertical line) spans exactly from the MAX value's gridline down to
+// the MIN value's gridline (real measurement: axis line top at pixel
+// y=49 lines up with the printed "12", bottom at y=370 lines up with
+// "0") -- linear interpolation between those two real pixel positions,
+// using the OCR-provided min/max, directly predicts each bar's value
+// from its own top edge's pixel position (real check: predicted the
+// value-10 bar's top at y=102.5, its real measured top was y=101-102,
+// a ~1px match). This avoids needing to detect every individual faint
+// gridline (real measurement: gridlines here are only 8-45 luminance
+// points darker than white, unreliably close to noise, MUCH fainter
+// than the axis line itself or the bars) -- two reference points (the
+// axis line's own top and bottom) are enough for a linear scale.
+function findAxisLine(pixels, w, h) {
+  const backgroundLuminance = estimateBackgroundLuminance(pixels, w, h);
+  const isInk = (x, y) => isInkByLuminance(pixels, (y * w + x) * 4, backgroundLuminance, 60);
+  // A real axis line is solid and dark (not just "somewhat darker than
+  // background" like a bar's fill or a faint gridline) -- a stricter
+  // threshold (60, vs 35 used elsewhere) specifically targets that,
+  // and scanning for the LEFTMOST column that is ink for most of the
+  // full height finds the y-axis specifically (further-right columns
+  // that are mostly ink are bars, not the axis).
+  for (let x = 0; x < w; x++) {
+    let minY = -1, maxY = -1, count = 0;
+    for (let y = 0; y < h; y++) {
+      if (isInk(x, y)) {
+        if (minY === -1) minY = y;
+        maxY = y;
+        count++;
+      }
+    }
+    if (count >= h * 0.5 && (maxY - minY + 1) >= h * 0.5) {
+      return { x, yTop: minY, yBottom: maxY };
+    }
+  }
+  return null;
+}
+
+function readBarChartValues(pixels, w, h, barChart) {
+  const { direction, min, max, step, categories } = barChart;
+  const axis = findAxisLine(pixels, w, h);
+  if (!axis) return null;
+  const backgroundLuminance = estimateBackgroundLuminance(pixels, w, h);
+  const isInk = (x, y) => isInkByLuminance(pixels, (y * w + x) * 4, backgroundLuminance, 35);
+  const n = categories.length;
+
+  if (direction === "vertical") {
+    // Real bug found against the real citation: assuming the bars are
+    // evenly spread across the FULL width from the axis to the crop's
+    // own right edge (an equal-width-slot division, the same pattern
+    // used for Ticket 198's rod columns) drifts cumulatively wrong here
+    // -- real crops (this one included) commonly have extra blank
+    // margin to the right of the last bar that isn't part of the real
+    // plot area, so "divide by n across the whole remaining width"
+    // makes each assumed slot too WIDE, and the error compounds until
+    // later bars are missed entirely (real measurement: last bar's
+    // assumed centre was 38px off from its real centre). Fixed by
+    // actually finding the bars, not assuming their spacing: scan one
+    // row near the baseline (where every bar, whatever its height, is
+    // guaranteed to still have ink) for contiguous ink segments -- each
+    // segment IS one bar, real and exact, no assumption needed.
+    const scanY = axis.yBottom - Math.round((axis.yBottom - axis.yTop) * 0.03) - 1;
+    const rawSegments = [];
+    let segStart = -1;
+    for (let x = axis.x + 1; x <= w; x++) {
+      const ink = x < w && isInk(x, scanY);
+      if (ink && segStart === -1) segStart = x;
+      if (!ink && segStart !== -1) { rawSegments.push({ start: segStart, end: x - 1 }); segStart = -1; }
+    }
+    // Real bug found against the real citation: this row also catches
+    // a couple of thin (2-3px) artefacts -- a tick mark right next to
+    // the axis line, and the plot's own outer border on the far right
+    // -- neither is a real bar. Real bars measured 50-51px wide here;
+    // filtering to segments at least half the WIDEST segment's width
+    // keeps real bars and drops those thin artefacts regardless of the
+    // chart's actual absolute bar width.
+    const maxSegWidth = Math.max(...rawSegments.map((s) => s.end - s.start));
+    const segments = rawSegments.filter((s) => s.end - s.start >= maxSegWidth * 0.5);
+    if (segments.length !== n) return null; // couldn't cleanly find exactly the expected number of bars -- decline rather than guess
+    const values = [];
+    const MIN_RUN = 6; // a gridline is only 1-2px thick; require a real sustained run to distinguish a bar's top edge from a gridline crossing
+    for (const seg of segments) {
+      const xCenter = Math.round((seg.start + seg.end) / 2);
+      let topY = -1;
+      for (let y = axis.yTop; y <= axis.yBottom - MIN_RUN; y++) {
+        let allInk = true;
+        for (let dy = 0; dy < MIN_RUN; dy++) if (!isInk(xCenter, y + dy)) { allInk = false; break; }
+        if (allInk) { topY = y; break; }
+      }
+      if (topY === -1) { values.push(min); continue; }
+      const frac = (axis.yBottom - topY) / (axis.yBottom - axis.yTop);
+      const rawValue = min + frac * (max - min);
+      values.push(Math.round(rawValue / step) * step);
+    }
+    return values;
+  }
+
+  // Horizontal bars: sit above the axis line, extending right from it;
+  // categories are stacked top-to-bottom instead of left-to-right.
+  // Same equal-slot-then-measure-extent logic, transposed.
+  const plotHeight = axis.yBottom - axis.yTop + 1;
+  const slotHeight = plotHeight / n;
+  const values = [];
+  for (let i = 0; i < n; i++) {
+    const yStart = Math.round(axis.yTop + i * slotHeight);
+    const yEnd = Math.round(axis.yTop + (i + 1) * slotHeight);
+    const yCenter = Math.round((yStart + yEnd) / 2);
+    let rightX = axis.x;
+    for (let x = axis.x + 1; x < w; x++) {
+      if (isInk(x, yCenter)) rightX = x; else if (x - axis.x > 3) break;
+    }
+    const frac = (rightX - axis.x) / (w - 1 - axis.x);
+    const rawValue = min + frac * (max - min);
+    values.push(Math.round(rawValue / step) * step);
+  }
+  return values;
+}
+
+function isBarChartQuestion(item) {
+  return !!item.barChart;
+}
+
+// Real citation covers 4 real sub-question shapes on the same chart:
+// "邊個月最多,有幾多" (max category + value), "6月比上個月少幾多"
+// (difference between two named/adjacent categories), "共睇幾多,平均
+// 幾多" (sum + average), and a compound "平均幾多日睇完一本" question
+// that needs an OUTSIDE fact (days in a stated month) divided by the
+// chart value -- declined here (not a chart-reading fact, a different
+// real-world-knowledge ticket's job, see 205).
+function verifyBarChart(item, crop) {
+  let photonImg;
+  try {
+    const { barChart } = item;
+    if (!barChart) return { correct: null, correctAnswer: "" };
+    const printed = String(item.printedQuestion || "");
+    const answer = String(item.studentAnswer || "").trim();
+    if (!answer) return { correct: null, correctAnswer: "" };
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const values = readBarChartValues(pixels, w, h, barChart);
+    if (!values) return { correct: null, correctAnswer: "" };
+    const { categories } = barChart;
+
+    // Shape 1: "邊個<類別>...最多/最大,有___<單位>" (or 最少/最小).
+    let m = printed.match(/最(多|大|少|小)[\s\S]{0,20}?(_{2,}|＿{2,})/);
+    if (m && /(_{2,}|＿{2,})[\s\S]{0,10}(_{2,}|＿{2,})/.test(printed)) {
+      const wantMax = m[1] === "多" || m[1] === "大";
+      const best = wantMax ? Math.max(...values) : Math.min(...values);
+      const bestIdx = values.indexOf(best);
+      const bestCategory = categories[bestIdx];
+      const parts = answer.split(/[,，、;；\s]+/).filter(Boolean);
+      if (parts.length >= 2) {
+        const catMatches = parts[0] === bestCategory || parts[0].replace(/月$/, "") === bestCategory.replace(/月$/, "");
+        const numMatches = parseSignedStudentNumber(parts[1]) === best;
+        const correct = catMatches && numMatches;
+        return { correct, correctAnswer: correct ? "" : `${bestCategory},${best}` };
+      }
+    }
+
+    // Shape 2: "在<類別>,...比上一個<類別單位>...少/多咗___" -- difference
+    // from the immediately preceding category.
+    m = printed.match(/在([^,，]+?)[,，][\s\S]{0,10}比上[一]?個[\s\S]{0,6}(少|多)[\s\S]{0,4}了?\s*(_{2,}|＿{2,})/);
+    if (m) {
+      const catIdx = categories.findIndex((c) => c === m[1] || c.replace(/月$/, "") === m[1].replace(/月$/, ""));
+      if (catIdx > 0) {
+        const diff = values[catIdx - 1] - values[catIdx];
+        const studentNum = parseSignedStudentNumber(answer);
+        const correct = studentNum !== null && Math.abs(studentNum) === Math.abs(diff);
+        return { correct, correctAnswer: correct ? "" : String(Math.abs(diff)) };
+      }
+    }
+
+    // Shape 3: "共...___,平均每...___" -- total then average, two blanks.
+    if (/共[\s\S]{0,10}(_{2,}|＿{2,})[\s\S]{0,10}平均[\s\S]{0,10}(_{2,}|＿{2,})/.test(printed)) {
+      const total = values.reduce((s, v) => s + v, 0);
+      const avg = total / values.length;
+      const parts = answer.split(/[,，、;；\s]+/).filter(Boolean).map((s) => parseSignedStudentNumber(s));
+      if (parts.length >= 2 && parts[0] !== null && parts[1] !== null) {
+        const correct = parts[0] === total && Math.abs(parts[1] - avg) < 1e-9;
+        return { correct, correctAnswer: correct ? "" : `${total},${avg}` };
+      }
+    }
+
+    return { correct: null, correctAnswer: "" };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 function verifyObjectCounting(item, crop) {
   let photonImg;
   try {
@@ -9332,6 +9576,15 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyAbacusReading(item, crop),
   },
   {
+    // Ticket 199 (2026-09-30): see readBarChartValues's own long comment
+    // for the real hybrid OCR+geometry design and the real citation's
+    // exact axis-calibration verification. isBarChartQuestion shared
+    // with handleMark's bbox fallback (findBarChartBbox's call site).
+    name: "bar_chart_reading",
+    detect: (item) => isBarChartQuestion(item),
+    verifyVisual: (item, crop) => verifyBarChart(item, crop),
+  },
+  {
     // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
     // text reasoning, no image needed. detect() requires BOTH a lateral-
     // face-shape keyword AND a plausible answer shape (not itself a bare
@@ -9713,6 +9966,65 @@ function findAbacusBbox(visionWords, pageWidth, pageHeight) {
   };
 }
 
+// Ticket 199 (2026-09-30): same "findBboxForItem's alphanumeric-only
+// needle can't anchor a fully-Chinese question" gap as 197/198 -- here
+// the real anchor is the axis's own printed number sequence (e.g.
+// "0,2,4,6,8,10,12"), which extractBarChart already read from OCR, so
+// this searches Vision's word list for exactly those number tokens
+// arranged in a consistent line (vertical for a vertical-bar chart's
+// Y-axis, horizontal for a horizontal-bar chart's X-axis) rather than
+// a fixed literal string like the other two marker types use.
+function findBarChartBbox(visionWords, pageWidth, pageHeight, barChart) {
+  if (!visionWords || !visionWords.length || !pageWidth || !pageHeight || !barChart) return null;
+  const { direction, min, max, step } = barChart;
+  const expected = [];
+  for (let v = min; v <= max + 1e-9; v += step) expected.push(String(Math.round(v)));
+  const matches = visionWords.filter((w) => expected.includes(String(w.text || "").trim()));
+  if (matches.length < Math.ceil(expected.length * 0.5)) return null;
+  // Cluster by alignment on the axis of the sequence (x for vertical
+  // charts' Y-axis labels, y for horizontal charts' X-axis labels) --
+  // same tolerance-based greedy clustering as findLetterGridBbox.
+  const alignKey = direction === "vertical" ? "x" : "y";
+  const tolerance = direction === "vertical" ? pageWidth * 0.05 : pageHeight * 0.05;
+  const clusters = [];
+  for (const w of matches) {
+    const center = w[alignKey] + (alignKey === "x" ? w.w : w.h) / 2;
+    let placed = false;
+    for (const c of clusters) {
+      if (Math.abs(center - c.avg) <= tolerance) {
+        c.items.push(w); c.avg = c.items.reduce((s, it) => s + it[alignKey] + (alignKey === "x" ? it.w : it.h) / 2, 0) / c.items.length;
+        placed = true; break;
+      }
+    }
+    if (!placed) clusters.push({ avg: center, items: [w] });
+  }
+  const best = clusters.sort((a, b) => b.items.length - a.items.length)[0];
+  if (!best || best.items.length < 2) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const w of best.items) {
+    x0 = Math.min(x0, w.x); y0 = Math.min(y0, w.y);
+    x1 = Math.max(x1, w.x + w.w); y1 = Math.max(y1, w.y + w.h);
+  }
+  const labelW = x1 - x0, labelH = y1 - y0;
+  // The axis labels only mark ONE edge of the chart -- extend generously
+  // into the bars' own direction (rightward for vertical bars' plot
+  // area, upward for horizontal bars') by a large multiple of the
+  // label block's own size, same "better excess blank space than a
+  // clipped diagram" reasoning as findAbacusBbox's own extension.
+  const EXTEND_MULTIPLIER = 12;
+  if (direction === "vertical") {
+    x1 = x1 + labelW * EXTEND_MULTIPLIER;
+  } else {
+    y0 = Math.max(0, y0 - labelH * EXTEND_MULTIPLIER);
+  }
+  return {
+    x: Math.round((x0 / pageWidth) * 100),
+    y: Math.round((y0 / pageHeight) * 100),
+    w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
+    h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
+  };
+}
+
 // Ticket 4 (2026-09-25 rigor check): cross-checks NUMBERS in an item's
 // printed question against Google Vision's own independent reading of
 // the matched region on the page. Vision structurally cannot
@@ -9946,7 +10258,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -10061,6 +10373,10 @@ async function handleMark(request, env) {
     if (qwenOutcome.objectHeights) {
       qwenOutcome.items.forEach((item) => { item.objectHeights = qwenOutcome.objectHeights; });
     }
+    // Ticket 199: same page-level shared-context pattern.
+    if (qwenOutcome.barChart) {
+      qwenOutcome.items.forEach((item) => { item.barChart = qwenOutcome.barChart; });
+    }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
   const pagesMs = Date.now() - tPages;
@@ -10090,6 +10406,9 @@ async function handleMark(request, env) {
       }
       if (isAbacusReadingQuestion(item)) {
         return findAbacusBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      if (isBarChartQuestion(item)) {
+        return findBarChartBbox(pr.vision.words, pr.vision.width, pr.vision.height, item.barChart);
       }
       return null;
     })
@@ -10972,6 +11291,12 @@ export {
   isAbacusReadingQuestion,
   verifyAbacusReading,
   findAbacusBbox,
+  extractBarChart,
+  findAxisLine,
+  readBarChartValues,
+  isBarChartQuestion,
+  verifyBarChart,
+  findBarChartBbox,
   findRodPositions,
   estimateBackgroundLuminance,
   isInkByLuminance,
