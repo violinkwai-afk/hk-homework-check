@@ -3756,6 +3756,53 @@ function verifyComparisonSymbol(printedQuestion, studentAnswer) {
   return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
 }
 
+// Ticket 209 (2026-09-30, real citation: 26週數學訓練 P3 Topic 8圓括號
+// math34pdf/p18.png Q5: "在○內填「+」或「-」，使算式正確" -- "a○(b○c)=d",
+// TWO blank-operator circles, brackets already printed so no ambiguity
+// about which operation applies first. Real answer key (answers_p02.png,
+// Topic 8 Q5) verified by brute-forcing all 4 +/- combinations myself
+// before writing this: (a) 297○(172○125)=0 -> "-;+", (b)
+// 168○(286○118)=0 -> "-;-", (c) 168○(156○176)=500 -> "+;+", (d)
+// 297○(308○105)=500 -> "+;-" -- all 4 confirmed correct against the
+// official key, not just plausible-looking.
+//
+// NOT yet verified end-to-end via a real live /api/mark submission (per
+// this project's "verify real dispatch path" discipline) -- this is a
+// brand new item shape (two separate handwritten circles in one printed
+// line) with no existing real example of how OCR actually transcribes
+// it, so detect()/parsing below is deliberately tolerant of several
+// plausible blank-marker characters and answer-separator styles rather
+// than assuming one exact format.
+function isOperatorFillBracketQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /-?\d+\s*[○□_]+\s*\(\s*-?\d+\s*[○□_]+\s*-?\d+\s*\)\s*=\s*-?\d+/.test(printed);
+}
+
+function verifyOperatorFillBracket(item) {
+  const printed = String(item.printedQuestion || "");
+  const m = printed.match(/(-?\d+)\s*[○□_]+\s*\(\s*(-?\d+)\s*[○□_]+\s*(-?\d+)\s*\)\s*=\s*(-?\d+)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, aStr, bStr, cStr, dStr] = m;
+  const a = Number(aStr), b = Number(bStr), c = Number(cStr), d = Number(dStr);
+  const ops = ["+", "-"];
+  const applyOp = (op, x, y) => (op === "+" ? x + y : x - y);
+  const matches = [];
+  for (const op1 of ops) {
+    for (const op2 of ops) {
+      if (applyOp(op1, a, applyOp(op2, b, c)) === d) matches.push([op1, op2]);
+    }
+  }
+  // A well-posed question has exactly one solution -- more than one
+  // (or none) means either a mis-OCR'd number or a genuinely ambiguous
+  // printed item; never guess which combination was "intended".
+  if (matches.length !== 1) return { correct: null, correctAnswer: "" };
+  const [expectedOp1, expectedOp2] = matches[0];
+  const studentOps = (String(item.studentAnswer || "").match(/[+\-＋－]/g) || []).map((s) => (s === "＋" ? "+" : s === "－" ? "-" : s));
+  if (studentOps.length !== 2) return { correct: null, correctAnswer: "" };
+  const correct = studentOps[0] === expectedOp1 && studentOps[1] === expectedOp2;
+  return verdictResult(correct, `${expectedOp1};${expectedOp2}`, `${a}${expectedOp1}(${b}${expectedOp2}${c}) = ${d}`);
+}
+
 // "Which option below contains only even/odd numbers?" MC (found
 // 2026-09-22, real workbook page). printedQuestion must carry the full
 // question text (so the even/odd keyword is visible) followed by
@@ -9766,6 +9813,13 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyComparisonSymbol(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 209 (2026-09-30): see verifyOperatorFillBracket's own
+    // comment for the real citation and brute-force logic.
+    name: "operator_fill_bracket",
+    detect: (item) => isOperatorFillBracketQuestion(item),
+    verify: (item) => verifyOperatorFillBracket(item),
+  },
+  {
     name: "parity_mc",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -12578,6 +12632,9 @@ export {
   numberToEnglishWord,
   verifyNumberWordConversion,
   verifyComparisonSymbol,
+  verdictResult,
+  isOperatorFillBracketQuestion,
+  verifyOperatorFillBracket,
   verifyParityMC,
   verifyComputationMC,
   verifyMultiBlankMath,
