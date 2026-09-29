@@ -5590,6 +5590,130 @@ function verifyEquationTruthMC(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : expectedLetter };
 }
 
+// Ticket 216 (2026-09-30, real citation: 小學數學新思維 3下A 作業 p.21
+// (rendered PDF page math3xa_pdf/p22.png), instruction "以下句子是正確
+// 的，在圈內加✓；不正確的加✗。":
+// ⑦ 所有等邊三角形皆是等腰三角形。 -> ✓ (every equilateral triangle is,
+//    by definition, a special case of isosceles -- always true)
+// ⑧ 所有等腰三角形皆是等腰直角三角形。 -> ✗ (most isosceles triangles
+//    are not right-angled -- false)
+// ⑨ 等腰三角形必定有一個直角。 -> ✗ (same reasoning as ⑧)
+// ⑩ 在一個三角形中，任意兩邊的長度之和必定大於第三邊的長度。 -> ✓
+//    (the triangle inequality theorem, universally true)
+// Pure geometric-fact lookup -- these are fixed curriculum-standard
+// truths, not something read off the page (same "compute/look up the
+// ground truth" category as calendar-fact lookup), zero image or
+// OCR-marker work needed. Matches by keyword pattern (not exact string)
+// so OCR wording variance across worksheets still matches; declines
+// (fails open to AI) for any statement outside this known closed fact
+// set -- disclosed scope, not exhaustive of every possible triangle-
+// hierarchy true/false statement a worksheet could ask.
+function classifyTriangleFactStatement(printedQuestion) {
+  const text = String(printedQuestion || "").replace(/\s+/g, "");
+  if (/所有等邊三角形.{0,4}(皆是|都是|一定是|係).{0,4}等腰三角形/.test(text)) return true;
+  if (/所有等腰三角形.{0,4}(皆是|都是|一定是|係).{0,4}等腰直角三角形/.test(text)) return false;
+  if (/等腰三角形必定(有|係有)一個直角/.test(text)) return false;
+  if (/(任意|任何)兩邊(的長度)?之和必定大於第三邊(的長度)?/.test(text)) return true;
+  return null;
+}
+
+function normalizeCheckMark(answer) {
+  const a = String(answer || "").trim();
+  if (/^(✓|√|✔|v|對|啱|正確|true|t)$/i.test(a)) return true;
+  if (/^(✗|×|x|唔啱|不啱|不對|唔對|不正確|錯|false|f)$/i.test(a)) return false;
+  return null;
+}
+
+function isTriangleFactTrueFalseQuestion(item) {
+  return classifyTriangleFactStatement(item.printedQuestion) !== null;
+}
+
+function verifyTriangleFactTrueFalse(printedQuestion, studentAnswer) {
+  const expected = classifyTriangleFactStatement(printedQuestion);
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const given = normalizeCheckMark(studentAnswer);
+  if (given === null) return { correct: null, correctAnswer: "" };
+  const correct = given === expected;
+  return { correct, correctAnswer: correct ? "" : (expected ? "✓" : "✗") };
+}
+
+// Same ticket, second real sub-citation (math3xa_pdf/p20.png, Q⑧):
+// "一個三角形最多有鈍角多少個？答案：______個" -> 1 (a triangle's
+// interior angles sum to 180 degrees, so at most one angle can exceed
+// 90 degrees). Same closed-fact-lookup family as the T/F statements
+// above, just phrased as a numeric fill-in-blank.
+function isMaxObtuseAngleInTriangleQuestion(item) {
+  return /三角形最多有(幾多個|多少個)?鈍角/.test(String(item.printedQuestion || "").replace(/\s+/g, ""));
+}
+
+function verifyMaxObtuseAngleInTriangle(printedQuestion, studentAnswer) {
+  if (!isMaxObtuseAngleInTriangleQuestion({ printedQuestion })) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim();
+  const m = answer.match(/\d+/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const correct = Number(m[0]) === 1;
+  return { correct, correctAnswer: correct ? "" : "1" };
+}
+
+// Ticket 208 (2026-09-30, real citation: 26週數學訓練 P3 Topic 2「年月
+// 日」進階訓練, math34pdf/p04.png):
+// Q1 "一年裏有31天的月份有___個。" -> 7 (Jan/Mar/May/Jul/Aug/Oct/Dec,
+//    fixed constant, zero ambiguity)
+// Q2 "如果6月1日是星期日，那麼5月28日是星期___。" -> 三 (Wednesday)
+// Both verified against the real answer key (math34pdf/answers_p01.png,
+// Topic 2: "1. 7  2. 三"). These are new query SHAPES not covered by the
+// existing verifyCalendarGridQuery (which needs a printed calendar grid
+// in the image) -- these are pure text/date-math word problems, no
+// image involved at all.
+const DAYS_31_MONTH_COUNT = 7; // Jan,Mar,May,Jul,Aug,Oct,Dec
+// Reuses the module-level WEEKDAY_NAMES_ZH already declared above
+// (Sunday=index 0..Saturday=index 6) for verifyCalendarGridQuery.
+
+function isDaysWith31CountQuestion(item) {
+  return /一年(裏|裡)?有31天的月份有/.test(String(item.printedQuestion || "").replace(/\s+/g, ""));
+}
+
+function verifyDaysWith31Count(printedQuestion, studentAnswer) {
+  if (!isDaysWith31CountQuestion({ printedQuestion })) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim();
+  const m = answer.match(/\d+/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const correct = Number(m[0]) === DAYS_31_MONTH_COUNT;
+  return { correct, correctAnswer: correct ? "" : String(DAYS_31_MONTH_COUNT) };
+}
+
+function isWeekdayOffsetQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  return /如果\d+月\d+日是星期[日一二三四五六]/.test(text) && /那麼\d+月\d+日是星期/.test(text);
+}
+
+// Computes the weekday offset across a possible month boundary using
+// each month's real day-count (non-leap-year assumption, disclosed --
+// the real citation's May->June crossing doesn't depend on Feb so this
+// is safe there; a citation crossing Feb would need a leap-year flag,
+// not yet built/needed).
+const MONTH_DAYS_NON_LEAP = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function verifyWeekdayOffset(printedQuestion, studentAnswer) {
+  const text = String(printedQuestion || "").replace(/\s+/g, "");
+  const m = text.match(/如果(\d+)月(\d+)日是星期([日一二三四五六])[，,][\s\S]*?那麼(\d+)月(\d+)日是星期/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const [, knownMonth, knownDay, knownWeekdayCh, targetMonth, targetDay] = m;
+  const knownWeekday = WEEKDAY_NAMES_ZH.indexOf(knownWeekdayCh);
+  if (knownWeekday === -1) return { correct: null, correctAnswer: "" };
+  const toOrdinal = (month, day) => {
+    let total = Number(day);
+    for (let mo = 1; mo < Number(month); mo++) total += MONTH_DAYS_NON_LEAP[mo - 1];
+    return total;
+  };
+  const dayDiff = toOrdinal(targetMonth, targetDay) - toOrdinal(knownMonth, knownDay);
+  const targetWeekday = ((knownWeekday + dayDiff) % 7 + 7) % 7;
+  const expected = WEEKDAY_NAMES_ZH[targetWeekday];
+  const answer = String(studentAnswer || "").trim().replace(/^星期/, "");
+  const correct = answer === expected;
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
 // Ticket 77 (2026-09-28, real citation: "How do you separate 10
 // [candies] into two groups? 10 = [] + []" -- many valid splits, not one
 // fixed pair): open-ended decomposition. Student answer expected as two
@@ -8780,6 +8904,19 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyChineseLargeNumeralToArabic(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 208 (2026-09-30, real collision found): must run BEFORE
+    // number_word_conversion -- a real citation's small "6月"/"5月" day
+    // digits plus a single-CN-character weekday answer ("三") satisfy
+    // that handler's own "small digit + parses as number word" trigger,
+    // which would silently compute the wrong thing (treat "三" as the
+    // number 3, not the weekday name). This handler's own detect() is
+    // far more specific (the whole "如果...是星期...那麼...是星期" date-
+    // math sentence shape), so it must claim the item first.
+    name: "weekday_offset",
+    detect: (item) => isWeekdayOffsetQuestion(item),
+    verify: (item) => verifyWeekdayOffset(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "number_word_conversion",
     detect: (item) => {
       const printed = String(item.printedQuestion || "").trim();
@@ -9659,6 +9796,24 @@ const QUESTION_TYPE_HANDLERS = [
       return options.length >= 2 && options.every((o) => eqShape.test(o.text.replace(/\s+/g, " ").trim()));
     },
     verify: (item) => verifyEquationTruthMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 216 (2026-09-30): triangle-hierarchy true/false fact table.
+    name: "triangle_fact_true_false",
+    detect: (item) => isTriangleFactTrueFalseQuestion(item),
+    verify: (item) => verifyTriangleFactTrueFalse(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 216 (2026-09-30): "max obtuse angles in a triangle" fact.
+    name: "max_obtuse_angle_in_triangle",
+    detect: (item) => isMaxObtuseAngleInTriangleQuestion(item),
+    verify: (item) => verifyMaxObtuseAngleInTriangle(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Ticket 208 (2026-09-30): "how many months have 31 days" fact.
+    name: "days_with_31_count",
+    detect: (item) => isDaysWith31CountQuestion(item),
+    verify: (item) => verifyDaysWith31Count(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 77 (2026-09-28): open-ended decomposition ("10 = [] + []").
@@ -11306,6 +11461,16 @@ export {
   verifyCompoundMultiplierWordProblem,
   verifyMinFromTwoCapacityConstraints,
   verifyEquationTruthMC,
+  classifyTriangleFactStatement,
+  normalizeCheckMark,
+  isTriangleFactTrueFalseQuestion,
+  verifyTriangleFactTrueFalse,
+  isMaxObtuseAngleInTriangleQuestion,
+  verifyMaxObtuseAngleInTriangle,
+  isDaysWith31CountQuestion,
+  verifyDaysWith31Count,
+  isWeekdayOffsetQuestion,
+  verifyWeekdayOffset,
   verifyOpenDecomposition,
   verifyFactFamilyGeneration,
   verifyTextualClockDescription,
