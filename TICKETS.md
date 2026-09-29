@@ -987,3 +987,9 @@
   真相citation：26週數學訓練 P3 Topic 23三角形 math34pdf/p59.png Q4（P/Q/R/S/T 5個標咗字母嘅dot grid,「把哪三點連起來,可得出一個等腰三角形」),對返真答案key（Q,S,T)確認過。
   2個真bug：(1) dot本身企喺grid線交叉點上、同條線冇縫接住,普通flood-fill會將圓形dot同條幼線撈埋做一條長長嘅blob——改用「侵蝕(erosion)式」判斷：淨係當一個像素周圍5x5窗全部係墨先算「核心」,幼線(1-2px闊)永遠冇可能滿足,但dot(直徑~13px)就冇問題,乾淨咁分開dot同線。(2) 用「10%相對容差」判斷「兩邊相等」太寬鬆——真citation嘅5個點入面,搵到另外2組唔啱嘅組合(P,Q,T同Q,R,S)都跌咗入嗰個容差,令「應該淨係得一組等腰三角形」呢個check變得唔肯定——量返真雜訊其實細過1px,收窄做3%,先啱啱好將真啱嗰組(差0.1px)同真唔啱嗰兩組(差12-21px)分返開。
   9個新測試,788/788測試通過,已push(e6e1585)。
+
+- ⏸ **204. 梯形分類(直角/等腰/不等腰),做咗但冇wire落生產——真撞到現有shape classifier嘅一個bug,唔敢冒險。** 真相citation：26週數學訓練 P3 Topic 22梯形 math34pdf/p57.png Q1（9個四邊形P-X,分類做直角梯形/等腰梯形/冇直角嘅不等腰梯形）,對返真答案key（(a)S,V (b)P,W (c)T,U)確認過。
+  `classifyTrapezoidType`（搵返邊一對邊平行、有冇直角、兩隻腳長度等唔等）呢個純幾何邏輯本身啱、測試過。但真係用真相測試嗰陣,發現197嗰個shape classifier(`readShapeClassificationFromPixels`)喺呢張相入面讀錯——呢批圖形用嘅係一種好淺嘅紫色底色,令個輪廓出現「角位鋸齒」，一個真係4邊嘅梯形俾佢讀成6-7個頂點,plateau-vertex-count方法掃完全部tolerance都修唔返正。修呢個問題要小心唔可以整壞197自己已經上緊生產、真實驗證過嘅citation,今晚冇時間做regression test,所以**冇register呢個handler**——寧願坦白話未做得,都唔可以留低一個有機會confidently錯判學生答案嘅機制。
+  順便搵到真解決咗一個第二個問題（字母同形狀點binding）：唔可以假設「形狀跟閱讀次序排返P,Q,R...」——真相嘅排位鬆散,唔係整齊grid，改用返203嗰套「Vision字嘅位置搵最近嗰個形狀」做法（呢部分code已經寫好,得閒等unblock咗先接返）。
+  `readShapeClassificationFromPixels`順手加咗一個新欄位（每個形狀嘅簡化多邊形座標`points`）——純加法,唔影響現有任何calling code,197自己12/12測試繼續過。
+  7個新測試(用synthetic幾何座標,唔係真相——因為真相嗰part本身就係俾block咗嗰part),803/803測試通過,已push(0bc5ad0)。
