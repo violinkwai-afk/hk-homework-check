@@ -439,6 +439,31 @@ test("Ticket 13: fallback batches ALL of a page's unresolved items into one call
   assert.equal(json.results.length, 2, "the hallucinated extra label must not appear as a phantom result");
 });
 
+// Ticket 18 (2026-09-30, real edge case): OCR producing a duplicate
+// question label on the same page must not let a plain question-number
+// keyed Map collapse two genuinely different items onto the same AI
+// verdict. Both items here share label "3" (simulating the real misread)
+// but are genuinely different questions with different correct AI
+// verdicts -- each must end up with its OWN result, matched in
+// submission order, not both getting item[0]'s (or item[1]'s) result.
+test("Ticket 18: two pendingItems sharing a duplicate OCR'd question label each get their own AI result, not collapsed onto one", async () => {
+  const items = [
+    { label: "3", printed: "男仔叫咩名？", answer: "阿明" },
+    { label: "3", printed: "女仔叫咩名？", answer: "阿珠" },
+  ];
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const { json } = await callMark(images, { PAGE0: qwenLineFor(items) }, {
+    fallbackByMarker: { PAGE0: { results: [
+      { question: "3", correct: true, correctAnswer: "", note: "" },
+      { question: "3", correct: false, correctAnswer: "阿英", note: "" },
+    ] } },
+  });
+  assert.equal(json.results.length, 2, "both duplicately-labelled items must survive as separate results");
+  assert.equal(json.results[0].correct, true, "first pendingItem gets the FIRST same-labelled AI result");
+  assert.equal(json.results[1].correct, false, "second pendingItem gets the SECOND same-labelled AI result, not a copy of the first");
+  assert.equal(json.results[1].correctAnswer, "阿英");
+});
+
 test("Ticket 13: fallback returning null for an item keeps it needs_review with the AI's own note, verifiedBy stays pending (not falsely 'ai')", async () => {
   const items = [{ label: "7", printed: "睇圖，呢個係咩形狀？", answer: "三角形" }];
   const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];

@@ -12012,9 +12012,27 @@ async function handleMark(request, env) {
         rawResponse: outcome ? outcome.parsed : null,
       }));
       if (!outcome) return;
-      const byQuestion = new Map((outcome.parsed.results || []).map((r) => [String(r.question), r]));
+      // Ticket 18 (2026-09-30, real edge case): if OCR produces a
+      // duplicate question label on the same page (a real, previously
+      // seen misread), a plain `Map` keyed by question number collapses
+      // every pendingItem sharing that label onto whichever single AI
+      // result happened to be stored last for that key -- two genuinely
+      // different items could silently receive the SAME verdict/answer.
+      // Grouping into a queue-per-label and shifting one result out per
+      // matching pendingItem (in submission order) instead means N
+      // duplicately-labelled items get matched to the AI's own N
+      // same-labelled results one-to-one, not collapsed onto one. Exact
+      // same behaviour as before whenever a label is unique (the common
+      // case) -- this only changes what happens on an actual collision.
+      const resultsByQuestion = new Map();
+      (outcome.parsed.results || []).forEach((r) => {
+        const key = String(r.question);
+        if (!resultsByQuestion.has(key)) resultsByQuestion.set(key, []);
+        resultsByQuestion.get(key).push(r);
+      });
       pendingItems.forEach((pending) => {
-        const aiResult = byQuestion.get(String(pending.question));
+        const queue = resultsByQuestion.get(String(pending.question));
+        const aiResult = queue && queue.length ? queue.shift() : null;
         if (!aiResult) return; // AI didn't answer this one -- stays needs_review, not a regression
         const r = results[pending.resultIndex];
         r.correct = typeof aiResult.correct === "boolean" ? aiResult.correct : null;
