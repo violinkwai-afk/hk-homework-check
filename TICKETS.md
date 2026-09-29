@@ -887,3 +887,8 @@
   新增`callGemini`(復用`OCR_TEXT_MODEL`常數,`reasoning:{effort:"low"}`,`maxTokens:4000`,`timeoutMs:8000`——按呢次同上次test實測嘅94-218 reasoning tokens/2.1-3.9秒定嘅,留咗充裕buffer)。`callAiFallbackJudge`而家淨係call一次Gemini,唔再有第二層fallback——完全對應用戶「唔要qwen唔要deepseek」嘅字面意思,唔係加第三層,係徹底替換。失敗處理維持返原本「fail-open,靜靜雞留低唔改」嘅做法,但保留咗之前為咗診斷真實production bug先加嘅TEMPORARY error log(`debug_ai_fallback_gemini_failed`)。
   698/698測試通過,已push(451bebc)。
   **未做**:換咗新model之後,仲未用真正`/api/mark`(唔係isolated test route)嘅live相片re-verify過——跟返呢個project一路嚟「換過嘢一定要用返真正dispatch path驗證」嘅規矩,建議下一次有真實用戶submission嗰陣順便留意。
+
+- ✅ **196跟進:`/api/check`(舊架構,獨立endpoint)自己嗰套Qwen→DeepSeek cascade都換咗做Gemini,已接落生產環境。** 用戶明確指示:「Fallback全部換晒gemini 唔好留deepseek」——即係196度提過「/api/check冇改,如果你想埋嗰個都換話我知」嗰個確認。
+  `handleCheckInner`而家淨係call一次`callGemini`(復用196已經有嘅同一個function),唔再有第二層。順手改埋幾樣舊命名/comment等佢哋唔再誤導:共用prompt變數`deepseekPrompt`改名做`cheapTierPrompt`(唔再淨係得DeepSeek專用);usage tracking嘅`qwenFailReason`/`deepseekFailReason`合併做`geminiFailReason`;附近幾段提到「Qwen/DeepSeek cascade」嘅comment都更新做反映現狀。
+  `callQwen`/`callDeepSeek`兩個function本身冇刪(仍然存在,`/api/test-deepseek-latency`呢個獨立診斷route仲有用返`callQwen`做latency測試,冇改)——而家production嘅判斷路徑(`/api/mark`嘅AI-fallback同`/api/check`)兩條都100%淨係用Gemini,冇任何地方仲會用Qwen/DeepSeek做真正批改判斷。
+  698/698測試通過,已push(d15bd8e)。
