@@ -9383,6 +9383,16 @@ async function handleMark(request, env) {
           printedNumberMismatch: printedNumberMismatch || undefined,
         }));
       }
+      // TEMPORARY (2026-09-29) -- one-use, real content visibility per
+      // explicit user request ("需要見到每一步嘅工具讀到咩字"). Logs
+      // EVERY item's OCR'd text + code's own verdict, not just the
+      // unresolved ones mark_unresolved_question already covers. Remove
+      // after this is done.
+      console.log(JSON.stringify({
+        event: "debug_content_ocr_and_code",
+        page: pageIdx, question: item.label, printedQuestion: item.printedQuestion || "",
+        studentAnswer: item.studentAnswer, codeVerdict: effectiveCorrect, verifiedBy: effectiveCorrect === null ? "pending" : "code",
+      }));
       results.push({
         question: item.label,
         studentAnswer: item.studentAnswer,
@@ -9492,6 +9502,16 @@ async function handleMark(request, env) {
     const tJev = Date.now();
     const jevResolved = await callJevPreCheck(allPendingFlat, openrouterKey);
     jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev, callStatus: jevResolved.callStatus || "unknown" };
+    // TEMPORARY (2026-09-29) -- one-use, real content visibility into a
+    // live production request per explicit user request ("需要見到每一
+    // 步嘅工具讀到咩字"). Logs what was actually SENT to Jev (the OCR'd
+    // text) and what Jev resolved, not just counts/timing. Remove after
+    // this is done.
+    console.log(JSON.stringify({
+      event: "debug_content_jev",
+      sentToJev: allPendingFlat.map((it) => ({ resultIndex: it.resultIndex, printedQuestion: it.printedQuestion, studentAnswer: it.studentAnswer })),
+      jevResolved: Array.from(jevResolved.entries()).map(([idx, v]) => ({ resultIndex: idx, correct: v.correct })),
+    }));
     // Ticket 40: accumulate a daily "did jev's endpoint actually work
     // today" counter in KV so a real outage (not just low-confidence
     // answers) is visible. Best-effort, non-atomic read-modify-write --
@@ -9561,6 +9581,15 @@ async function handleMark(request, env) {
       const tFallback = Date.now();
       const outcome = await callAiFallbackJudge([downscaleForCheapTier(images[pageIdx], 640)], pendingItems, openrouterKey);
       aiFallbackUsage.push({ page: pageIdx, items: pendingItems.length, ms: Date.now() - tFallback, model: outcome && outcome.model, usage: outcome && outcome.usage });
+      // TEMPORARY (2026-09-29) -- one-use, real content visibility per
+      // explicit user request. Logs what was SENT to AI-fallback and its
+      // raw parsed response. Remove after this is done.
+      console.log(JSON.stringify({
+        event: "debug_content_ai_fallback",
+        page: pageIdx,
+        sentItems: pendingItems.map((it) => ({ resultIndex: it.resultIndex, question: it.question, printedQuestion: it.printedQuestion, studentAnswer: it.studentAnswer })),
+        rawResponse: outcome ? outcome.parsed : null,
+      }));
       if (!outcome) return;
       const byQuestion = new Map((outcome.parsed.results || []).map((r) => [String(r.question), r]));
       pendingItems.forEach((pending) => {
