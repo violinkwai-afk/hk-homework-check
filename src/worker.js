@@ -3058,8 +3058,15 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
     if (!res.ok) { resolved.callStatus = "http_error_" + res.status; return resolved; }
     const data = await res.json();
     const answers = data.answers || {};
+    // Ticket (2026-09-29): raw noul per item, attached the same way
+    // .callStatus already is -- lets a caller (e.g. handleMark's debug
+    // content log) see EVERY item's actual confidence score, not just
+    // the post-threshold true/false verdict for the ones that cleared
+    // it. Never used for grading logic itself, purely observability.
+    resolved.rawScores = {};
     for (const [key, answer] of Object.entries(answers)) {
       if (!answer || typeof answer.noul !== "number" || !Number.isFinite(answer.noul)) continue;
+      resolved.rawScores[key] = answer.noul;
       if (answer.noul >= JEV_CONFIDENT_CORRECT) resolved.set(Number(key), { correct: true });
       else if (answer.noul <= JEV_CONFIDENT_WRONG) resolved.set(Number(key), { correct: false });
       // otherwise: genuinely uncertain -- deliberately left unresolved,
@@ -9509,8 +9516,13 @@ async function handleMark(request, env) {
     // this is done.
     console.log(JSON.stringify({
       event: "debug_content_jev",
-      sentToJev: allPendingFlat.map((it) => ({ resultIndex: it.resultIndex, printedQuestion: it.printedQuestion, studentAnswer: it.studentAnswer })),
-      jevResolved: Array.from(jevResolved.entries()).map(([idx, v]) => ({ resultIndex: idx, correct: v.correct })),
+      sentToJev: allPendingFlat.map((it) => ({
+        resultIndex: it.resultIndex,
+        printedQuestion: it.printedQuestion,
+        studentAnswer: it.studentAnswer,
+        noul: jevResolved.rawScores ? jevResolved.rawScores[String(it.resultIndex)] : undefined,
+        resolved: jevResolved.has(it.resultIndex) ? jevResolved.get(it.resultIndex).correct : "uncertain(falls to AI-fallback)",
+      })),
     }));
     // Ticket 40: accumulate a daily "did jev's endpoint actually work
     // today" counter in KV so a real outage (not just low-confidence
