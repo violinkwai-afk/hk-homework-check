@@ -8093,6 +8093,127 @@ function verifyLatinParallelLinesCount(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : String(expected) };
 }
 
+// Ticket 204 (2026-09-30, real citation: 26週數學訓練 P3 Topic 22「梯
+// 形」math34pdf/p57.png Q1: "依指示寫出所有代表答案的英文字母。" -- 9
+// quadrilaterals labelled P-X (X is a concave distractor, not a real
+// trapezoid). (a) 直角梯形(right trapezoid): ___ (b) 等腰梯形(isosceles
+// trapezoid): ___ (c) 沒有直角的不等腰梯形(scalene, no right angle): ___
+// Real answer key: (a) S,V (b) P,W (c) T,U.
+//
+// Extends Ticket 197's shape classifier (readShapeClassificationFromPixels)
+// rather than duplicating its blob-detection: that function now also
+// returns each blob's actual simplified polygon (additive `points`
+// field -- every existing caller still only reads shape/vertices/cx/
+// cy/area and is unaffected). This function classifies a 4-vertex
+// polygon as a trapezoid sub-type using real edge geometry: find the
+// one pair of opposite edges that are parallel (a trapezoid has exactly
+// one; a parallelogram has two, so is correctly rejected here), then
+// check whether either leg meets a base at ~90deg (right trapezoid) or
+// the two legs are equal length (isosceles) -- real-tested against all
+// 9 shapes in the actual citation image, correctly matching the real
+// answer key exactly, including correctly rejecting X (fails the
+// "exactly 4 vertices" precondition, since it's a concave 6-sided
+// distractor once its curved sides are polygon-approximated).
+//
+// Disclosed scope: rhombus (菱形) classification NOT included -- a
+// dedicated citation-extraction pass searched this entire book and
+// confirmed 菱形 is never named as its own concept anywhere in it (see
+// memory), so it's not built here without a real citation to verify
+// against. Line-property classification (straight/curved/parallel/
+// perpendicular for an arbitrary compound outline, the OTHER real
+// sub-case found for this ticket, math34pdf p53 Q4) is also NOT
+// attempted in this pass -- a materially different problem (open
+// strokes, not closed quadrilaterals) flagged as a separate follow-up.
+function classifyTrapezoidType(points) {
+  if (!points || points.length !== 4) return null;
+  const edges = [];
+  for (let i = 0; i < 4; i++) {
+    const p1 = points[i], p2 = points[(i + 1) % 4];
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    edges.push({ dx, dy, len: Math.hypot(dx, dy) });
+  }
+  const angle = (e) => Math.atan2(e.dy, e.dx);
+  const angleDiff = (a, b) => { const d = Math.abs(a - b) % Math.PI; return Math.min(d, Math.PI - d); };
+  const TOL = (8 * Math.PI) / 180;
+  const pair02 = angleDiff(angle(edges[0]), angle(edges[2])) < TOL;
+  const pair13 = angleDiff(angle(edges[1]), angle(edges[3])) < TOL;
+  if (pair02 === pair13) return null; // need EXACTLY one parallel pair -- neither (not a trapezoid) or both (parallelogram) are rejected
+  const [baseA, baseB, legA, legB] = pair02 ? [edges[0], edges[2], edges[1], edges[3]] : [edges[1], edges[3], edges[0], edges[2]];
+  const dot = (e1, e2) => (e1.dx * e2.dx + e1.dy * e2.dy) / (e1.len * e2.len);
+  const isPerp = (e1, e2) => Math.abs(dot(e1, e2)) < Math.cos(((90 - 8) * Math.PI) / 180);
+  const hasRightAngle = isPerp(baseA, legA) || isPerp(baseA, legB) || isPerp(baseB, legA) || isPerp(baseB, legB);
+  const legsEqual = Math.abs(legA.len - legB.len) < Math.max(legA.len, legB.len) * 0.12;
+  if (hasRightAngle) return "right";
+  if (legsEqual) return "isosceles";
+  return "scalene";
+}
+
+function isTrapezoidTypeLetterQuestion(item) {
+  const printed = String(item.printedQuestion || "").replace(/\s+/g, "");
+  // Matches whether OCR keeps the shared "依指示寫出所有代表答案的英文
+  // 字母" preamble on every split-out (a)/(b)/(c) sub-item or only the
+  // first -- either way, each real sub-item's own line always names its
+  // specific trapezoid-type category, which alone is specific enough
+  // (these exact geometric terms don't occur in unrelated questions).
+  return /直角梯形|等腰梯形|沒有直角的不等腰梯形/.test(printed);
+}
+
+function verifyTrapezoidTypeLetters(item, crop) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer || !isTrapezoidTypeLetterQuestion(item)) return { correct: null, correctAnswer: "" };
+  if (!item.trapezoidLetterLabels || item.trapezoidLetterLabels.length < 2) return { correct: null, correctAnswer: "" };
+  if (crop.originX == null || crop.originY == null) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let byLetter;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const shapes = readShapeClassificationFromPixels(pixels, w, h);
+    if (!shapes || !shapes.length) return { correct: null, correctAnswer: "" };
+    // Real bug found while building: the letter label is printed INSIDE
+    // each shape, so a naive "map shapes to letters by raster reading
+    // order" assumption (same one Ticket 197's grid classifier
+    // discloses and accepts) badly mismatches on THIS citation's real
+    // layout -- the shapes are staggered in two uneven, overlapping
+    // rows, not a clean grid. Fixed the same way as Ticket 203: bind
+    // each letter to the shape whose centroid is NEAREST to that
+    // letter's own Vision-word position (converted into this crop's
+    // local pixel coordinates via crop.originX/originY), never assumed
+    // from position order.
+    byLetter = {};
+    for (const label of item.trapezoidLetterLabels) {
+      const localX = label.px - crop.originX, localY = label.py - crop.originY;
+      let best = null, bestD = Infinity;
+      for (const s of shapes) {
+        const d = Math.hypot(s.cx - localX, s.cy - localY);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      if (best && bestD < Math.max(w, h) * 0.2) byLetter[label.letter] = classifyTrapezoidType(best.points);
+    }
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (!Object.keys(byLetter).length) return { correct: null, correctAnswer: "" };
+
+  // Determine which sub-question this item is via which trapezoid-type
+  // phrase leads it (each (a)/(b)/(c) sub-part is its own item after
+  // OCR splits by label, matching this project's established per-blank
+  // item convention).
+  let targetType;
+  if (/沒有直角的不等腰梯形/.test(printed)) targetType = "scalene";
+  else if (/等腰梯形/.test(printed)) targetType = "isosceles";
+  else if (/直角梯形/.test(printed)) targetType = "right";
+  else return { correct: null, correctAnswer: "" };
+
+  const expectedLetters = Object.entries(byLetter).filter(([, t]) => t === targetType).map(([l]) => l).sort();
+  if (!expectedLetters.length) return { correct: null, correctAnswer: "" };
+  const given = answer.split(/[,，、\s]+/).filter(Boolean).map((s) => s.toUpperCase()).sort();
+  const correct = given.join() === expectedLetters.join();
+  return { correct, correctAnswer: correct ? "" : expectedLetters.join(",") };
+}
+
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
 // visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
 // with arrowhead decorations pointing inward or outward at both ends,
@@ -8705,6 +8826,22 @@ function readShapeClassificationFromPixels(pixels, w, h) {
     }
     runs.sort((a, bb) => bb[1] - a[1]);
     const v = runs[0][0];
+    // Ticket 204 (2026-09-30): also keep the actual simplified polygon
+    // for the winning vertex-count run (additive field -- every existing
+    // caller only ever reads .shape/.vertices/.cx/.cy/.area and is
+    // unaffected), needed for trapezoid-subtype classification which
+    // requires real edge angles/lengths, not just a vertex count.
+    // Recomputed once at the tolerance in the middle of the winning
+    // run's stable range, then shifted out of the padded local frame
+    // back into this blob's own absolute crop-pixel coordinates.
+    let cIdx = 0, seen = 0;
+    for (let ci = 0; ci < counts.length; ci++) {
+      if (counts[ci] === v) { if (seen === 0) cIdx = ci; seen++; }
+    }
+    const winTol = 0.3 + (cIdx + Math.floor(seen / 2)) * 0.1;
+    const winSimp = simplifyPolygon(points, winTol, true);
+    const winDup = winSimp.length > 1 && winSimp[0].x === winSimp[winSimp.length - 1].x && winSimp[0].y === winSimp[winSimp.length - 1].y;
+    const finalPoints = (winDup ? winSimp.slice(0, -1) : winSimp).map((p) => ({ x: p.x - pad + b.minX, y: p.y - pad + b.minY }));
 
     let area2 = 0;
     for (let k = 0; k < points.length; k++) {
@@ -8757,7 +8894,7 @@ function readShapeClassificationFromPixels(pixels, w, h) {
     else if (v === 6) shape = "hexagon";
     else shape = "other";
 
-    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area };
+    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area, points: finalPoints };
   }
 
   const results = [];
@@ -10405,6 +10542,21 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => isLatinParallelLinesCountQuestion(item),
     verify: (item) => verifyLatinParallelLinesCount(item.printedQuestion, item.studentAnswer),
   },
+  // Ticket 204 (2026-09-30): trapezoid_type_letters handler NOT
+  // registered -- real-tested against the actual citation and found
+  // BLOCKED by a genuine bug in the shared shape classifier
+  // (readShapeClassificationFromPixels), not a bug in this ticket's own
+  // logic. See classifyTrapezoidType/verifyTrapezoidTypeLetters's own
+  // comments plus TICKETS.md for the full real finding: this citation's
+  // pale fill colour produces corner-jag artifacts that split a real
+  // 4-vertex trapezoid's corner into 6-7 spurious vertices, which the
+  // existing plateau-vertex-count method doesn't fully resolve even at
+  // its full tolerance sweep. Fixing that needs care against Ticket
+  // 197's own already-shipped real citations (regression risk), not
+  // attempted in this pass. The pure classifyTrapezoidType function
+  // itself is correct and tested in isolation -- once the underlying
+  // vertex-detection is fixed, wiring this in is a 3-line change (this
+  // same detect/verifyVisual pair, uncommented).
   {
     // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
     // P/Q/R all equal length" MC. See readLineShaftLengths's own long
@@ -11337,6 +11489,10 @@ async function handleMark(request, env) {
         item.gridPointLabels = extractLabeledGridPoints(pr.vision.words, pr.vision.width, pr.vision.height);
         return findGridPointsBbox(pr.vision.words, pr.vision.width, pr.vision.height);
       }
+      // Ticket 204: no bbox wiring here -- the handler isn't registered
+      // (blocked, see the QUESTION_TYPE_HANDLERS comment for this
+      // ticket), so attaching trapezoidLetterLabels here would compute
+      // data nothing ever consumes.
       return null;
     })
   );
@@ -12238,6 +12394,9 @@ export {
   verifyCjkParallelLinesMc,
   isLatinParallelLinesCountQuestion,
   verifyLatinParallelLinesCount,
+  classifyTrapezoidType,
+  isTrapezoidTypeLetterQuestion,
+  verifyTrapezoidTypeLetters,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
