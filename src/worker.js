@@ -7975,6 +7975,162 @@ function verifyColorCountedIcons(item, crop) {
   return { correct, correctAnswer: correct ? "" : expectedAnswer };
 }
 
+// Ticket 206 (2026-09-30, real citation: 26週數學訓練 P3 Topic 16「克和
+// 公斤」math34pdf/p43.png Q1: "文聰把豹玩偶和猴玩偶放在天平上稱量。"
+// (a) 豹玩偶重___粒◉。(b) 豹玩偶比猴玩偶*輕/重,重量相差___粒◉。 --
+// TWO separate balance-scale weighings in one crop (leopard toy vs a
+// carrot-icon pile on one scale, monkey toy vs a bigger carrot-icon pile
+// on a second scale); both scales are drawn perfectly level/balanced in
+// the source image, so this is pure ICON COUNTING per pile (same family
+// as Ticket 201), not tilt-angle reading -- re-scoped from the original
+// "which side sinks" assumption after checking the real image. Real
+// answer key: leopard=8, monkey=10 (輕;2 -- leopard lighter by 2).
+//
+// Real bug found+fixed while building: the carrot-icon "coins" are
+// drawn touching/overlapping each other in a tight pyramid stack (same
+// touching problem as Ticket 198's abacus beads) -- a general ink-blob
+// flood-fill merges the whole pile into one blob via each coin's shared
+// grey outline. Fix: flood-fill ONLY over the coin's small orange inner
+// "flame" mark (a specific hue, not general ink) -- the flames stay
+// separated even where the outer grey circles touch, since each flame
+// is drawn well within its own circle's interior. This also naturally
+// excludes the toy animals' body blobs (orange leopard fur is a much
+// LARGER blob than a single flame icon -- filtered by size) and a
+// stray same-hue icon printed elsewhere in the question text (filtered
+// by spatial clustering -- a real coin pile is always many icons
+// packed close together; an unrelated isolated icon has no close
+// same-size neighbours and is discarded as noise).
+//
+// Disclosed scope: hardcoded to the real citation's orange coin colour
+// (not colour-agnostic like Ticket 198's later rework) -- no user
+// instruction yet to generalise this one, unlike abacus reading.
+function readBalanceScalePiles(pixels, w, h) {
+  const isOrange = (x, y) => {
+    const i = (y * w + x) * 4;
+    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+    if (Math.max(r, g, b) - Math.min(r, g, b) < 40) return false;
+    return classifyColorName(r, g, b) === "orange";
+  };
+  const visited = new Uint8Array(w * h);
+  const blobs = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (visited[idx0] || !isOrange(x0, y0)) continue;
+      const stack = [[x0, y0]];
+      visited[idx0] = 1;
+      let size = 0, sumX = 0, sumY = 0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        size++; sumX += x; sumY += y;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (visited[nidx] || !isOrange(nx, ny)) continue;
+            visited[nidx] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (size >= 40) blobs.push({ size, cx: sumX / size, cy: sumY / size });
+    }
+  }
+  if (blobs.length < 6) return null; // need at least 2 real piles' worth
+  // Size-band filter: keep only blobs near the majority size (excludes
+  // much-larger animal-fur blobs, same "outlier vs median" philosophy
+  // as readShapeClassificationFromPixels/findRodPositions elsewhere).
+  const sizes = blobs.map((b) => b.size).sort((a, b) => a - b);
+  const medianSize = sizes[Math.floor(sizes.length / 2)];
+  const iconBlobs = blobs.filter((b) => b.size >= medianSize * 0.4 && b.size <= medianSize * 2.5);
+  // Spatial clustering (union-find over a proximity graph): real coin
+  // piles are many icons packed tightly; a stray same-hue icon
+  // elsewhere in the image has no close neighbours and forms its own
+  // tiny component, discarded below.
+  const linkDistance = 60;
+  const parent = iconBlobs.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (let i = 0; i < iconBlobs.length; i++) {
+    for (let j = i + 1; j < iconBlobs.length; j++) {
+      const dx = iconBlobs[i].cx - iconBlobs[j].cx, dy = iconBlobs[i].cy - iconBlobs[j].cy;
+      if (Math.sqrt(dx * dx + dy * dy) <= linkDistance) union(i, j);
+    }
+  }
+  const groups = new Map();
+  iconBlobs.forEach((b, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(b);
+  });
+  // Real bug found: a toy animal's own spotted fur pattern (e.g. the
+  // leopard's orange spots) can form its own small same-hue cluster
+  // (real measurement: 5 members) alongside the two real coin piles (8
+  // and 10 members) -- clustering alone isn't enough to isolate exactly
+  // 2 groups. Real coin piles always dominate in member count over any
+  // such incidental clutter, so take the two LARGEST qualifying groups,
+  // requiring a clear size margin over whatever is third-largest (if
+  // any) so a genuinely ambiguous case fails open instead of guessing.
+  const candidates = [...groups.values()].filter((g) => g.length >= 3).sort((a, b) => b.length - a.length);
+  if (candidates.length < 2) return null;
+  if (candidates.length >= 3 && candidates[2].length >= candidates[1].length * 0.7) return null;
+  const piles = candidates.slice(0, 2);
+  piles.sort((a, b) => (a.reduce((s, x) => s + x.cx, 0) / a.length) - (b.reduce((s, x) => s + x.cx, 0) / b.length));
+  return { leftCount: piles[0].length, rightCount: piles[1].length };
+}
+
+function isBalanceScalePileQuestion(item) {
+  return /天平上稱量|放在天平上/.test(String(item.printedQuestion || ""));
+}
+
+function verifyBalanceScalePiles(item, crop) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let piles;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    piles = readBalanceScalePiles(pixels, w, h);
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (!piles) return { correct: null, correctAnswer: "" };
+  const { leftCount, rightCount } = piles;
+
+  // Shape (a): "<name>重___粒" -- a single named toy's own pile count.
+  // Disclosed assumption: the FIRST weighing named in the question is
+  // always the LEFT scale in the image (true for the real citation,
+  // matches normal left-to-right page reading order) -- there is no
+  // pixel-level way to bind a toy's NAME to a specific pile, since the
+  // toy's own species isn't classified here, only the coin pile sizes.
+  if (/(?:^|。)[^，,。]{0,10}重(?:___|＿+|_{2,})粒/.test(printed)) {
+    const expected = leftCount;
+    const studentNum = parseSignedStudentNumber(answer);
+    const correct = studentNum === expected;
+    return { correct, correctAnswer: correct ? "" : String(expected) };
+  }
+
+  // Shape (b): "<A>比<B>*輕/重,重量相差___粒" -- compares the two piles.
+  const cmpMatch = printed.match(/比[^，,。]*\*?\s*(輕|重)[\s\S]{0,10}相差(?:___|＿+|_{2,})粒/);
+  if (cmpMatch) {
+    const aLighter = leftCount < rightCount;
+    const expectedDirection = aLighter ? "輕" : "重";
+    const expectedDiff = Math.abs(leftCount - rightCount);
+    const parts = answer.split(/[,，;]/).map((s) => s.trim());
+    const givenDirection = parts[0];
+    const givenDiff = Number(parts[1]);
+    const correct = givenDirection === expectedDirection && givenDiff === expectedDiff;
+    return { correct, correctAnswer: correct ? "" : `${expectedDirection},${expectedDiff}` };
+  }
+
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket (2026-09-30, real research this session): geometric shape
 // classification -- reads what shape each blob in a cropped image
 // actually IS (square/rectangle/triangle/pentagon/hexagon/circle/
@@ -9841,6 +9997,14 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyColorCountedIcons(item, crop),
   },
   {
+    // Ticket 206 (2026-09-30): see readBalanceScalePiles's own long
+    // comment for the real citation, the touching-icon bug found, and
+    // the disclosed left/right-pile-to-name binding assumption.
+    name: "balance_scale_piles",
+    detect: (item) => isBalanceScalePileQuestion(item),
+    verifyVisual: (item, crop) => verifyBalanceScalePiles(item, crop),
+  },
+  {
     // Ticket (2026-09-30): see readShapeClassificationFromPixels's own
     // long comment for the full real validation history (Python 6/6,
     // JS-port 5/6) and its disclosed touching-shapes limitation.
@@ -11587,6 +11751,9 @@ export {
   readColorCountedBlobs,
   isColorCountedQuestion,
   verifyColorCountedIcons,
+  readBalanceScalePiles,
+  isBalanceScalePileQuestion,
+  verifyBalanceScalePiles,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
