@@ -8044,6 +8044,55 @@ function verifyGridPointIsosceles(item, crop) {
   return { correct, correctAnswer: correct ? "" : expected.join(",") };
 }
 
+// Ticket 210 (2026-09-30, real citation: 26週數學訓練 P3 Topic 20「平行
+// 線」math34pdf/p54.png Q6 + p53.png Q2):
+// Q6: "下列哪一個中文字有平行線?" A.下 B.千 C.山 D.木 -> C (山:三條豎劃
+//   互相平行)
+// Q2: "上圖中有平行線的英文字母有___個。" over the printed sequence
+//   "A B C D E F G H" -> 3 (E,F,H each have a pair of parallel straight
+//   strokes in their standard block-capital form)
+// Both are fixed lookup-table facts about a BOUNDED, explicitly listed
+// set of glyphs -- pure text/logic, zero image work. Disclosed scope:
+// only the glyphs below are classified; any glyph outside this set
+// fails open (returns undetermined) rather than guessing -- several
+// Latin letters (e.g. M/N/U/W) have a genuinely font-dependent answer
+// not attempted here since no real citation confirms them.
+const CJK_PARALLEL_LINES_TABLE = { 下: false, 千: false, 山: true, 木: false };
+const LATIN_PARALLEL_LINES_TABLE = { A: false, B: false, C: false, D: false, E: true, F: true, G: false, H: true };
+
+function isCjkParallelLinesMcQuestion(item) {
+  return /下列哪一個中文字有平行線/.test(String(item.printedQuestion || "").replace(/\s+/g, ""));
+}
+
+function verifyCjkParallelLinesMc(printedQuestion, studentAnswer) {
+  if (!isCjkParallelLinesMcQuestion({ printedQuestion })) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(String(printedQuestion || ""));
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const evaluated = options.map((o) => ({ ...o, has: CJK_PARALLEL_LINES_TABLE[o.text.trim()] }));
+  if (evaluated.some((o) => o.has === undefined)) return { correct: null, correctAnswer: "" };
+  const target = evaluated.filter((o) => o.has);
+  if (target.length !== 1) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim();
+  const correct = answer === target[0].letter;
+  return { correct, correctAnswer: correct ? "" : target[0].letter };
+}
+
+function isLatinParallelLinesCountQuestion(item) {
+  return /有平行線的英文字母有.{0,6}(___|＿+|_{2,})個/.test(String(item.printedQuestion || "").replace(/\s+/g, ""));
+}
+
+function verifyLatinParallelLinesCount(printedQuestion, studentAnswer) {
+  if (!isLatinParallelLinesCountQuestion({ printedQuestion })) return { correct: null, correctAnswer: "" };
+  const answer = String(studentAnswer || "").trim();
+  const m = answer.match(/\d+/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const letters = [...new Set(String(printedQuestion || "").match(/\b[A-Z]\b/g) || [])];
+  if (letters.length < 2 || letters.some((l) => LATIN_PARALLEL_LINES_TABLE[l] === undefined)) return { correct: null, correctAnswer: "" };
+  const expected = letters.filter((l) => LATIN_PARALLEL_LINES_TABLE[l]).length;
+  const correct = Number(m[0]) === expected;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
 // visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
 // with arrowhead decorations pointing inward or outward at both ends,
@@ -10344,6 +10393,19 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyGridPointIsosceles(item, crop),
   },
   {
+    // Ticket 210 (2026-09-30): see the CJK_PARALLEL_LINES_TABLE/
+    // LATIN_PARALLEL_LINES_TABLE comment for the real citation and
+    // disclosed bounded-glyph-set scope.
+    name: "cjk_parallel_lines_mc",
+    detect: (item) => isCjkParallelLinesMcQuestion(item),
+    verify: (item) => verifyCjkParallelLinesMc(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    name: "latin_parallel_lines_count",
+    detect: (item) => isLatinParallelLinesCountQuestion(item),
+    verify: (item) => verifyLatinParallelLinesCount(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
     // P/Q/R all equal length" MC. See readLineShaftLengths's own long
     // comment above for the real+synthetic double validation. detect()
@@ -12172,6 +12234,10 @@ export {
   extractLabeledGridPoints,
   findGridPointsBbox,
   verifyGridPointIsosceles,
+  isCjkParallelLinesMcQuestion,
+  verifyCjkParallelLinesMc,
+  isLatinParallelLinesCountQuestion,
+  verifyLatinParallelLinesCount,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
