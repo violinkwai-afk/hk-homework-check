@@ -1038,3 +1038,7 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   `readShapeClassificationFromPixels`順手加咗一個新欄位（每個形狀嘅簡化多邊形座標`points`）——純加法,唔影響現有任何calling code,197自己12/12測試繼續過。
   7個新測試(用synthetic幾何座標,唔係真相——因為真相嗰part本身就係俾block咗嗰part),803/803測試通過,已push(0bc5ad0)。
 
+
+## 2026年9月30號：清理重複嘅Ticket 28 test file
+
+- ✅ **28重複清理,已接落生產環境。** 兩份獨立起嘅collision test file(舊嗰份`handler-collision.test.js` + 今晚背景任務整多嗰份`cross-collision-framework.test.js`)覆蓋緊唔同嘅handler,但共用埋一模一樣嘅temp檔案名——如果node test runner平行行,有真實race condition風險。合併做一個file,保留晒兩邊全部真citation(冇刪走任何嘢),仲搵到多一個真order-dependent配對(common_factors_count vs word_problem_total,即係當初Ticket 183嗰單)加咗落allowlist。832/832測試通過,已push(commit f0b24d7)。
