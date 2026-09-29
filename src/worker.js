@@ -1485,7 +1485,7 @@ async function callClaude(model, maxTokens, images, prompt, apiKey, effort) {
 // matching, as opposed to plain fill-in-the-blank) -- all of these throw
 // the same upstream_error so the caller can retry or escalate tiers
 // without special-casing each one.
-async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model, maxTokens, timeoutMs, providerFilter, logPrefix }) {
+async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model, maxTokens, timeoutMs, providerFilter, logPrefix, reasoning }) {
   const body = {
     model,
     max_tokens: maxTokens,
@@ -1495,6 +1495,7 @@ async function callOpenRouterVisionModel(images, prompt, openrouterKey, { model,
     // through this shared function).
     temperature: 0,
     ...(providerFilter ? { provider: providerFilter } : {}),
+    ...(reasoning ? { reasoning } : {}),
     messages: [
       {
         role: "user",
@@ -1739,6 +1740,29 @@ async function callDeepSeek(images, prompt, openrouterKey) {
     timeoutMs: 12000,
     providerFilter: { ignore: ["Alibaba"] },
     logPrefix: "deepseek",
+  });
+}
+
+// Ticket (2026-09-29, explicit user instruction "唔要qwen 唔要deepseek
+// 換做gemini"): real full-pipeline data gathered this same day, using the
+// REAL production prompt/dispatch path against the same 10 genuinely
+// AI-only items, found Gemini 3.1 Flash-Lite (with low-effort reasoning)
+// more accurate than the then-production Qwen tier (78% vs 67%), and far
+// cheaper/faster/more reliable than DeepSeek-v4.1-flash (which truncated
+// at exactly 4000 completion tokens even when maxTokens was raised, and
+// cost ~3.4x more per call) -- see benchmark/model-test-results-log.csv
+// and memory project_ai_model_watch.md for the raw numbers. Reuses the
+// same OCR_TEXT_MODEL constant/model string already used for OCR (one
+// real model, two roles) so a future model swap stays a one-line change.
+// maxTokens/timeoutMs sized off real observed usage in that test (94-218
+// reasoning tokens, 2.1-3.9s per call) with generous headroom.
+async function callGemini(images, prompt, openrouterKey) {
+  return callOpenRouterVisionModel(images, prompt, openrouterKey, {
+    model: OCR_TEXT_MODEL,
+    maxTokens: 4000,
+    timeoutMs: 8000,
+    reasoning: { effort: "low" },
+    logPrefix: "gemini",
   });
 }
 
@@ -2915,30 +2939,25 @@ ${referenceBlock}
 {"results":[{"question":"題號","correct":true/false/null,"correctAnswer":"","note":""}]}`;
 }
 
-// Same two-tier fallback as /api/check (Qwen first, DeepSeek on failure)
-// for the same proven reasons (callDeepSeek's own comment). A total
-// failure here (both tiers) throws nothing -- the caller treats a null
+// Ticket (2026-09-29, explicit user instruction "唔要qwen 唔要deepseek
+// 換做gemini"): Qwen/DeepSeek two-tier cascade REPLACED entirely with a
+// single Gemini call, based on real full-pipeline comparison data
+// gathered the same day (see callGemini's own comment above for the
+// numbers). A failure here throws nothing -- the caller treats a null
 // return as "leave these items exactly as they already were", the same
 // fail-open discipline as every other optional stage in this pipeline.
 async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
   const prompt = buildAiFallbackPrompt(pendingItems);
   try {
-    const r = await callQwen(images, prompt, openrouterKey);
-    return { parsed: r.parsed, usage: r.usage, model: "qwen" };
+    const r = await callGemini(images, prompt, openrouterKey);
+    return { parsed: r.parsed, usage: r.usage, model: "gemini" };
   } catch (e) {
-    // TEMPORARY (2026-09-29) -- one-use, real error visibility: this
-    // catch previously swallowed BOTH tiers' failure reasons entirely
-    // (silent null), leaving no way to diagnose a real production
-    // "both Qwen and DeepSeek failed" case after the fact. Remove after
-    // this is done.
-    console.log(JSON.stringify({ event: "debug_ai_fallback_qwen_failed", error: String((e && e.message) || e).slice(0, 500) }));
-    try {
-      const r = await callDeepSeek(images, prompt, openrouterKey);
-      return { parsed: r.parsed, usage: r.usage, model: "deepseek" };
-    } catch (e2) {
-      console.log(JSON.stringify({ event: "debug_ai_fallback_deepseek_failed", error: String((e2 && e2.message) || e2).slice(0, 500) }));
-      return null;
-    }
+    // TEMPORARY (2026-09-29) -- one-use, real error visibility: kept from
+    // before the Qwen/DeepSeek->Gemini swap so a real production failure
+    // still has a diagnostic trail instead of being silently swallowed.
+    // Remove once the live-debugging session this was added for is done.
+    console.log(JSON.stringify({ event: "debug_ai_fallback_gemini_failed", error: String((e && e.message) || e).slice(0, 500) }));
+    return null;
   }
 }
 
