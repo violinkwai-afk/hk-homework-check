@@ -211,7 +211,16 @@ async function recordCpuGuardUsage(env, ms) {
 function buildWrongAnswersSummary(results) {
   const wrongLines = (results || [])
     .filter((r) => r.correct === false)
-    .map((r) => `第${r.question}題：${r.correctAnswer ? `啱嘅答案係「${r.correctAnswer}」` : "錯"}`);
+    .map((r) => {
+      const answerPart = r.correctAnswer ? `啱嘅答案係「${r.correctAnswer}」` : "錯";
+      // 2026-09-30: r.note now also carries a short WHY for wrong items
+      // (AI-fallback items via the extended buildAiFallbackPrompt note
+      // field; code-verified items via each handler's own "explanation"
+      // -- see classifyAndVerify's call site) -- appended when present,
+      // silently omitted otherwise so a handler/AI-fallback item without
+      // one yet degrades to exactly the answer-only line this already had.
+      return r.note ? `第${r.question}題：${answerPart}（${r.note}）` : `第${r.question}題：${answerPart}`;
+    });
   return wrongLines.join("\n");
 }
 
@@ -2976,7 +2985,8 @@ ${referenceBlock}
 2. 如果題目要睇圖表/刻度/圖形先答到（水位、尺、角度、立體圖形、硬幣面額等），請直接睇返相片對應位置嘅圖像，唔好淨係靠上面嘅文字判斷。${buildTierVGuidance(pendingItems)}
 3. 只有答題位置確實有筆跡但太潦草/有歧義先"correct"設null，"note"簡短講原因。
 4. 只有"correct"為false先填"correctAnswer"，其他情況留空字串。
-5. 淨係回答上面列出嘅題號，唔好加返其他題目。
+5. "correct"為false嗰陣，"note"要簡短（一句起、廿字內）講清楚學生點解錯——唔係淨係複述答案，要講錯喺邊/點解啱嘅答案係咁（例如："25÷5應該係5，唔係6"、"呢題問緊相差，唔係總和"）。"correct"為true嗰陣，"note"留空字串。
+6. 淨係回答上面列出嘅題號，唔好加返其他題目。
 
 只回覆一個JSON物件，唔好加其他文字：
 {"results":[{"question":"題號","correct":true/false/null,"correctAnswer":"","note":""}]}`;
@@ -3399,7 +3409,8 @@ function trySubstituteBlank(printedQuestion, sub) {
   const lhsVal = evalArithmetic(reconstructed.slice(0, eqIdx));
   const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
   if (lhsVal === null || Number.isNaN(rhsVal)) return null;
-  return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
+  const correct = Math.abs(lhsVal - rhsVal) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(lhsVal), explanation: correct ? "" : `填返個空格：${reconstructed.slice(0, eqIdx)} = ${lhsVal}` };
 }
 
 // HK worksheets write division-with-remainder as "quotient...remainder"
@@ -3424,7 +3435,13 @@ function verifyDivisionRemainder(divExpr, remainderExpr) {
   const remainder = Number(remMatch[2]);
   if (divisor === 0) return null;
   const correct = dividend === divisor * quotient + remainder && remainder >= 0 && remainder < Math.abs(divisor);
-  return { correct, correctAnswer: correct ? "" : `${Math.floor(dividend / divisor)}...${dividend - divisor * Math.floor(dividend / divisor)}` };
+  const correctQuotient = Math.floor(dividend / divisor);
+  const correctRemainder = dividend - divisor * correctQuotient;
+  return {
+    correct,
+    correctAnswer: correct ? "" : `${correctQuotient}...${correctRemainder}`,
+    explanation: correct ? "" : `${dividend}÷${divisor} = ${correctQuotient}...${correctRemainder}（商${correctQuotient}餘${correctRemainder}）`,
+  };
 }
 
 // Deterministic verification -- code decides correct/wrong, never the AI.
@@ -3491,7 +3508,8 @@ function verifyMath(printedQuestion, studentAnswer) {
       const lhsVal = evalArithmetic(lhs);
       const rhsVal = parseNumericAnswer(rhs);
       if (lhsVal !== null && !Number.isNaN(rhsVal)) {
-        return { correct: Math.abs(lhsVal - rhsVal) < 1e-9, correctAnswer: lhsVal === rhsVal ? "" : String(lhsVal) };
+        const correct = Math.abs(lhsVal - rhsVal) < 1e-9;
+        return { correct, correctAnswer: correct ? "" : String(lhsVal), explanation: correct ? "" : `${lhs.trim()} = ${lhsVal}，唔係${rhsVal}` };
       }
       return { correct: null, correctAnswer: "" };
     }
@@ -3515,14 +3533,21 @@ function verifyMath(printedQuestion, studentAnswer) {
     const expected = evalArithmetic(printedExpr);
     const studentVal = parseNumericAnswer(sub);
     if (expected !== null && !Number.isNaN(studentVal)) {
-      return { correct: Math.abs(expected - studentVal) < 1e-9, correctAnswer: expected === studentVal ? "" : String(expected) };
+      const correct = Math.abs(expected - studentVal) < 1e-9;
+      return { correct, correctAnswer: correct ? "" : String(expected), explanation: correct ? "" : `${printedExpr.trim()} = ${expected}` };
     }
     return { correct: null, correctAnswer: "" };
   });
 
   if (results.some((r) => r.correct === null)) return { correct: null, correctAnswer: "" };
   const allCorrect = results.every((r) => r.correct === true);
-  return { correct: allCorrect, correctAnswer: allCorrect ? "" : results.map((r) => r.correctAnswer || "?").join(", ") };
+  // 2026-09-30: multi-sub-answer items join each wrong sub's own
+  // explanation the same way correctAnswer already joins each sub's own
+  // value -- a handler not yet given one (see trySubstituteBlank/
+  // verifyDivisionRemainder above -- both already do) just contributes
+  // nothing here, never a placeholder.
+  const explanation = allCorrect ? "" : results.filter((r) => r.correct === false && r.explanation).map((r) => r.explanation).join("；");
+  return { correct: allCorrect, correctAnswer: allCorrect ? "" : results.map((r) => r.correctAnswer || "?").join(", "), explanation };
 }
 
 // Subject classification (2026-09-21): the worksheet OCR sees is not
@@ -4453,7 +4478,12 @@ function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const expected = nums.reduce((a, b) => a + b, 0);
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
-  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  const correct = studentNum === expected;
+  return {
+    correct,
+    correctAnswer: correct ? "" : String(expected),
+    explanation: correct ? "" : `題目話「共」，即係要將啲數加埋：${nums.join("+")} = ${expected}`,
+  };
 }
 
 // Price-table lookup + compute -- TWO real, narrow shapes only (real
@@ -4490,11 +4520,21 @@ function verifyPriceTableLookup(priceTable, printedQuestion, studentAnswer) {
   const isSum = /(各一|共需付|共付|共須付)/.test(printed);
   if (isDifference && !isSum) {
     const expected = Math.abs(priceA - priceB);
-    return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+    const correct = studentNum === expected;
+    return {
+      correct,
+      correctAnswer: correct ? "" : String(expected),
+      explanation: correct ? "" : `${nameA}$${priceA}、${nameB}$${priceB}，相差：$${Math.max(priceA, priceB)}-$${Math.min(priceA, priceB)} = $${expected}`,
+    };
   }
   if (isSum && !isDifference) {
     const expected = priceA + priceB;
-    return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+    const correct = studentNum === expected;
+    return {
+      correct,
+      correctAnswer: correct ? "" : String(expected),
+      explanation: correct ? "" : `${nameA}$${priceA}+${nameB}$${priceB} = $${expected}`,
+    };
   }
   return { correct: null, correctAnswer: "" };
 }
@@ -6087,7 +6127,12 @@ function verifyDigitCountOfNPlusOne(printedQuestion, studentAnswer) {
   const expected = String(n + 1).length;
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
-  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+  const correct = studentNum === expected;
+  return {
+    correct,
+    correctAnswer: correct ? "" : String(expected),
+    explanation: correct ? "" : `${n}後面一個數係${n + 1}，有${expected}位數`,
+  };
 }
 
 // Compound-unit-to-single-unit length conversion (real, recurring across
@@ -6110,7 +6155,13 @@ function verifyCompoundUnitConversion(printedQuestion, studentAnswer) {
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   const closeEnough = Math.abs(studentNum - expected) < 1e-9;
   const expectedStr = Number.isInteger(expected) ? String(expected) : expected.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
-  return { correct: closeEnough, correctAnswer: closeEnough ? "" : expectedStr };
+  const part1 = (Number(v1) * TO_MM[u1n]) / TO_MM[u3n];
+  const part2 = (Number(v2) * TO_MM[u2n]) / TO_MM[u3n];
+  return {
+    correct: closeEnough,
+    correctAnswer: closeEnough ? "" : expectedStr,
+    explanation: closeEnough ? "" : `${v1}${u1}${v2}${u2} = ${part1}${u3}+${part2}${u3} = ${expectedStr}${u3}`,
+  };
 }
 
 // Construct the largest/smallest N-digit number from a given multiset of
@@ -11669,7 +11720,16 @@ async function handleMark(request, env) {
         // must read unambiguously as "not resolved", never silently coerced
         // to a falsy/"wrong" UI state.
         status: effectiveCorrect === null ? "needs_review" : "ok",
-        note: printedNumberMismatch ? "印刷數字唔肯定" : effectiveCorrect === null ? "需要人手複核" : "",
+        // 2026-09-30: a code-verified WRONG item can carry its own short
+        // "why" via verdict.explanation -- classifyAndVerify spreads
+        // whatever the handler's verify()/verifyVisual() returns
+        // straight onto verdict, so a handler that sets `explanation`
+        // needs no other wiring change to reach the parent (see
+        // buildWrongAnswersSummary). Handlers not yet given one (see
+        // benchmark/question-type-library.md's coverage column) simply
+        // leave this undefined -- falls back to "", the exact prior
+        // behaviour, never a fabricated guess.
+        note: printedNumberMismatch ? "印刷數字唔肯定" : effectiveCorrect === null ? "需要人手複核" : effectiveCorrect === false ? (verdict.explanation || "") : "",
         // Real page index (which call produced this item), not a guess.
         page: pageIdx,
         // null (not {x:0,y:0,w:0,h:0}) when nothing matched, so a real
@@ -11873,7 +11933,12 @@ async function handleMark(request, env) {
         r.correct = typeof aiResult.correct === "boolean" ? aiResult.correct : null;
         r.correctAnswer = r.correct === false ? String(aiResult.correctAnswer || "") : "";
         r.status = r.correct === null ? "needs_review" : "ok";
-        r.note = r.correct === null ? (aiResult.note || "需要人手複核") : "";
+        // 2026-09-30: "note" previously only survived for the null
+        // (needs_review) branch -- explicitly cleared for false, so a
+        // wrong item's WHY (which buildAiFallbackPrompt's prompt #5 now
+        // asks Gemini for, in the same existing call, no new AI cost)
+        // never reached the parent. Kept for both null and false now.
+        r.note = r.correct === null ? (aiResult.note || "需要人手複核") : r.correct === false ? String(aiResult.note || "") : "";
         r.verifiedBy = r.correct === null ? "pending" : "ai";
       });
     }));
