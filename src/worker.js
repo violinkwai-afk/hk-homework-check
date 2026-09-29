@@ -7838,6 +7838,143 @@ function readObjectCountFromPixels(pixels, w, h) {
   return { count: blobs.length, safe };
 }
 
+// Ticket 201 (2026-09-30, real citation: 26週數學訓練 P3 Topic 10「分
+// 數」math34pdf/p25.png Q2: "下圖是停泊在停車場裏的汽車。" (a) 綠色車
+// 有___輛,佔全部汽車的☐。(b) 黃色車有___輛,佔全部汽車的☐。 -- 10 toy
+// cars in a 2x5 grid, mixed colours red/blue/yellow/green. Self-measured
+// from the real crop: red=2, blue=4, yellow=3, green=1 -- matches the
+// real answer key exactly ((a) green=1 (b) yellow=3).
+// Extends readObjectCountFromPixels above with a per-blob dominant-hue
+// classifier, since plain counting can't tell WHICH icons match the
+// asked colour. Uses the same general (colour/background-agnostic) ink
+// test as Tickets 198/199 (estimateBackgroundLuminance/isInkByLuminance)
+// rather than a fixed brightness threshold, so this isn't tied to a
+// white background specifically.
+//
+// Colour classification averages RGB only over SATURATED ink pixels
+// within each blob (real bug found while building: a naive average over
+// ALL ink pixels, or a single centre-point sample, lands on a car's
+// grey window/wheel detail as often as its coloured body panel --
+// sampled real pixels confirmed this, e.g. one car's exact centre pixel
+// was (122,128,136), a near-grey wheel-shadow area, not the pink body).
+// Filtering to saturation > 40 (max-min channel spread) before
+// averaging reliably isolates the body-panel hue.
+function classifyColorName(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta < 20) return max < 100 ? "black" : max > 200 ? "white" : "gray";
+  let hue;
+  if (max === r) hue = ((g - b) / delta) % 6;
+  else if (max === g) hue = (b - r) / delta + 2;
+  else hue = (r - g) / delta + 4;
+  hue = ((hue * 60) + 360) % 360;
+  if (hue < 15 || hue >= 345) return "red";
+  if (hue < 45) return "orange";
+  if (hue < 70) return "yellow";
+  if (hue < 170) return "green";
+  if (hue < 255) return "blue";
+  if (hue < 290) return "purple";
+  return "pink";
+}
+
+const COLOR_NAME_ZH = { red: "紅色", orange: "橙色", yellow: "黃色", green: "綠色", blue: "藍色", purple: "紫色", pink: "粉紅色", black: "黑色", white: "白色", gray: "灰色" };
+const COLOR_NAME_ZH_TO_KEY = Object.fromEntries(Object.entries(COLOR_NAME_ZH).map(([k, v]) => [v, k]));
+
+function readColorCountedBlobs(pixels, w, h) {
+  const backgroundLuminance = estimateBackgroundLuminance(pixels, w, h);
+  const isInk = (x, y) => isInkByLuminance(pixels, (y * w + x) * 4, backgroundLuminance, 35);
+  const minBlobSize = 30;
+  const visited = new Uint8Array(w * h);
+  const blobs = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (visited[idx0] || !isInk(x0, y0)) continue;
+      const stack = [[x0, y0]];
+      visited[idx0] = 1;
+      let size = 0, minX = x0, maxX = x0, minY = y0, maxY = y0;
+      let sumR = 0, sumG = 0, sumB = 0, satCount = 0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        size++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        const i = (y * w + x) * 4;
+        const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+        if (Math.max(r, g, b) - Math.min(r, g, b) > 40) { sumR += r; sumG += g; sumB += b; satCount++; }
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (visited[nidx] || !isInk(nx, ny)) continue;
+            visited[nidx] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (size >= minBlobSize) {
+        const color = satCount > 0 ? classifyColorName(sumR / satCount, sumG / satCount, sumB / satCount) : "gray";
+        blobs.push({ size, boxW: maxX - minX, boxH: maxY - minY, color });
+      }
+    }
+  }
+  if (!blobs.length) return { blobs: [], safe: false };
+  const sizes = blobs.map((b) => b.size).sort((a, b) => a - b);
+  const median = sizes[Math.floor(sizes.length / 2)];
+  const maxSize = Math.max(...sizes);
+  const sizeOutlier = maxSize > median * 2.5;
+  const frameBlob = blobs.some((b) => b.boxW > w * 0.85 || b.boxH > h * 0.85);
+  const safe = !sizeOutlier && !frameBlob;
+  return { blobs, safe };
+}
+
+function isColorCountedQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /(紅|橙|黃|綠|藍|紫|粉紅|黑|白|灰)色.{0,10}有.{0,6}(___|＿+|_{2,})/.test(printed);
+}
+
+function verifyColorCountedIcons(item, crop) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(紅|橙|黃|綠|藍|紫|粉紅|黑|白|灰)色.{0,10}有.{0,6}(?:___|＿+|_{2,})/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const askedColorKey = COLOR_NAME_ZH_TO_KEY[`${m[1]}色`];
+  if (!askedColorKey) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let blobs, safe;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    ({ blobs, safe } = readColorCountedBlobs(pixels, w, h));
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (!safe || !blobs.length) return { correct: null, correctAnswer: "" };
+  const total = blobs.length;
+  const expectedCount = blobs.filter((b) => b.color === askedColorKey).length;
+  // Two-blank convention (count, fraction), matching this project's
+  // established multi-sub-answer format (e.g. Ticket 199's "4月,12").
+  // Also accepts a count-only answer when the printed question has no
+  // second (fraction) blank.
+  const parts = answer.split(/[,，;]/).map((s) => s.trim());
+  const givenCount = Number(parts[0]);
+  if (!Number.isFinite(givenCount)) return { correct: null, correctAnswer: "" };
+  let correct = givenCount === expectedCount;
+  let expectedAnswer = String(expectedCount);
+  if (parts.length > 1) {
+    const givenFraction = parts[1].replace(/\s/g, "");
+    const expectedFraction = `${expectedCount}/${total}`;
+    const fractionOk = givenFraction === expectedFraction || Number(parts[1]) === expectedCount / total;
+    correct = correct && fractionOk;
+    expectedAnswer = `${expectedCount},${expectedFraction}`;
+  }
+  return { correct, correctAnswer: correct ? "" : expectedAnswer };
+}
+
 // Ticket (2026-09-30, real research this session): geometric shape
 // classification -- reads what shape each blob in a cropped image
 // actually IS (square/rectangle/triangle/pentagon/hexagon/circle/
@@ -9694,6 +9831,16 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyObjectCounting(item, crop),
   },
   {
+    // Ticket 201 (2026-09-30): see readColorCountedBlobs's own long
+    // comment for the real citation and the colour-classification bug
+    // found while building. No dedicated bbox finder (unlike 198/199) --
+    // same default text-match crop path as object_counting above, which
+    // this extends.
+    name: "color_counted_icons",
+    detect: (item) => isColorCountedQuestion(item),
+    verifyVisual: (item, crop) => verifyColorCountedIcons(item, crop),
+  },
+  {
     // Ticket (2026-09-30): see readShapeClassificationFromPixels's own
     // long comment for the full real validation history (Python 6/6,
     // JS-port 5/6) and its disclosed touching-shapes limitation.
@@ -11436,6 +11583,10 @@ export {
   readLineShaftLengths,
   verifyLineShaftAllEqual,
   readObjectCountFromPixels,
+  classifyColorName,
+  readColorCountedBlobs,
+  isColorCountedQuestion,
+  verifyColorCountedIcons,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
