@@ -7685,6 +7685,85 @@ function verifyClockReading(item, crop) {
   }
 }
 
+// Ticket 202 (2026-09-30, real citation: 26週數學訓練 P3 Topic 15「秒」
+// math34pdf/p41.png Q1: "寫出鐘面所顯示的時間。" (a) 10時___分,再過了
+// ___秒 (b) ___時45分,再過了___秒 -- clocks with a THIRD hand drawn in a
+// distinct orange/gold colour for the seconds, alongside the usual
+// black hour/minute hands. readClockHandsFromPixels above only tracks
+// the two BLACK hands; this reads the coloured third hand separately.
+//
+// Real citation self-measured and verified exact against the real
+// answer key (28s->8, 45s->22... i.e. (a) minute=28,sec=8 (b) hour=4,
+// sec=22): farthest-orange-pixel-from-centre angle method gave 49.5deg
+// ->8s and 132.1deg->22s, both exact after rounding to the nearest
+// whole second (6deg/second). Deliberately does NOT use the polar-ring
+// two-hand-disambiguation technique from readClockHandsFromPixels above
+// (tracking by relative LENGTH) -- the second hand is isolated by
+// COLOUR instead, which is simpler and more robust here since colour is
+// unambiguous while relative hand lengths in a hand-drawn/stylised
+// clock face are not guaranteed proportional.
+function readSecondHandAngleFromPixels(pixels, w, h) {
+  const cx = w / 2, cy = h / 2;
+  let farX = null, farY = null, farD = -1, count = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) <= 40) continue;
+      if (classifyColorName(r, g, b) !== "orange") continue;
+      count++;
+      const d = Math.hypot(x - cx, y - cy);
+      if (d > farD) { farD = d; farX = x; farY = y; }
+    }
+  }
+  if (count < 10 || farD < Math.min(w, h) * 0.1) return null; // too few/too short to trust -- fails open
+  const angle = (Math.atan2(farX - cx, -(farY - cy)) * 180 / Math.PI + 360) % 360;
+  return Math.round(angle / 6) % 60;
+}
+
+function isSecondHandClockQuestion(item) {
+  return /再過了(?:___|＿+|_{2,})秒/.test(String(item.printedQuestion || ""));
+}
+
+function verifySecondHandClock(item, crop) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer || !isSecondHandClockQuestion(item)) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let seconds, reading;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    seconds = readSecondHandAngleFromPixels(pixels, w, h);
+    reading = readClockHandsFromPixels(pixels, w, h);
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (seconds === null || !reading) return { correct: null, correctAnswer: "" };
+
+  // Two real sub-shapes: hour printed+minute blank ("10時___分"), or
+  // hour blank+minute printed ("___時45分") -- always paired with the
+  // seconds blank. Determine which side is printed by checking for a
+  // literal digit immediately before 時 vs immediately before 分.
+  const hourPrinted = /(\d+)\s*時(?:___|＿+|_{2,})分/.test(printed);
+  const minutePrinted = /(?:___|＿+|_{2,})\s*時\s*(\d+)\s*分/.test(printed);
+  const parts = answer.split(/[,，;]/).map((s) => s.trim());
+  if (hourPrinted) {
+    const givenMinute = Number(parts[0]);
+    const givenSecond = Number(parts[1]);
+    const correct = givenMinute === reading.minute && givenSecond === seconds;
+    return { correct, correctAnswer: correct ? "" : `${reading.minute},${seconds}` };
+  }
+  if (minutePrinted) {
+    const givenHour = Number(parts[0]);
+    const givenSecond = Number(parts[1]);
+    const correct = givenHour === reading.hour && givenSecond === seconds;
+    return { correct, correctAnswer: correct ? "" : `${reading.hour},${seconds}` };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
 // visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
 // with arrowhead decorations pointing inward or outward at both ends,
@@ -9955,6 +10034,18 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyClockReading(item, crop),
   },
   {
+    // Ticket 202 (2026-09-30): see readSecondHandAngleFromPixels's own
+    // long comment for the real citation. Registered before
+    // clock_reading above out of the same defensive habit as other
+    // handler-ordering fixes this session, though the two shouldn't
+    // actually collide -- this ticket's "minute,second" or "hour,second"
+    // studentAnswer format never parses as a real clock time, so
+    // clock_reading's own detect() naturally can't claim it.
+    name: "second_hand_clock",
+    detect: (item) => isSecondHandClockQuestion(item),
+    verifyVisual: (item, crop) => verifySecondHandClock(item, crop),
+  },
+  {
     // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
     // P/Q/R all equal length" MC. See readLineShaftLengths's own long
     // comment above for the real+synthetic double validation. detect()
@@ -11754,6 +11845,9 @@ export {
   readBalanceScalePiles,
   isBalanceScalePileQuestion,
   verifyBalanceScalePiles,
+  readSecondHandAngleFromPixels,
+  isSecondHandClockQuestion,
+  verifySecondHandClock,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
