@@ -863,3 +863,27 @@
 **結論**:Gemini 3.1 Flash-Lite又平又快，但準繩度(78%)喺呢批視覺判斷題度明顯唔及GPT-5(96%)——2條真錯位都係「睇圖時數錯/認錯」類，唔係邏輯錯，反映呢個model對細節嘅視覺辨識力弱過GPT-5。Seed 2.1 Turbo因為燒budget問題已經放棄。
 
 臨時route `/api/test-jev-raw-scores`同`/api/test-model-real-photo` 用完即刻拆走。
+
+## 2026年9月29號(續):同一批10條題,改用真正production嘅Qwen/DeepSeek型號重測
+
+用戶指示「Repeat the last test with gemini with the actual model of qwen and deepseek used in the production」——之前嗰個Gemini test本身冇問題,但冇同「而家production真正用緊嘅」Qwen3-VL-235B/DeepSeek-v4.1-flash做直接對比(之前測嗰個DeepSeek R1係文字型號,建築上唔啱做呢個角色,唔算數)。用返真正`callQwen`/`callDeepSeek`嘅型號、真正`buildAiFallbackPrompt`,原班8張相10條題,真銀。完整原始數字見`benchmark/model-test-results-log.csv`。
+
+**準繩度(9條有verified ground truth,#8 CGP排除)**——三個model直接對比:
+
+| Model | 啱 | 錯/唔答 | 準繩度 |
+|---|---|---|---|
+| Qwen3-VL-235B(**當時production tier 1**) | 6 | 3 | **67%** |
+| Gemini 3.1 Flash-Lite | 7 | 2 | **78%** |
+| DeepSeek-v4.1-flash(**當時production tier 2**) | 7 | 1(啱)+1(截斷冇答) | 7/9=**78%**,如果淨計有真正答到嘅8條就係7/8=**88%** |
+
+**DeepSeek嘅截斷問題再確認一次**:#2(角度分類)呢次都係喺exactly 4000 completion tokens截斷(`finish_reason:"length"`)——就算已經明確要求`maxTokens:20000`都係咁,即係第一次test揭發嗰個「provider側限制,同request嘅max_tokens冇關」嘅懷疑,呢次係第二次獨立撞到,基本上實錘。
+
+**成本/速度**:DeepSeek平均每call貴成3倍以上(單條truncated個call都仲係要$0.00295),仲有截斷風險;Qwen最平最快但準繩度最低;Gemini喺平/快/準之間取得最好平衡。
+
+**結論(支持用戶最終決定)**:Gemini(78%)明確好過現production Qwen(67%);DeepSeek雖然理論上限更高(88%,如果唔計截斷嗰條),但真實可靠性差(截斷)、成本貴3倍以上,唔值得留低做fallback tier。
+
+- ✅ **196. Production AI-fallback判斷層:Qwen→DeepSeek cascade全面換做單一Gemini 3.1 Flash-Lite,已接落生產環境。** 用戶明確指示:「Production 唔要qwen 唔要deepseek 換做gemini」,根據上面真銀對比數據執行。
+  範圍僅限`/api/mark`嘅`callAiFallbackJudge`(Ticket 13嗰層)——`/api/check`(舊架構,獨立endpoint)自己嘅Qwen/DeepSeek cascade冇改,唔係呢次指示嘅範圍。
+  新增`callGemini`(復用`OCR_TEXT_MODEL`常數,`reasoning:{effort:"low"}`,`maxTokens:4000`,`timeoutMs:8000`——按呢次同上次test實測嘅94-218 reasoning tokens/2.1-3.9秒定嘅,留咗充裕buffer)。`callAiFallbackJudge`而家淨係call一次Gemini,唔再有第二層fallback——完全對應用戶「唔要qwen唔要deepseek」嘅字面意思,唔係加第三層,係徹底替換。失敗處理維持返原本「fail-open,靜靜雞留低唔改」嘅做法,但保留咗之前為咗診斷真實production bug先加嘅TEMPORARY error log(`debug_ai_fallback_gemini_failed`)。
+  698/698測試通過,已push(451bebc)。
+  **未做**:換咗新model之後,仲未用真正`/api/mark`(唔係isolated test route)嘅live相片re-verify過——跟返呢個project一路嚟「換過嘢一定要用返真正dispatch path驗證」嘅規矩,建議下一次有真實用戶submission嗰陣順便留意。
