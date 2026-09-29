@@ -29,6 +29,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 
 - 🔲 **207（未做）**：長除法多個散開嘅缺格填空。真citation已搵到(math34pdf/p14.png Q5)，但要解析一條完整直式嘅版位（多個分散喺唔同位置嘅缺格），需要加一個新嘅結構化OCR marker（類似PRICE_TABLE/CALENDAR_GRID嗰種），會改動production嘅OCR prompt本身——風險同範圍都大過209，未動手，等用戶決定優先次序。
 
+- ✅ **18. 修好AI-fallback merge嘅重複題號collision bug,已接落生產環境。** 之前個merge淨係靠一個Map keyed返題號——如果OCR喺同一頁整咗重複題號(真實見過嘅misread)，兩個唔同item會撞埋用同一個AI判斷。改用per-label queue,逐個match返,一對一唔會撞。3個新test,846/846測試通過,已push(commit 347a058)。
+
+- ✅ **28. 交叉碰撞test框架,已接落生產環境。** 攞晒每個handler自己已有test嘅真citation,逐個餵晒俾全部120個handler嘅detect(),搵有冇silent collision。**首次run已經搵到2個真overlap**:math_equation(故意做嘅generic fallback,預咗會撞好多嘢,已排除)、repeated_digit_place_value_difference/word_problem_difference(真係order-dependent,已經用reasoned allowlist記低,冇靜雞雞隱藏)。範圍披露:淨係~12/120個handler有真citation做咗fixture,機制完整但覆蓋未夠晒。
+
 ## 2026年9月30號：Show correct answers for wrong items in the normal Telegram flow
 
 - ✅ **（Ticket 1，正確答案顯示）** 每題wrong item嘅correctAnswer已經全部計好，但之前淨係喺CPU-guard文字fallback path先會顯示——而家正常嘅annotated-photo path都會send埋一個follow-up文字訊息列出邊題錯+啱嘅答案。5個新test，808/808測試通過，已push（commit 810e180）。
