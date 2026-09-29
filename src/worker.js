@@ -130,22 +130,6 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
-    // TEMPORARY debug route (2026-09-29) -- one-use, full-pipeline test
-    // of the 10 genuinely code-unsolvable Tier V items: raw Jev noul
-    // score per item (same shape as the earlier removed
-    // /api/test-jev-raw-scores). Remove after this is done.
-    if (url.pathname === "/api/test-jev-raw-scores" && request.method === "POST") {
-      return handleTestJevRawScores(request, env);
-    }
-    // TEMPORARY debug route (2026-09-29) -- one-use, real-cost/real-speed
-    // check for a named model (Seed 2.1 Turbo / Gemini 3.1 Flash-Lite) as
-    // a drop-in replacement for callAiFallbackJudge, using the REAL
-    // buildAiFallbackPrompt and a REAL homework photo, same convention as
-    // the earlier removed /api/test-gpt5-real-photo but parameterized by
-    // model name so it covers multiple candidates without a route each.
-    if (url.pathname === "/api/test-model-real-photo" && request.method === "POST") {
-      return handleTestModelRealPhoto(request, env);
-    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -225,82 +209,6 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
-}
-
-// TEMPORARY (2026-09-29) -- see the route registration's own comment.
-async function handleTestJevRawScores(request, env) {
-  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { items } = await request.json();
-  const t0 = Date.now();
-  const body = {
-    model: JEV_MODEL,
-    state: "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。",
-    questions: buildJevQuestions(items),
-  };
-  const res = await fetch("https://openrouter.ai/api/alpha/decisions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
-    body: JSON.stringify(body),
-  });
-  const elapsedMs = Date.now() - t0;
-  if (!res.ok) return json({ error: "jev_http_" + res.status, detail: await res.text(), elapsedMs }, 502);
-  const data = await res.json();
-  const answers = data.answers || {};
-  const results = items.map((it) => ({
-    resultIndex: it.resultIndex,
-    noul: answers[String(it.resultIndex)] ? answers[String(it.resultIndex)].noul : null,
-  }));
-  return json({ results, elapsedMs });
-}
-
-// TEMPORARY (2026-09-29) -- see the route registration's own comment.
-// Accepts { model, reasoning, items: [{question, printedQuestion,
-// studentAnswer}], imageBase64, mediaType }.
-async function handleTestModelRealPhoto(request, env) {
-  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-  const openrouterKey = !env.OPENROUTER_API_KEY ? null
-    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-    : await env.OPENROUTER_API_KEY.get();
-  if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { model, items, imageBase64, mediaType, reasoning } = await request.json();
-  if (!model) return json({ error: "no_model" }, 400);
-  const prompt = buildAiFallbackPrompt(items);
-  const t0 = Date.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4000,
-      temperature: 0,
-      reasoning: reasoning || { effort: "low" },
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:${mediaType || "image/jpeg"};base64,${imageBase64}` } },
-        ],
-      }],
-    }),
-  });
-  const elapsedMs = Date.now() - t0;
-  const data = await res.json();
-  if (!res.ok) return json({ error: "http_" + res.status, detail: data, elapsedMs }, 502);
-  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
-  return json({
-    model,
-    elapsedMs,
-    costUsd: (data.usage && data.usage.cost) || null,
-    reasoningTokens: (data.usage && data.usage.completion_tokens_details && data.usage.completion_tokens_details.reasoning_tokens) || null,
-    promptTokens: data.usage && data.usage.prompt_tokens,
-    completionTokens: data.usage && data.usage.completion_tokens,
-    finishReason: data.choices && data.choices[0] && data.choices[0].finish_reason,
-    rawContent: content,
-  });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
