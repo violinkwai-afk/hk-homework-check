@@ -204,6 +204,17 @@ async function recordCpuGuardUsage(env, ms) {
   } catch (e) { /* monitoring only, never block the real request */ }
 }
 
+// 2026-09-30: extracted so BOTH the normal (annotated-photo) send path
+// and the CPU-guard plain-text fallback path show the same real
+// correct-answer data -- see the call sites' own comments for why this
+// was previously only reachable via the rare fallback branch.
+function buildWrongAnswersSummary(results) {
+  const wrongLines = (results || [])
+    .filter((r) => r.correct === false)
+    .map((r) => `第${r.question}題：${r.correctAnswer ? `啱嘅答案係「${r.correctAnswer}」` : "錯"}`);
+  return wrongLines.join("\n");
+}
+
 async function isCpuGuardTripped(env) {
   if (!env.RATE_LIMIT_KV) return false;
   try {
@@ -12101,6 +12112,16 @@ async function handleTelegramWebhook(request, env) {
       // an all-correct-looking marked-up photo no longer hides unreviewed
       // items from the parent.
       await telegramSendPhoto(botToken, chatId, annotated.data, annotated.mediaType, "Checked");
+      // 2026-09-30: every wrong item's correctAnswer was ALREADY fully
+      // computed by this point (every handler -- code or AI-fallback --
+      // fills it in) but was never actually shown to the parent in this,
+      // the normal (non-CPU-guard-tripped) path -- only the ✓/✗ mark on
+      // the photo itself, with no text saying what the right answer WAS.
+      // This reuses the exact same correctAnswer-summary text the CPU-
+      // guard fallback branch below already builds, just also sent here.
+      // Zero new AI cost -- purely surfacing data that already existed.
+      const wrongAnswersText = buildWrongAnswersSummary(markJson.results || []);
+      if (wrongAnswersText) await telegramSendMessage(botToken, chatId, wrongAnswersText);
     } else {
       // Ticket 50: CPU-ms guard tripped for today -- fall back to a
       // plain-text summary instead of the annotated photo. Grading
@@ -12109,9 +12130,9 @@ async function handleTelegramWebhook(request, env) {
       // unusually high, and self-resets the next HK calendar day.
       const results = markJson.results || [];
       const correctCount = results.filter((r) => r.correct === true).length;
-      const wrongLines = results.filter((r) => r.correct === false).map((r) => `第${r.question}題：${r.correctAnswer ? `啱嘅答案係「${r.correctAnswer}」` : "錯"}`);
       const reviewCount = results.filter((r) => r.correct === null).length;
-      const summaryText = `改好喇：${correctCount} / ${results.length}\n${wrongLines.join("\n")}${reviewCount ? `\n（另有${reviewCount}題需要人手覆核）` : ""}\n\n（今日系統較忙，暫時未能提供標圖相片，文字版結果如上）`;
+      const wrongAnswersText = buildWrongAnswersSummary(results);
+      const summaryText = `改好喇：${correctCount} / ${results.length}\n${wrongAnswersText}${reviewCount ? `\n（另有${reviewCount}題需要人手覆核）` : ""}\n\n（今日系統較忙，暫時未能提供標圖相片，文字版結果如上）`;
       await telegramSendMessage(botToken, chatId, summaryText);
     }
     const sendPhotoMs = Date.now() - tSend;
@@ -12441,6 +12462,7 @@ export {
   parseOcrLine,
   recordCpuGuardUsage,
   isCpuGuardTripped,
+  buildWrongAnswersSummary,
   CPU_GUARD_DAILY_THRESHOLD_MS,
   extractContinuationMarkers,
   extractPriceTable,
