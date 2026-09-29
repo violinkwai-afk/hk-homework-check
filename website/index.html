@@ -179,6 +179,34 @@ let shots = []; // { dataUrl, base64 }
 // specific request.
 let requestId = new URLSearchParams(location.search).get('demoId') || null;
 
+// Ticket 217 (2026-09-30, code-review finding): r.correctAnswer is
+// interpolated straight into an HTML string that later gets assigned via
+// .innerHTML (see the marksHtml builder below) -- for AI-fallback-judged
+// items, this value comes from Gemini's own JSON response, itself
+// influenced by the photographed content, with no sanitisation before
+// this point. Escaping here closes that path without changing how
+// anything renders for the normal case (plain numbers/short answers).
+function escapeHtml(str){
+  return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Ticket 218 (2026-09-30): opaque per-browser id, always generated and
+// sent -- unlike getOrCreateDeviceId() below (which is opt-in and tied
+// to the handwriting-memory feature specifically), this carries no
+// personal data and exists purely so the server can rate-limit by
+// "one browser" instead of "one IP", which over-throttles real users on
+// a shared network (school, home WiFi). Safe to always send.
+function getOrCreateRateClientId(){
+  try {
+    let id = localStorage.getItem('hwcheck_rate_client_id');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+      localStorage.setItem('hwcheck_rate_client_id', id);
+    }
+    return id;
+  } catch (e) { return ''; } // private-browsing/storage-blocked -- falls back to IP server-side, same as today
+}
+
 // Handwriting profile: fully opt-in (checkbox defaults unchecked, and its
 // state is remembered so a parent who turns it on doesn't have to re-tick
 // it every time). deviceId is a random id kept only in this browser's
@@ -523,7 +551,7 @@ async function fillPageResult(data, pIdx){
     const hiddenStyle = r.correct === true ? 'opacity:0;' : '';
     const mark = `<div class="mark ${markClass(r.correct)}" style="left:${cx}%; top:${cy}%;${hiddenStyle}" data-page="${pIdx}" data-idx="${ri}">${markIcon(r.correct)}</div>`;
     const ans = (r.correct === false && r.correctAnswer)
-      ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${r.correctAnswer}</div>`
+      ? `<div class="mark-answer" style="left:${cx}%; top:${cy}%;" data-page="${pIdx}" data-idx="${ri}">${escapeHtml(r.correctAnswer)}</div>`
       : '';
     return mark + ans;
   }).join('');
@@ -657,7 +685,7 @@ async function restitchSplitPages(currentData, pageA, pageB, deviceId, rememberH
   try {
     const res = await fetch('/api/check', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'X-Client-Id': getOrCreateRateClientId() },
       body: JSON.stringify({
         images: [
           { data: shots[pageA].base64, mediaType: 'image/jpeg' },
@@ -734,7 +762,7 @@ submitBtn.onclick = async () => {
     // -- functionally similar for the common case, but not identical.
     const attemptOnce = () => fetch('/api/mark', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'X-Client-Id': getOrCreateRateClientId() },
       body: JSON.stringify({
         images: [{ data: s.base64, mediaType: 'image/jpeg' }],
       }),
@@ -825,7 +853,7 @@ submitBtn.onclick = async () => {
       if (!items.length) return;
       const res = await fetch('/api/verify', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'X-Client-Id': getOrCreateRateClientId() },
         body: JSON.stringify({
           images: [{ data: s.base64, mediaType: 'image/jpeg' }],
           items: items.map(r => ({ question: r.question, page: r.page, bbox: r.bbox, anchor: r.anchor, riskyDiagram: r.riskyDiagram, studentAnswer: r.studentAnswer })),

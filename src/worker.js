@@ -474,8 +474,12 @@ async function handleCheckInner(request, env) {
     : await env.OPENROUTER_API_KEY.get();
 
   if (env.RATE_LIMIT_KV) {
+    // Ticket 218: same per-browser-id preference as /api/mark -- see that
+    // handler's own comment for why IP alone over-throttles shared
+    // networks.
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-    const rateKey = "checkrate:" + ip;
+    const clientId = (request.headers.get("X-Client-Id") || "").slice(0, 64);
+    const rateKey = "checkrate:" + (clientId || ip);
     let count = 0;
     try {
       const raw = await env.RATE_LIMIT_KV.get(rateKey);
@@ -896,8 +900,12 @@ async function handleVerify(request, env) {
   // follow-up to its check call, not a separate user action, and
   // shouldn't eat into the same per-hour budget twice as fast.
   if (env.RATE_LIMIT_KV) {
+    // Ticket 218: same per-browser-id preference as /api/mark -- see that
+    // handler's own comment for why IP alone over-throttles shared
+    // networks.
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-    const rateKey = "verifyrate:" + ip;
+    const clientId = (request.headers.get("X-Client-Id") || "").slice(0, 64);
+    const rateKey = "verifyrate:" + (clientId || ip);
     let count = 0;
     try {
       const raw = await env.RATE_LIMIT_KV.get(rateKey);
@@ -3395,6 +3403,16 @@ const BLANK_TOKENS = ["?", "□"];
 //   (Tier 2), not attempted here.
 // - No "=" left after substitution, or either side doesn't parse as a
 //   clean number/expression -> null (needs_review), never a guess.
+// 2026-09-30 cleanup (code-review-2axis finding, Standards pass): the
+// {correct, correctAnswer, explanation} shape below was being built by
+// hand at 9 separate return sites, each repeating the same
+// correct-vs-wrong ternary twice. This is the shared shape -- callers
+// only need to know the WRONG-case values, since the correct case is
+// always the same (empty correctAnswer/explanation).
+function verdictResult(correct, wrongAnswer, wrongExplanation) {
+  return { correct, correctAnswer: correct ? "" : String(wrongAnswer), explanation: correct ? "" : wrongExplanation };
+}
+
 function trySubstituteBlank(printedQuestion, sub) {
   const printed = String(printedQuestion || "");
   let token = null, count = 0;
@@ -3410,7 +3428,7 @@ function trySubstituteBlank(printedQuestion, sub) {
   const rhsVal = parseFloat(reconstructed.slice(eqIdx + 1));
   if (lhsVal === null || Number.isNaN(rhsVal)) return null;
   const correct = Math.abs(lhsVal - rhsVal) < 1e-9;
-  return { correct, correctAnswer: correct ? "" : String(lhsVal), explanation: correct ? "" : `填返個空格：${reconstructed.slice(0, eqIdx)} = ${lhsVal}` };
+  return verdictResult(correct, lhsVal, `填返個空格：${reconstructed.slice(0, eqIdx)} = ${lhsVal}`);
 }
 
 // HK worksheets write division-with-remainder as "quotient...remainder"
@@ -3437,11 +3455,11 @@ function verifyDivisionRemainder(divExpr, remainderExpr) {
   const correct = dividend === divisor * quotient + remainder && remainder >= 0 && remainder < Math.abs(divisor);
   const correctQuotient = Math.floor(dividend / divisor);
   const correctRemainder = dividend - divisor * correctQuotient;
-  return {
+  return verdictResult(
     correct,
-    correctAnswer: correct ? "" : `${correctQuotient}...${correctRemainder}`,
-    explanation: correct ? "" : `${dividend}÷${divisor} = ${correctQuotient}...${correctRemainder}（商${correctQuotient}餘${correctRemainder}）`,
-  };
+    `${correctQuotient}...${correctRemainder}`,
+    `${dividend}÷${divisor} = ${correctQuotient}...${correctRemainder}（商${correctQuotient}餘${correctRemainder}）`
+  );
 }
 
 // Deterministic verification -- code decides correct/wrong, never the AI.
@@ -3509,7 +3527,7 @@ function verifyMath(printedQuestion, studentAnswer) {
       const rhsVal = parseNumericAnswer(rhs);
       if (lhsVal !== null && !Number.isNaN(rhsVal)) {
         const correct = Math.abs(lhsVal - rhsVal) < 1e-9;
-        return { correct, correctAnswer: correct ? "" : String(lhsVal), explanation: correct ? "" : `${lhs.trim()} = ${lhsVal}，唔係${rhsVal}` };
+        return verdictResult(correct, lhsVal, `${lhs.trim()} = ${lhsVal}，唔係${rhsVal}`);
       }
       return { correct: null, correctAnswer: "" };
     }
@@ -3534,7 +3552,7 @@ function verifyMath(printedQuestion, studentAnswer) {
     const studentVal = parseNumericAnswer(sub);
     if (expected !== null && !Number.isNaN(studentVal)) {
       const correct = Math.abs(expected - studentVal) < 1e-9;
-      return { correct, correctAnswer: correct ? "" : String(expected), explanation: correct ? "" : `${printedExpr.trim()} = ${expected}` };
+      return verdictResult(correct, expected, `${printedExpr.trim()} = ${expected}`);
     }
     return { correct: null, correctAnswer: "" };
   });
@@ -4479,11 +4497,7 @@ function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   const correct = studentNum === expected;
-  return {
-    correct,
-    correctAnswer: correct ? "" : String(expected),
-    explanation: correct ? "" : `題目話「共」，即係要將啲數加埋：${nums.join("+")} = ${expected}`,
-  };
+  return verdictResult(correct, expected, `題目話「共」，即係要將啲數加埋：${nums.join("+")} = ${expected}`);
 }
 
 // Price-table lookup + compute -- TWO real, narrow shapes only (real
@@ -4521,20 +4535,12 @@ function verifyPriceTableLookup(priceTable, printedQuestion, studentAnswer) {
   if (isDifference && !isSum) {
     const expected = Math.abs(priceA - priceB);
     const correct = studentNum === expected;
-    return {
-      correct,
-      correctAnswer: correct ? "" : String(expected),
-      explanation: correct ? "" : `${nameA}$${priceA}、${nameB}$${priceB}，相差：$${Math.max(priceA, priceB)}-$${Math.min(priceA, priceB)} = $${expected}`,
-    };
+    return verdictResult(correct, expected, `${nameA}$${priceA}、${nameB}$${priceB}，相差：$${Math.max(priceA, priceB)}-$${Math.min(priceA, priceB)} = $${expected}`);
   }
   if (isSum && !isDifference) {
     const expected = priceA + priceB;
     const correct = studentNum === expected;
-    return {
-      correct,
-      correctAnswer: correct ? "" : String(expected),
-      explanation: correct ? "" : `${nameA}$${priceA}+${nameB}$${priceB} = $${expected}`,
-    };
+    return verdictResult(correct, expected, `${nameA}$${priceA}+${nameB}$${priceB} = $${expected}`);
   }
   return { correct: null, correctAnswer: "" };
 }
@@ -6128,11 +6134,7 @@ function verifyDigitCountOfNPlusOne(printedQuestion, studentAnswer) {
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   const correct = studentNum === expected;
-  return {
-    correct,
-    correctAnswer: correct ? "" : String(expected),
-    explanation: correct ? "" : `${n}後面一個數係${n + 1}，有${expected}位數`,
-  };
+  return verdictResult(correct, expected, `${n}後面一個數係${n + 1}，有${expected}位數`);
 }
 
 // Compound-unit-to-single-unit length conversion (real, recurring across
@@ -6157,11 +6159,7 @@ function verifyCompoundUnitConversion(printedQuestion, studentAnswer) {
   const expectedStr = Number.isInteger(expected) ? String(expected) : expected.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
   const part1 = (Number(v1) * TO_MM[u1n]) / TO_MM[u3n];
   const part2 = (Number(v2) * TO_MM[u2n]) / TO_MM[u3n];
-  return {
-    correct: closeEnough,
-    correctAnswer: closeEnough ? "" : expectedStr,
-    explanation: closeEnough ? "" : `${v1}${u1}${v2}${u2} = ${part1}${u3}+${part2}${u3} = ${expectedStr}${u3}`,
-  };
+  return verdictResult(closeEnough, expectedStr, `${v1}${u1}${v2}${u2} = ${part1}${u3}+${part2}${u3} = ${expectedStr}${u3}`);
 }
 
 // Construct the largest/smallest N-digit number from a given multiset of
@@ -11301,8 +11299,22 @@ async function handleMark(request, env) {
   // handleCheckInner's ordering) so an abusive caller is turned away
   // before any real work, AI or otherwise.
   if (env.RATE_LIMIT_KV) {
+    // Ticket 218 (2026-09-30, challenge-scale finding): keying purely on
+    // IP collectively throttles every real distinct user behind a shared
+    // egress IP (a school network, a family's shared WiFi) -- the more
+    // real adoption grows, the worse this gets, exactly backwards from
+    // what a rate limit should do. The website now sends an opaque,
+    // per-browser random id (X-Client-Id header, generated once and kept
+    // in localStorage -- see getOrCreateRateClientId() in website's own
+    // script) that uniquely identifies one browser instead of one shared
+    // network exit point. Preferred when present; falls back to IP for
+    // any caller that doesn't send it (older cached website page before
+    // this deploy, or any other caller with no custom header) -- never a
+    // regression versus today's behaviour, only an improvement when the
+    // header is there.
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-    const rateKey = "markrate:" + ip;
+    const clientId = (request.headers.get("X-Client-Id") || "").slice(0, 64);
+    const rateKey = "markrate:" + (clientId || ip);
     let count = 0;
     try {
       const raw = await env.RATE_LIMIT_KV.get(rateKey);
@@ -11341,6 +11353,23 @@ async function handleMark(request, env) {
   // dedup) if KV is unbound or the hash/cache round-trip errors -- never
   // blocks real grading over this being unavailable.
   const MARK_DEDUP_TTL = 120;
+  // Ticket 219 (2026-09-30, challenge-scale finding): the real result is
+  // only written at the very END of the whole pipeline (see this
+  // function's tail) -- previously that meant the check-then-act window
+  // between this GET and that final PUT was the ENTIRE grading duration
+  // (several seconds of real OCR+AI work), so two near-simultaneous
+  // identical submissions (a double-tap under a slow connection, more
+  // likely exactly when the system is already stressed) could both pass
+  // the miss check and both pay for a full duplicate pipeline run. A
+  // "claim" sentinel written immediately after the miss check shrinks
+  // that window down to one KV round-trip instead of the whole pipeline.
+  // KV has no compare-and-swap primitive, so this narrows the race
+  // rather than eliminating it outright -- a request that sees the
+  // sentinel just proceeds normally (fail-open, same discipline as every
+  // other best-effort check in this function) rather than blocking or
+  // polling, which would add real complexity/hang risk for a rare edge
+  // case this can't fully close anyway.
+  const MARK_DEDUP_PENDING = "__pending__";
   let dedupKey = null;
   if (env.RATE_LIMIT_KV) {
     try {
@@ -11348,10 +11377,14 @@ async function handleMark(request, env) {
       const hashHex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
       dedupKey = "markdedup:" + hashHex;
       const cached = await env.RATE_LIMIT_KV.get(dedupKey);
-      if (cached) {
+      if (cached && cached !== MARK_DEDUP_PENDING) {
         console.log(JSON.stringify({ event: "mark_dedup_hit" }));
         return new Response(cached, { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
       }
+      if (cached === MARK_DEDUP_PENDING) {
+        console.log(JSON.stringify({ event: "mark_dedup_pending_race", note: "another identical submission is already in flight -- proceeding anyway, fail-open" }));
+      }
+      await env.RATE_LIMIT_KV.put(dedupKey, MARK_DEDUP_PENDING, { expirationTtl: MARK_DEDUP_TTL });
     } catch (e) { /* best-effort -- fall through and process normally */ }
   }
 

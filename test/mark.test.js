@@ -719,6 +719,38 @@ test("rate limit: at the threshold is rejected BEFORE any AI call, with its own 
   assert.equal(await kv.get("checkrate:" + ip), null, "this test never touched /api/check's bucket");
 });
 
+// Ticket 218 (2026-09-30, challenge-scale finding): keying purely on IP
+// collectively throttles every real user behind a shared egress IP
+// (school/home WiFi) -- an X-Client-Id header, when present, is now
+// preferred over IP for the rate-limit bucket key.
+test("rate limit: two different X-Client-Id values behind the SAME IP get separate buckets", async () => {
+  const ip = "9.9.9.9";
+  const kv = fakeRateLimitKV(null); // empty store -- both clients start fresh
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  await callMark(images, { PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]) }, {
+    headers: { "CF-Connecting-IP": ip, "X-Client-Id": "browser-A" },
+    env: { RATE_LIMIT_KV: kv },
+  });
+  await callMark(images, { PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]) }, {
+    headers: { "CF-Connecting-IP": ip, "X-Client-Id": "browser-B" },
+    env: { RATE_LIMIT_KV: kv },
+  });
+  assert.equal(await kv.get("markrate:browser-A"), "1", "browser A's own bucket, unaffected by browser B sharing the same IP");
+  assert.equal(await kv.get("markrate:browser-B"), "1", "browser B's own bucket, unaffected by browser A sharing the same IP");
+  assert.equal(await kv.get("markrate:" + ip), null, "the shared IP itself never accumulates a bucket when a client id is present");
+});
+
+test("rate limit: falls back to IP when no X-Client-Id header is sent (older cached page, or any caller without the header)", async () => {
+  const ip = "9.9.9.10";
+  const kv = fakeRateLimitKV(ip, 5);
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  await callMark(images, { PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]) }, {
+    headers: { "CF-Connecting-IP": ip },
+    env: { RATE_LIMIT_KV: kv },
+  });
+  assert.equal(await kv.get("markrate:" + ip), "6", "unchanged fallback behaviour when no client id is sent");
+});
+
 // Ticket 16 (2026-09-26): duplicate-submission protection -- a parent
 // double-tapping "send" in Telegram must not trigger two real OCR spends
 // for the identical photo(s).
@@ -736,6 +768,29 @@ test("Ticket 16: an identical resubmission within the dedup window returns the c
   assert.equal(second.status, 200);
   assert.deepEqual(second.json.results, first.json.results, "the resubmission returns the exact same result");
   assert.equal(fetchCalls, callsAfterFirst, "no additional Qwen/Vision calls on the duplicate submission");
+});
+
+// Ticket 219 (2026-09-30, challenge-scale finding): the dedup check was
+// pure check-then-act (GET at the start, PUT only at the very end of the
+// whole pipeline) -- two genuinely concurrent identical submissions could
+// both pass the miss check before either write landed. A "__pending__"
+// claim written immediately after the miss check shrinks that window; a
+// request that lands DURING another's in-flight claim fails open
+// (proceeds normally) rather than hanging or erroring.
+test("dedup: a request that sees another submission's in-flight claim still succeeds normally (fails open, doesn't hang or error)", async () => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(b64("PAGE0") + "|"));
+  const hashHex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const kv = {
+    get: async (key) => (key === "markdedup:" + hashHex ? "__pending__" : null),
+    put: async () => {},
+  };
+  const images = [{ data: b64("PAGE0"), mediaType: "image/jpeg" }];
+  const qwenByMarker = { PAGE0: qwenLineFor([{ label: "1", printed: "4+6=", answer: "10" }]) };
+  let fetchCalls = 0;
+  const { status, json } = await callMark(images, qwenByMarker, { env: { RATE_LIMIT_KV: kv }, fetchSpy: () => { fetchCalls++; } });
+  assert.equal(status, 200, "must proceed normally, never block/hang on someone else's in-flight claim");
+  assert.ok(json.results && json.results.length, "real grading still happens rather than returning an empty/stub result");
+  assert.ok(fetchCalls > 0, "genuinely calls Qwen/Vision rather than treating the pending marker as a cache hit");
 });
 
 test("Ticket 16: a genuinely DIFFERENT submission (different image) is never treated as a duplicate", async () => {
