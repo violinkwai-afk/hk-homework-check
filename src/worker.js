@@ -130,6 +130,13 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // TEMPORARY debug route (2026-09-29, re-added) -- one-use, testing
+    // the REAL production AI-fallback models (Qwen, DeepSeek-v4.1-flash)
+    // against the same 10-item/8-image set already tested with Gemini,
+    // for a direct apples-to-apples comparison. Remove after this is done.
+    if (url.pathname === "/api/test-model-real-photo" && request.method === "POST") {
+      return handleTestModelRealPhoto(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -209,6 +216,52 @@ async function isCpuGuardTripped(env) {
   } catch (e) {
     return false; // fail open -- a KV read failure must never block/degrade a real request
   }
+}
+
+// TEMPORARY (2026-09-29, re-added) -- see the route registration's own
+// comment. Accepts { model, reasoning, items: [{question,
+// printedQuestion, studentAnswer}], imageBase64, mediaType }.
+async function handleTestModelRealPhoto(request, env) {
+  if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_key" }, 500);
+  const { model, items, imageBase64, mediaType, reasoning } = await request.json();
+  if (!model) return json({ error: "no_model" }, 400);
+  const prompt = buildAiFallbackPrompt(items);
+  const t0 = Date.now();
+  const body = {
+    model,
+    max_tokens: 4000,
+    temperature: 0,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: `data:${mediaType || "image/jpeg"};base64,${imageBase64}` } },
+      ],
+    }],
+  };
+  if (reasoning) body.reasoning = reasoning;
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}`, "http-referer": "https://hk-homework-check.violin-kwai.workers.dev", "x-title": "hk-homework-check" },
+    body: JSON.stringify(body),
+  });
+  const elapsedMs = Date.now() - t0;
+  const data = await res.json();
+  if (!res.ok) return json({ error: "http_" + res.status, detail: data, elapsedMs }, 502);
+  const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "";
+  return json({
+    model,
+    elapsedMs,
+    costUsd: (data.usage && data.usage.cost) || null,
+    promptTokens: data.usage && data.usage.prompt_tokens,
+    completionTokens: data.usage && data.usage.completion_tokens,
+    finishReason: data.choices && data.choices[0] && data.choices[0].finish_reason,
+    rawContent: content,
+  });
 }
 
 async function handleTestVisionOcrLatency(request, env) {
