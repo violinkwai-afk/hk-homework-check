@@ -14,16 +14,45 @@ recalled from memory alone.
 ## 1. What this is
 
 A parent photographs a completed homework page; the AI marks each
-question ✓/✗ directly on the photo and hands it back. Two live-code
-entry points, meant to share one backend, currently don't:
+question ✓/✗ directly on the photo and hands it back.
 
-- **Website** (`/api/check` + `/api/verify`) — AI (Qwen/DeepSeek, Sonnet
-  as a last-resort fallback) reads the photo AND judges correctness in
-  one call, no code-verification layer at all. This is the OLDER, more
-  expensive, less testable path — **scheduled for retirement**, see §4.
-- **Telegram bot** (`/api/mark`) — AI reads only (OCR), code judges
-  deterministically, unresolved items fall back to `needs_review`. This
-  is the path all future work converges on.
+**CORRECTED 2026-09-30** (this section previously said the website still
+primarily called `/api/check` and the migration to `/api/mark` was
+blocked/not-yet-done — that was stale and got restated as fact in a live
+conversation before being caught by the user spotting a contradiction
+with an earlier 2026-09-27 answer; verified directly against
+`website/index.html`'s actual fetch call sites, not just against
+whether `/api/check`'s handler function still exists server-side):
+
+- **Website's PRIMARY grading flow, since Ticket 32 (2026-09-27),
+  already calls `/api/mark`** — same pipeline as the Telegram bot (AI
+  OCR only, code judges deterministically, Jev/AI-fallback only for what
+  code can't resolve). `submitBtn.onclick`'s `attemptOnce()` posts each
+  page straight to `/api/mark`. Known regression from this swap
+  (disclosed in the Ticket 32 code comment): `/api/mark` ignores
+  `pageIndex`/`priorPagesContext`/`requestId`/`deviceId`/
+  `rememberHandwriting`, so multi-page cross-page context and the
+  "remember this handwriting" feature are gone on the website too.
+- **`/api/check` still exists but is now a SECONDARY, narrow path**:
+  only called by `restitchSplitPages` (re-solving a question that spans
+  two page-boundary photos jointly, once both pages are already
+  individually graded via `/api/mark`) — not the main per-page grading
+  call anymore.
+- **`/api/verify`** is a website-only "phase 2" pass: re-sends a page's
+  image with just the items `/api/mark`'s response flagged as
+  low-confidence (`needsVerify`), patches those verdicts in place. No
+  Telegram equivalent.
+- **Telegram bot** (`handleTelegramWebhook` → calls `handleMark()`
+  directly, in-process, not via HTTP) — same `/api/mark` pipeline as the
+  website's primary flow, just invoked as a direct function call instead
+  of a fetch.
+
+Net effect: website and Telegram now share the SAME primary grading
+pipeline (`/api/mark`/`handleMark`) for the core "read + judge" step —
+the "two separate pipelines, migration blocked" framing this file used
+to have is gone. What's still genuinely separate is narrower than that:
+cross-page stitching and the phase-2 verify pass only exist on the
+website, not Telegram.
 
 No confirmed real production users on either path as of this writing —
 some field-testing has happened against real user-submitted photos (see
@@ -33,25 +62,42 @@ own testing. Don't assert "real users" without checking current state.
 
 ## 2. Architecture
 
-### 2a. Current, as actually deployed
+### 2a. Current, as actually deployed (corrected 2026-09-30, see §1)
 
 ```
-/api/check (website)  ── AI reads + judges in ONE call, no code check   [retiring]
-/api/mark  (Telegram)  ── detectAndCorrectRotation (both paths now, since 2026-09-25)
-                        ── callQwenOcrText (OCR only, model = PRODUCTION_OCR_MODEL constant)
+/api/mark  (Telegram: handleTelegramWebhook calls handleMark() directly, in-process;
+            website: submitBtn.onclick's attemptOnce() fetches it over HTTP, since Ticket 32)
+                        ── detectAndCorrectRotation (both entry points)
+                        ── callQwenOcrText (OCR only, model = PRODUCTION_OCR_MODEL constant, Qwen)
                         ── parseOcrLine (label=printed|answer)
-                        ── classifyAndVerify / QUESTION_TYPE_HANDLERS (code, ~30+ Tier-A verifiers)
+                        ── classifyAndVerify / QUESTION_TYPE_HANDLERS (code, ~130 verifiers now,
+                             not ~30 -- Tickets 185-216 added many since this was last accurate)
                         ── findBboxForItem (Vision word-position lookup, cached across the
                              rotation-check call when a page didn't need rotating)
+                        ── callJevPreCheck, then callAiFallbackJudge (Gemini, model =
+                             OCR_TEXT_MODEL constant) for whatever code/Jev couldn't resolve
                         ── annotateImage (Photon, stamps ✓/✗ on the corrected photo)
+
+/api/check (website only, SECONDARY) ── restitchSplitPages: re-solves a question spanning a
+                        page boundary, once both pages are already individually graded via
+                        /api/mark. Own judge step also now calls callGemini (OCR_TEXT_MODEL),
+                        not Qwen/DeepSeek -- see the 2026-09-29 "196跟進" TICKETS.md entry.
+
+/api/verify (website only, SECONDARY) ── phase-2 recheck of whatever /api/mark's response
+                        flagged as needsVerify (low confidence); no Telegram equivalent.
 ```
 
 `PRODUCTION_OCR_MODEL` (src/worker.js, currently
-`"qwen/qwen3-vl-235b-a22b-instruct"`) is the single source of truth for
-which model both `callQwen` (`/api/check`) and `callQwenOcrText`
-(`/api/mark`) use — extracted 2026-09-25 specifically so a future model
-swap is a one-line change. **Do not re-test this model choice without
-new evidence** — see §3's rigor-check summary for why.
+`"qwen/qwen3-vl-235b-a22b-instruct"`) is the OCR-reading model both
+`/api/mark` and (indirectly, since it's the same pipeline now) the
+website's primary flow use — extracted 2026-09-25 specifically so a
+future model swap is a one-line change. Separately, `OCR_TEXT_MODEL`
+(currently `"google/gemini-3.1-flash-lite"`) is the JUDGE-step model
+used by `callAiFallbackJudge` (both `/api/mark`'s AI-fallback and
+`/api/check`'s own remaining cheap tier) — a different constant, for a
+different pipeline stage; don't conflate the two. **Do not re-test the
+OCR model choice without new evidence** — see §3's rigor-check summary
+for why.
 
 ### 2b. Target design (settled, NOT yet built — see Tickets 1-8)
 
@@ -148,17 +194,28 @@ dropped-content safety net (5, removed 2026-09-26 per user decision), PDF
 upload — **closed 2026-09-26**: user decided not to build real PDF
 support; a PDF/document sent via Telegram gets a clear "not supported"
 reply, that's the final behavior (6), cross-page question stitching for
-Telegram — `/api/check` already has this via `stitchPages`, `/api/mark`
-has no equivalent (7), and the website migration onto the shared pipeline (8,
-blocked on 1-6 being done AND re-verified with the same rigor method
-before cutting over).
+Telegram — the website has this via `restitchSplitPages`/`stitchPages`,
+`/api/mark` (and so Telegram, which calls it directly) has no equivalent
+(7, still open), and (8) the website's PRIMARY grading flow migrated
+onto `/api/mark` as of **Ticket 32 (2026-09-27)** — done, not blocked,
+contrary to what this file said before the 2026-09-30 correction in §1.
+What's left of the old `/api/check` path is now just the secondary
+stitching/verify features (7's own gap, and `/api/verify`'s phase-2
+recheck), not the primary read+judge job.
 
-**Ticket 9, current top priority (2026-09-25 night)**: after Tickets 1-3
-shipped, the user personally reviewed a fresh Qwen OCR test and verdict
-was direct — "錯漏百出，絕對唔可以用" (riddled with errors, absolutely
-unusable). This means Ticket 8's "re-verify before cutting over"
-precondition is nowhere close to met yet; accuracy work is not done just
-because 1-3 shipped. Model search is ALSO active in parallel: **GLM-4.6V tested and
+**Ticket 9 (2026-09-25 night)**: after Tickets 1-3 shipped, the user
+personally reviewed a fresh Qwen OCR test and verdict was direct —
+"錯漏百出，絕對唔可以用" (riddled with errors, absolutely unusable).
+**Historical note, corrected 2026-09-30**: this file used to say Ticket
+8 (the website migration) was "blocked" on this precondition being met
+first — that's not what actually happened. Two days later (2026-09-27,
+commit `45935df`), the user explicitly instructed the migration to
+proceed anyway ("Per explicit user instruction" per that commit's own
+message) rather than waiting on Ticket 9's accuracy bar — Ticket 8 and
+Ticket 9 turned out to be independent decisions, not sequenced as this
+file previously implied. Don't assume Ticket 9's accuracy concern was
+ever resolved just because the migration shipped; they're separate
+threads. Model search is ALSO active in parallel: **GLM-4.6V tested and
 REJECTED** (real 3-photo rigor check, read through directly — on one
 photo GLM got only 1/5 items right vs Qwen's 4-5/5; on another GLM
 failed to structure its output at all, `parseFailed: true`, while Qwen
@@ -188,9 +245,13 @@ enough verified real examples yet (have ~40, would need hundreds+).
    verified correct BEFORE the comparison is meaningful** — hard rule,
    arising directly from tonight's model-comparison methodology gap
    (see §3).
-3. **One shared backend eventually** — website and Telegram (and any
-   future interface) are thin windows over one pipeline. `/api/check`'s
-   internals are the thing being replaced; `/api/mark`'s pipeline SHAPE
+3. **One shared backend — largely achieved 2026-09-30 correction**:
+   website and Telegram now both call `/api/mark`/`handleMark` as their
+   PRIMARY grading pipeline (since Ticket 32, 2026-09-27); what remains
+   separate is narrower than this principle originally described —
+   cross-page stitching and the phase-2 verify pass are website-only
+   secondary features, not a second full read+judge pipeline. `/api/mark`'s
+   pipeline SHAPE
    is the target, not the other way round.
 4. **No answer-key/worksheet-bank lookup, ever** — resolved hard rule,
    the opposite of sibling project hk-maths' approach.
