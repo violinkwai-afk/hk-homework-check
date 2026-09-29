@@ -2926,10 +2926,17 @@ async function callAiFallbackJudge(images, pendingItems, openrouterKey) {
     const r = await callQwen(images, prompt, openrouterKey);
     return { parsed: r.parsed, usage: r.usage, model: "qwen" };
   } catch (e) {
+    // TEMPORARY (2026-09-29) -- one-use, real error visibility: this
+    // catch previously swallowed BOTH tiers' failure reasons entirely
+    // (silent null), leaving no way to diagnose a real production
+    // "both Qwen and DeepSeek failed" case after the fact. Remove after
+    // this is done.
+    console.log(JSON.stringify({ event: "debug_ai_fallback_qwen_failed", error: String((e && e.message) || e).slice(0, 500) }));
     try {
       const r = await callDeepSeek(images, prompt, openrouterKey);
       return { parsed: r.parsed, usage: r.usage, model: "deepseek" };
     } catch (e2) {
+      console.log(JSON.stringify({ event: "debug_ai_fallback_deepseek_failed", error: String((e2 && e2.message) || e2).slice(0, 500) }));
       return null;
     }
   }
