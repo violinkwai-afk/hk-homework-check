@@ -112,8 +112,13 @@ export default {
     // Google Vision OCR refinement against a caller-supplied "parsed" result
     // (skipping the Anthropic call entirely), so infra behavior/cost can be
     // checked without spending on the metered Claude key. Remove before
-    // leaving this in production long-term.
+    // leaving this in production long-term. 待刪：見TICKETS.md。
+    // Ticket 41 (2026-09-30, real finding): this route had NO auth at all
+    // -- unlike the 3 latency routes below (Ticket 46 retrofitted them with
+    // DEBUG_TOKEN after finding the exact same gap) this one was missed.
+    // Gated now, same convention, rather than left as the one exception.
     if (url.pathname === "/api/test-noai-check" && request.method === "POST") {
+      if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
       return handleTestNoAiCheck(request, env);
     }
     // Ticket 46 (2026-09-27): these 3 latency-diagnostic routes are KEPT

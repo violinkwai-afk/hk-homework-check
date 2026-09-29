@@ -5,6 +5,7 @@
 ## 未完成嘅嘢（🔲 = 未做，⏸ = 做咗但未wire，⚪ = 已決定唔使再諗）
 
 - 🔲 **207. 長除法多個散開嘅缺格填空** — 真citation搵到咗(math34pdf/p14.png Q5),但要新增一個結構化OCR marker先解析到條直式嘅版位,會改動production嘅OCR prompt,風險/範圍都大過209,未動手。
+- 待刪：`/api/test-noai-check`（2026-09-30再次確認仍未刪,已補加DEBUG_TOKEN gate；之前完全冇auth係真安全漏洞,已修。原本用途:唔使洗Claude錢測rate-limit/Vision refinement——而家判斷架構已經轉晒去Qwen/Gemini,呢個route仲有冇實際用途待你決定,決定咗刪就刪返呢行。）
 - 🔲 **41. 診斷route管理** — 今晚起碼8-9個臨時診斷route要人手記得刪,未做結構性改進。
 
 217-219、209、18、28已完成並push，詳情見TICKETS_ARCHIVE.md。**210查證咗其實老早已經做咗**(commit `ee3757e`,`cjk_parallel_lines_mc`/`latin_parallel_lines_count`)——舊嘅🔲標記本身就係錯嘅,已經喺TICKETS_ARCHIVE.md補返正確記錄。

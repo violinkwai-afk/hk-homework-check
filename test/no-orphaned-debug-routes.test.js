@@ -19,14 +19,31 @@ const path = require("node:path");
 const WORKER_SRC = path.join(__dirname, "..", "src", "worker.js");
 const TICKETS_MD = path.join(__dirname, "..", "TICKETS.md");
 
-test("every /api/debug/* route registered in worker.js has a matching '待刪' tracking line in TICKETS.md", () => {
+// 2026-09-30 real finding: this check had silently gone vacuous. Every
+// temp route added in practice actually landed under "/api/test-*", not
+// the "/api/debug/*" prefix this test's own regex looked for -- so
+// `foundRoutes` was always empty and this test passed without checking
+// anything at all. Broadened to catch the naming convention actually in
+// use. Three of the current /api/test-* routes are a deliberate
+// exception: Ticket 46 kept them PERMANENTLY (real reusable latency
+// diagnostics, not one-use-then-delete) -- allowlisted by name with the
+// same reasoning as their own code comment, not silently excluded.
+const PERMANENT_DIAGNOSTIC_ROUTES = new Set([
+  "/api/test-deepseek-latency",
+  "/api/test-rotation-latency",
+  "/api/test-vision-ocr-latency",
+]);
+
+test("every temporary /api/debug/* or /api/test-* route in worker.js has a matching '待刪' tracking line in TICKETS.md", () => {
   const workerSrc = fs.readFileSync(WORKER_SRC, "utf8");
   const ticketsText = fs.readFileSync(TICKETS_MD, "utf8");
 
-  const routePattern = /url\.pathname\s*===\s*"(\/api\/debug\/[^"]+)"/g;
+  const routePattern = /url\.pathname\s*===\s*"(\/api\/(?:debug|test)\/?[^"]*)"/g;
   const foundRoutes = new Set();
   let m;
-  while ((m = routePattern.exec(workerSrc))) foundRoutes.add(m[1]);
+  while ((m = routePattern.exec(workerSrc))) {
+    if (!PERMANENT_DIAGNOSTIC_ROUTES.has(m[1])) foundRoutes.add(m[1]);
+  }
 
   const untracked = [...foundRoutes].filter((route) => {
     // Look for a "待刪" line that also mentions this exact route path --
