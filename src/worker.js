@@ -17,6 +17,8 @@
 import { PhotonImage, crop, rotate, resize, SamplingFilter, normalize } from "@cf-wasm/photon/workerd";
 import { parseTelegramUpdate, telegramGetFile, telegramDownloadFile, telegramSendPhoto, telegramSendMessage, constantTimeEqual } from "./telegram.js";
 import { annotateImage } from "./annotate.js";
+import { contours } from "d3-contour";
+import simplifyPolygon from "simplify-js";
 
 // 2026-09-23, explicit instruction: "At the testing stage, do NOT use
 // Sonnet/Opus to solve any questions." Claude Sonnet/Opus are meaningfully
@@ -7672,6 +7674,258 @@ function readObjectCountFromPixels(pixels, w, h) {
   return { count: blobs.length, safe };
 }
 
+// Ticket (2026-09-30, real research this session): geometric shape
+// classification -- reads what shape each blob in a cropped image
+// actually IS (square/rectangle/triangle/pentagon/hexagon/circle/
+// ellipse), not just how many there are (readObjectCountFromPixels
+// above only counts). Validated in an isolated sandbox first (Python/
+// OpenCV to prove the algorithm, a separate Node/d3-contour/simplify-js
+// prototype to prove the actual deployable-to-Workers stack) against
+// the REAL photo this was built to fix -- Gemini 3.1 Flash-Lite
+// (production AI-fallback, Ticket 196) miscounted/misclassified shapes
+// on 2 of 10 real Tier-V test items, including this exact one. This is
+// pure local geometric measurement, $0, no AI call -- see
+// memory/TICKETS.md for the full real-data comparison.
+//
+// Three real bugs were found and fixed while porting from OpenCV's
+// mature contour-tracing to these generic JS libraries (kept as comments
+// at each fix site below since they are NOT obvious and would be easy
+// to regress back into):
+// 1. The traced ring with the MOST points is not reliably "the outer
+//    boundary" -- pixel-level aliasing noise can give a tiny spurious
+//    ring more points than the true boundary has. Select by largest
+//    ENCLOSED AREA instead.
+// 2. Marching squares (d3-contour) is built to interpolate a smooth
+//    scalar field, not trace a raw hard 0/1 binary mask -- feeding it
+//    a hard mask produces pixel-staircase aliasing (spurious extra
+//    vertices). A small box blur before tracing fixes this.
+// 3. "Is this a rectangle" must use the true minimum-area ROTATED
+//    bounding rectangle (rotating calipers over the convex hull), not
+//    an axis-aligned bbox -- a shape drawn at an angle badly under-fills
+//    an axis-aligned box even when it's a clean rectangle/square.
+//
+// Known, disclosed limitation (NOT fixed, real and current): this only
+// works for shapes that do NOT touch/overlap each other (confirmed via
+// real testing -- 100% on Python/5-6 on this JS port for a real 12-shape
+// non-touching grid, but a real touching/composite figure, like a
+// flower drawn from petals sharing edges with a stem, is NOT correctly
+// separated by this flood-fill approach and needs a fundamentally
+// different technique, not yet built). Only wire this into a question
+// type confirmed (by real testing, not assumption) to be non-touching
+// shapes.
+function readShapeClassificationFromPixels(pixels, w, h) {
+  const threshold = 245; // matches the real 2026-09-29 validation (not-white = ink)
+  const minBlobSize = 80;
+  const luminance = (x, y) => {
+    const i = (y * w + x) * 4;
+    return 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+  };
+  const isInk = (x, y) => luminance(x, y) < threshold;
+  const labels = new Int32Array(w * h).fill(-1);
+  const blobs = []; // { label, minX, maxX, minY, maxY, area }
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (labels[idx0] !== -1 || !isInk(x0, y0)) continue;
+      const label = blobs.length;
+      const stack = [[x0, y0]];
+      labels[idx0] = label;
+      let minX = x0, maxX = x0, minY = y0, maxY = y0, area = 0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        area++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (labels[nidx] !== -1 || !isInk(nx, ny)) continue;
+            labels[nidx] = label;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (area >= minBlobSize) blobs.push({ label, minX, maxX, minY, maxY, area });
+      // else: leave labelled (never revisited -- labels[] already set) but not counted as a real blob
+    }
+  }
+
+  function convexHull(pts) {
+    const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower = [];
+    for (const p of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const p = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    upper.pop(); lower.pop();
+    return lower.concat(upper);
+  }
+
+  function classifyBlob(b) {
+    const bw = b.maxX - b.minX + 1, bh = b.maxY - b.minY + 1;
+    const pad = 1;
+    const fw = bw + pad * 2, fh = bh + pad * 2;
+    const field = new Float64Array(fw * fh);
+    for (let y = b.minY; y <= b.maxY; y++) {
+      for (let x = b.minX; x <= b.maxX; x++) {
+        if (labels[y * w + x] === b.label) field[(y - b.minY + pad) * fw + (x - b.minX + pad)] = 1;
+      }
+    }
+    // Fix 2: box blur before marching squares -- see function comment above.
+    const blurred = new Float64Array(fw * fh);
+    for (let y = 0; y < fh; y++) {
+      for (let x = 0; x < fw; x++) {
+        let sum = 0, cnt = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy, xx = x + dx;
+          if (yy < 0 || yy >= fh || xx < 0 || xx >= fw) continue;
+          sum += field[yy * fw + xx]; cnt++;
+        }
+        blurred[y * fw + x] = sum / cnt;
+      }
+    }
+    const gen = contours().size([fw, fh]).thresholds([0.5]);
+    const polys = gen(blurred);
+    if (!polys.length || !polys[0].coordinates.length) return null;
+    // Fix 1: select the ring enclosing the largest area, not the ring
+    // with the most points -- see function comment above.
+    let ring = null, bestArea = 0;
+    for (const poly of polys[0].coordinates) {
+      for (const r of poly) {
+        let a2 = 0;
+        for (let k = 0; k < r.length; k++) {
+          const [x1, y1] = r[k], [x2, y2] = r[(k + 1) % r.length];
+          a2 += x1 * y2 - x2 * y1;
+        }
+        const a = Math.abs(a2) / 2;
+        if (a > bestArea) { bestArea = a; ring = r; }
+      }
+    }
+    if (!ring) return null;
+    const points = ring.map(([x, y]) => ({ x, y }));
+
+    // Plateau vertex-count: scan a range of simplification tolerances
+    // and take the vertex count with the LONGEST stable run -- far more
+    // robust to jagged/anti-aliased edges than reading off one fixed
+    // tolerance.
+    const counts = [];
+    for (let tol = 0.3; tol <= 6; tol += 0.1) {
+      const simp = simplifyPolygon(points, tol, true);
+      // simplify-js's closed-polygon mode (3rd arg true) can return the
+      // first point duplicated as the last -- real bug found comparing
+      // against the sandbox prototype this was ported from: every single
+      // vertex count came back exactly +1 high (a square read as 5, a
+      // hexagon as 7, a circle's polygon approximation as 9) until this
+      // dedup was added. Must stay -- dropping it silently reintroduces
+      // the same off-by-one across every shape.
+      const dup = simp.length > 1 && simp[0].x === simp[simp.length - 1].x && simp[0].y === simp[simp.length - 1].y;
+      counts.push(simp.length - (dup ? 1 : 0));
+    }
+    let runs = [], i = 0;
+    while (i < counts.length) {
+      let j = i;
+      while (j < counts.length && counts[j] === counts[i]) j++;
+      runs.push([counts[i], j - i]);
+      i = j;
+    }
+    runs.sort((a, bb) => bb[1] - a[1]);
+    const v = runs[0][0];
+
+    let area2 = 0;
+    for (let k = 0; k < points.length; k++) {
+      const p1 = points[k], p2 = points[(k + 1) % points.length];
+      area2 += p1.x * p2.y - p2.x * p1.y;
+    }
+    const area = Math.abs(area2) / 2;
+    let cx = 0, cy = 0;
+    for (const p of points) { cx += p.x; cy += p.y; }
+    cx /= points.length; cy /= points.length;
+    let maxR = 0;
+    for (const p of points) maxR = Math.max(maxR, Math.hypot(p.x - cx, p.y - cy));
+    const extentCircle = maxR > 0 ? area / (Math.PI * maxR * maxR) : 0;
+
+    const hull = convexHull(points);
+    let hullArea2 = 0;
+    for (let k = 0; k < hull.length; k++) {
+      const p1 = hull[k], p2 = hull[(k + 1) % hull.length];
+      hullArea2 += p1.x * p2.y - p2.x * p1.y;
+    }
+    const hullArea = Math.abs(hullArea2) / 2;
+    const solidity = hullArea > 0 ? area / hullArea : 0;
+
+    // Fix 3: true minimum-area rotated rectangle (rotating calipers over
+    // the convex hull) -- see function comment above.
+    let bestRectArea = Infinity, rbw = 0, rbh = 0;
+    for (let k = 0; k < hull.length; k++) {
+      const p1 = hull[k], p2 = hull[(k + 1) % hull.length];
+      const edgeAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      const cos = Math.cos(-edgeAngle), sin = Math.sin(-edgeAngle);
+      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+      for (const p of hull) {
+        const u = p.x * cos - p.y * sin, vv = p.x * sin + p.y * cos;
+        minU = Math.min(minU, u); maxU = Math.max(maxU, u);
+        minV = Math.min(minV, vv); maxV = Math.max(maxV, vv);
+      }
+      const w2 = maxU - minU, h2 = maxV - minV;
+      const rectArea = w2 * h2;
+      if (rectArea < bestRectArea) { bestRectArea = rectArea; rbw = w2; rbh = h2; }
+    }
+    const aspect = Math.min(rbw, rbh) > 0 ? Math.max(rbw, rbh) / Math.min(rbw, rbh) : 999;
+    const rectFill = bestRectArea > 0 ? area / bestRectArea : 0;
+
+    const isRound = extentCircle > 0.75 && solidity > 0.9;
+    let shape;
+    if (isRound) shape = aspect < 1.2 ? "circle" : "ellipse";
+    else if (v === 3) shape = "triangle";
+    else if (v === 4) shape = (aspect < 1.15 && rectFill > 0.78) ? "square" : (rectFill > 0.85 ? "rectangle" : "quadrilateral");
+    else if (v === 5) shape = "pentagon";
+    else if (v === 6) shape = "hexagon";
+    else shape = "other";
+
+    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area };
+  }
+
+  const results = [];
+  for (const b of blobs) {
+    const r = classifyBlob(b);
+    if (r) results.push(r);
+  }
+
+  // Reading order: cluster into rows by y-gap (gap-based, not a fixed
+  // pixel constant -- a fixed constant only ever matched the one test
+  // image it was tuned against), then sort each row left-to-right. This
+  // is what lets the caller map "1st shape found" -> "A", "2nd" -> "B",
+  // etc for a lettered grid -- a real, disclosed assumption that the
+  // grid is laid out in that reading order (see verifyShapeClassificationGrid).
+  results.sort((a, b) => a.cy - b.cy);
+  const heights = blobs.map((b) => b.maxY - b.minY + 1).sort((a, b) => a - b);
+  const medianHeight = heights.length ? heights[Math.floor(heights.length / 2)] : 20;
+  const rowGap = Math.max(10, medianHeight * 0.6);
+  const rows = [];
+  for (const r of results) {
+    const row = rows.find((row) => Math.abs(row.cy - r.cy) <= rowGap);
+    if (row) { row.items.push(r); row.cy = row.items.reduce((s, x) => s + x.cy, 0) / row.items.length; }
+    else rows.push({ cy: r.cy, items: [r] });
+  }
+  rows.sort((a, b) => a.cy - b.cy);
+  const ordered = [];
+  for (const row of rows) {
+    row.items.sort((a, b) => a.cx - b.cx);
+    ordered.push(...row.items);
+  }
+  return ordered;
+}
+
 function verifyObjectCounting(item, crop) {
   let photonImg;
   try {
@@ -7686,6 +7940,110 @@ function verifyObjectCounting(item, crop) {
     if (!safe || count === null) return { correct: null, correctAnswer: "" };
     const correct = studentNum === count;
     return { correct, correctAnswer: correct ? "" : String(count) };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
+// Chinese shape-name -> the canonical labels readShapeClassificationFromPixels
+// can actually produce. Deliberately NOT exhaustive: 菱形(rhombus) and
+// 梯形(trapezoid) are real HK curriculum shape names but the classifier
+// above cannot currently distinguish a rhombus from a square (both read
+// as a 4-vertex, ~1:1-aspect quad) or a trapezoid from any other
+// irregular quad -- rather than guess, a question asking for either of
+// those is left entirely unhandled (detect() returns false for it), per
+// the same fail-open discipline as every other handler in this file.
+const SHAPE_CN_TO_CANONICAL = {
+  正方形: "square",
+  長方形: "rectangle",
+  六邊形: "hexagon",
+  圓形: "circle",
+  三角形: "triangle",
+  五邊形: "pentagon",
+  橢圓形: "ellipse",
+};
+
+// Standalone (not a QUESTION_TYPE_HANDLERS-internal closure) so the bbox
+// fallback in handleMark (findLetterGridBbox's call site) can run the
+// exact same check before any handler dispatch has happened -- see that
+// call site's own comment for why.
+function isShapeClassificationGridQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  if (!/英文字母|代表答案/.test(printed)) return false;
+  const namesFound = Object.keys(SHAPE_CN_TO_CANONICAL).filter((cn) => printed.includes(cn));
+  if (namesFound.length < 2) return false;
+  // Every shape name actually asked about must be one this classifier
+  // can verify -- a mix of e.g. 正方形+菱形 in the same question would
+  // otherwise silently only check half the answer, which is worse than
+  // not touching the question at all.
+  const anyUnsupported = /菱形|梯形|平行四邊形|八邊形/.test(printed);
+  return !anyUnsupported;
+}
+
+// Parses "(a)正方形 (b)長方形 ..." (question) or "(a)A,I (b)F ..." /
+// "A,I;F;E,J;H" (answer) into an ordered array of {label, value} --
+// value is either the raw shape-name text (question) or a letter array
+// (answer). Handles both an explicit "(a)/(b)/..." labelled form and a
+// bare ";"-joined form (aligned positionally against the question's own
+// label order in that case) since real OCR output format for this
+// exact multi-part-answer shape hasn't been observed live yet -- see
+// TICKETS.md for this ticket's own disclosure of that gap.
+function parseLabelledParts(text) {
+  const s = String(text || "");
+  const labelled = [...s.matchAll(/\(([a-z])\)\s*([^()]*?)(?=\s*\([a-z]\)|$)/gi)];
+  if (labelled.length) {
+    return labelled.map((m) => ({ label: m[1].toLowerCase(), value: m[2].trim() }));
+  }
+  if (!s.trim()) return [];
+  return s.split(";").map((v, i) => ({ label: String.fromCharCode(97 + i), value: v.trim() }));
+}
+
+function verifyShapeClassificationGrid(item, crop) {
+  let photonImg;
+  try {
+    const qParts = parseLabelledParts(item.printedQuestion);
+    if (!qParts.length) return { correct: null, correctAnswer: "" };
+    const categories = qParts
+      .map((p) => ({ label: p.label, canonical: SHAPE_CN_TO_CANONICAL[p.value] }))
+      .filter((c) => c.canonical);
+    if (!categories.length) return { correct: null, correctAnswer: "" };
+    const aParts = parseLabelledParts(item.studentAnswer);
+    if (aParts.length < categories.length) return { correct: null, correctAnswer: "" };
+    const studentByLabel = new Map(aParts.map((p) => [p.label, p.value]));
+
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const shapes = readShapeClassificationFromPixels(pixels, w, h);
+    if (shapes.length < 4) return { correct: null, correctAnswer: "" }; // too few blobs to trust the reading-order mapping at all
+
+    const letterFor = (idx) => String.fromCharCode(65 + idx); // 0->A, 1->B, ...
+    const detectedByLetter = new Map(shapes.map((s, i) => [letterFor(i), s.shape]));
+    const maxLetterIdx = shapes.length - 1;
+
+    let allMatch = true;
+    const correctParts = [];
+    for (const cat of categories) {
+      const studentRaw = studentByLabel.get(cat.label) || "";
+      const studentLetters = studentRaw.split(/[,、\s]+/).map((x) => x.trim().toUpperCase()).filter(Boolean);
+      // Any referenced letter beyond what was actually detected means the
+      // blob-count/letter mapping itself is untrustworthy for this photo
+      // -- decline rather than risk a wrong verdict built on a bad map.
+      if (studentLetters.some((L) => L.charCodeAt(0) - 65 > maxLetterIdx)) return { correct: null, correctAnswer: "" };
+      const correctLetters = [];
+      for (const [letter, shape] of detectedByLetter) {
+        if (shape === cat.canonical) correctLetters.push(letter);
+      }
+      correctLetters.sort();
+      const studentSorted = [...studentLetters].sort();
+      const matches = studentSorted.length === correctLetters.length && studentSorted.every((L, i) => L === correctLetters[i]);
+      if (!matches) allMatch = false;
+      correctParts.push(`(${cat.label})${correctLetters.join(",")}`);
+    }
+    return { correct: allMatch, correctAnswer: allMatch ? "" : correctParts.join(" ") };
   } catch (e) {
     return { correct: null, correctAnswer: "" };
   } finally {
@@ -8634,6 +8992,17 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyObjectCounting(item, crop),
   },
   {
+    // Ticket (2026-09-30): see readShapeClassificationFromPixels's own
+    // long comment for the full real validation history (Python 6/6,
+    // JS-port 5/6) and its disclosed touching-shapes limitation.
+    // isShapeClassificationGridQuestion is shared with handleMark's bbox
+    // fallback (findLetterGridBbox's call site) so both use exactly the
+    // same detection logic, never allowed to drift apart.
+    name: "shape_classification_grid",
+    detect: (item) => isShapeClassificationGridQuestion(item),
+    verifyVisual: (item, crop) => verifyShapeClassificationGrid(item, crop),
+  },
+  {
     // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
     // text reasoning, no image needed. detect() requires BOTH a lateral-
     // face-shape keyword AND a plausible answer shape (not itself a bare
@@ -8897,6 +9266,65 @@ function findBboxForItem(item, visionWords, pageWidth, pageHeight) {
     // lists (handleMark) can pick the strongest one -- a short match on
     // the wrong page must not beat a longer match on the right page.
     matchLen,
+  };
+}
+
+// Ticket (2026-09-30): findBboxForItem above strips everything except
+// a-z0-9 from the needle -- built for math expressions with a short
+// numeric/English anchor right next to the diagram it's cropping (a
+// clock's printed time, an object-count's answer prompt). It gives up
+// on a fully-Chinese question like shape_classification_grid's real
+// citation ("觀察下面的平面圖形(A-L)，寫出所有代表答案的英文字母。..."),
+// which has no short alphanumeric fragment reliably anchored at the
+// diagram itself. This type of question has its own better anchor: EACH
+// shape in the diagram has its own single-letter label (A, B, C...)
+// printed inside it, which Google Vision's OCR reads as its own short
+// word with a real position. Finding the tight spatial CLUSTER of those
+// single-letter words locates the diagram directly, more reliably than
+// text-matching the question prose. Deliberately separate from
+// findBboxForItem rather than a generalization of it -- a different
+// anchor strategy for a different, narrower question shape, not a
+// broadening of the existing one (which stays exactly as tuned for its
+// own real failure history).
+function findLetterGridBbox(visionWords, pageWidth, pageHeight, { minLetters = 4, maxSpanFraction = 0.5 } = {}) {
+  if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return null;
+  const single = visionWords.filter((w) => /^[A-La-l]$/.test(String(w.text || "").trim()));
+  if (single.length < minLetters) return null;
+  // Cluster by simple greedy nearest-neighbour chaining: sort by position,
+  // then group words whose gap to the previous one (either axis) doesn't
+  // exceed a page-fraction threshold -- a real shape grid's letters sit
+  // close together in a tight block; an unrelated stray "A"/"B" MC-option
+  // label elsewhere on the page will fall outside any such tight cluster.
+  const pts = single.map((w) => ({ x: w.x + w.w / 2, y: w.y + w.h / 2, w }));
+  pts.sort((a, b) => a.y - b.y || a.x - b.x);
+  const maxGapX = pageWidth * maxSpanFraction, maxGapY = pageHeight * maxSpanFraction;
+  const clusters = [];
+  for (const p of pts) {
+    let placed = false;
+    for (const c of clusters) {
+      if (Math.abs(p.x - c.cx) <= maxGapX && Math.abs(p.y - c.cy) <= maxGapY) {
+        c.items.push(p);
+        c.cx = c.items.reduce((s, q) => s + q.x, 0) / c.items.length;
+        c.cy = c.items.reduce((s, q) => s + q.y, 0) / c.items.length;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) clusters.push({ cx: p.x, cy: p.y, items: [p] });
+  }
+  const best = clusters.filter((c) => c.items.length >= minLetters).sort((a, b) => b.items.length - a.items.length)[0];
+  if (!best) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of best.items) {
+    x0 = Math.min(x0, p.w.x); y0 = Math.min(y0, p.w.y);
+    x1 = Math.max(x1, p.w.x + p.w.w); y1 = Math.max(y1, p.w.y + p.w.h);
+  }
+  return {
+    x: Math.round((x0 / pageWidth) * 100),
+    y: Math.round((y0 / pageHeight) * 100),
+    w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
+    h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
+    letterCount: best.items.length,
   };
 }
 
@@ -9262,7 +9690,21 @@ async function handleMark(request, env) {
   // with no way for a verifier to ever see the image itself.
   const tMap = Date.now();
   const matchesByPage = pageResults.map((pr) =>
-    pr.failed ? [] : pr.items.map((item) => (pr.vision ? findBboxForItem(item, pr.vision.words, pr.vision.width, pr.vision.height) : null))
+    pr.failed ? [] : pr.items.map((item) => {
+      if (!pr.vision) return null;
+      const primary = findBboxForItem(item, pr.vision.words, pr.vision.width, pr.vision.height);
+      if (primary) return primary;
+      // Fallback (2026-09-30): findBboxForItem's alphanumeric-only needle
+      // gives up on fully-Chinese questions like shape_classification_grid
+      // -- see findLetterGridBbox's own comment. Only attempted for that
+      // specific question shape, never a general fallback for every
+      // unmatched item, to avoid accidentally cropping the wrong region
+      // for something this anchor strategy was never validated against.
+      if (isShapeClassificationGridQuestion(item)) {
+        return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      return null;
+    })
   );
   const mapMs = Date.now() - tMap;
 
@@ -10133,6 +10575,11 @@ export {
   verifyLineShaftAllEqual,
   readObjectCountFromPixels,
   verifyObjectCounting,
+  readShapeClassificationFromPixels,
+  isShapeClassificationGridQuestion,
+  parseLabelledParts,
+  verifyShapeClassificationGrid,
+  findLetterGridBbox,
   verifySymbolicSubstitution,
   verifySymbolicRelation,
   verifyRelativeComparisonChain,

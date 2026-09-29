@@ -2,6 +2,8 @@
   "name": "hk-homework-check",
   "private": true,
   "dependencies": {
-    "@cf-wasm/photon": "^0.4.0"
+    "@cf-wasm/photon": "^0.4.0",
+    "d3-contour": "^4.0.2",
+    "simplify-js": "^1.2.4"
   }
 }
