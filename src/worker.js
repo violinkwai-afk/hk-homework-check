@@ -7926,6 +7926,265 @@ function readShapeClassificationFromPixels(pixels, w, h) {
   return ordered;
 }
 
+// Ticket 198 (2026-09-30): abacus/counting-rod reading. Real citation
+// (26週數學訓練 P3, Topic 5 Q1): two abacus diagrams side by side, each
+// 5 rods labelled 萬(10000s)/千(1000s)/百(100s)/十(10s)/個(1s), beads
+// stacked as clean non-touching ellipses -- (a) reads 5,0,6,9,0 beads
+// per rod -> 50690; (b) reads 1,3,0,0,7 -> 13007. Directly reuses the
+// flood-fill blob-detection technique proven in Ticket 197/
+// readObjectCountFromPixels, but counts beads PER COLUMN (rod) rather
+// than treating the whole image as one pool of objects, and maps each
+// column's count to its place value.
+//
+// Real bug found and fixed while building this: an EARLIER version
+// located columns by simple equal-width division of the crop (assuming
+// the crop's own edges line up with the outermost rods). Real
+// measurement against the citation showed this is wrong -- the crop
+// (and any real photo crop generally) includes extra margin (here, the
+// "(a)"/"(b)" bracket labels and cell padding) that is NOT evenly
+// distributed, so dividing the raw crop width by 5 puts the slot
+// boundaries in the wrong place and misassigns beads to the wrong place
+// value. Fixed by actually finding the 5 rods themselves (see
+// findRodPositions below) rather than assuming their position.
+function findRodPositions(pixels, w, h, expectedCount) {
+  // Real bug found calibrating this against the real citation: rods are
+  // NOT solid brown for their full length -- their own top few percent
+  // is a soft antialiased fade-in from white, and real testing found no
+  // single fixed-percentage Y-band is reliably "rod, no beads yet" for
+  // every column at once (the tallest possible bead count, 9, starts
+  // covering the rod at almost the exact same height the rod itself
+  // only just finishes fading in -- there is barely any clean gap).
+  // Fixed by NOT trying to find a bead-free band at all: scan the WHOLE
+  // crop height instead. A bare rod alone already covers roughly
+  // two-thirds of a real diagram's height (from just below the top label
+  // to just above the column labels), and a rod WITH beads on it is
+  // still ink over that same span (the beads sit on top of, not instead
+  // of, that same x-range) -- so real columns clear a much lower,
+  // uniform bar (see MIN_INK_FRACTION below) regardless of how many
+  // beads they carry, while stray marks like an "(a)" bracket label
+  // (only a few px tall) do not.
+  const isInk = (x, y) => {
+    const i = (y * w + x) * 4;
+    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (lum > 240) return false; // white background
+    if (r > g && g > b && lum > 195) return false; // pale pink table-cell background
+    return true;
+  };
+  const colInk = new Array(w).fill(0);
+  for (let x = 0; x < w; x++) {
+    let cnt = 0;
+    for (let y = 0; y < h; y++) if (isInk(x, y)) cnt++;
+    colInk[x] = cnt;
+  }
+  const MIN_INK_FRACTION = 0.4;
+  const candidateXs = [];
+  for (let x = 0; x < w; x++) if (colInk[x] >= h * MIN_INK_FRACTION) candidateXs.push(x);
+  if (!candidateXs.length) return null;
+  // Cluster adjacent candidate x's (a rod is a few px wide) into single centers.
+  const clusters = [];
+  let cur = [candidateXs[0]];
+  for (let i = 1; i < candidateXs.length; i++) {
+    if (candidateXs[i] - candidateXs[i - 1] <= 3) cur.push(candidateXs[i]);
+    else { clusters.push(cur); cur = [candidateXs[i]]; }
+  }
+  clusters.push(cur);
+  const centers = clusters.map((c) => c.reduce((s, x) => s + x, 0) / c.length);
+  if (centers.length < expectedCount) return null;
+  if (centers.length === expectedCount) return centers;
+  // More clusters than expected -- real cause found against the citation:
+  // the table's own BORDER lines (left/right edges, and the divider
+  // between two side-by-side diagrams) are ALSO solid full-height
+  // vertical lines, so they pass the same ink test as a real rod and
+  // can't be told apart from one by height/solidity alone. But real
+  // rods within ONE diagram are evenly spaced (~76px in the citation)
+  // while a diagram BOUNDARY or table border sits at a distinctly
+  // LARGER gap -- group candidates by that small-gap-vs-large-gap
+  // split (using the most common/"mode" gap as the small-gap reference,
+  // with tolerance), then keep only groups of exactly 5 (a lone border
+  // line forms its own group of size 1, immediately excluded) and
+  // concatenate them left to right. This correctly separates multiple
+  // diagrams' rods AND discards border lines in one pass, unlike a
+  // single "longest run" search, which only recovers ONE diagram's
+  // rods when the real page has more than one (an earlier version of
+  // this function had exactly that bug, confirmed on this citation's
+  // real two-diagram layout).
+  const gaps = [];
+  for (let i = 1; i < centers.length; i++) gaps.push(centers[i] - centers[i - 1]);
+  // Real bug found here too: a fixed multiple of the median gap (tried
+  // 1.4x) is not a reliable small/large threshold -- with more small
+  // gaps than large ones (2 diagrams x 4 within-diagram gaps = 8 small,
+  // vs 4 large boundary/border gaps in this citation), the median sits
+  // close to the small-gap cluster's own high end, so 1.4x it can still
+  // exceed even the smallest LARGE gap and fail to split anything.
+  // Fixed with a proper natural-break: sort all gaps, find the single
+  // BIGGEST jump between consecutive sorted values -- that jump is
+  // exactly the boundary between the "small" (within-diagram) and
+  // "large" (between-diagram / border) gap clusters, whatever their
+  // relative counts are. Real measurement on this citation: sorted gaps
+  // jump from 78 to 94 (a 16px jump, 3x any other consecutive
+  // difference in the sorted list) -- threshold lands at 86, cleanly
+  // separating both diagrams' 5-rod runs from the 3 border lines.
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  let threshold = Infinity, biggestJump = -1;
+  for (let i = 1; i < sortedGaps.length; i++) {
+    const jump = sortedGaps[i] - sortedGaps[i - 1];
+    if (jump > biggestJump) { biggestJump = jump; threshold = (sortedGaps[i] + sortedGaps[i - 1]) / 2; }
+  }
+  const groups = [];
+  let curGroup = [centers[0]];
+  for (let i = 0; i < gaps.length; i++) {
+    if (gaps[i] <= threshold) curGroup.push(centers[i + 1]);
+    else { groups.push(curGroup); curGroup = [centers[i + 1]]; }
+  }
+  groups.push(curGroup);
+  const rods = [];
+  for (const g of groups) if (g.length === 5) rods.push(...g);
+  return rods.length === expectedCount ? rods : null;
+}
+
+function readAbacusColumnsFromPixels(pixels, w, h, diagramCount) {
+  // Real bug found building this against the real citation: a plain
+  // "not white" luminance test (the approach that worked fine for
+  // Ticket 197's shapes-on-plain-white-background) fails hard here --
+  // the 萬千百十個 label row sits on a solid PINK/tan table-cell
+  // background, which is just as "not white" as the beads themselves,
+  // so the whole cell (background + beads + rods + text) flood-filled
+  // as one giant blob. Fix: beads in the real citation are a distinct
+  // blue/cyan color where the BLUE channel exceeds the RED channel by a
+  // clear margin (confirmed real samples: bead (163,218,253) B-R=90;
+  // background (244,215,194) B-R=-50; rod (142,124,112) B-R=-30) --
+  // detect ink by that color relationship instead of plain darkness.
+  // Disclosed real limitation: this assumes blue/cyan beads specifically
+  // (the only real citation available); a worksheet using differently-
+  // coloured beads would need recalibrating this test, not just the
+  // threshold.
+  const isInk = (x, y) => {
+    const i = (y * w + x) * 4;
+    return pixels[i + 2] - pixels[i] > 20;
+  };
+  const labels = new Int32Array(w * h).fill(-1);
+  const blobs = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (labels[idx0] !== -1 || !isInk(x0, y0)) continue;
+      const label = blobs.length;
+      const stack = [[x0, y0]];
+      labels[idx0] = label;
+      let minX = x0, maxX = x0, minY = y0, maxY = y0, area = 0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        area++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (labels[nidx] !== -1 || !isInk(nx, ny)) continue;
+            labels[nidx] = label;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (area >= 20) blobs.push({ minX, maxX, minY, maxY, area, cx: minX + (maxX - minX) / 2, cy: minY + (maxY - minY) / 2 });
+    }
+  }
+  if (!blobs.length) return null;
+
+  // Real bug found against the real citation: beads stacked on the same
+  // rod visually TOUCH each other (no gap, by design -- that's how an
+  // abacus is drawn), so flood-fill merges an entire column's beads into
+  // ONE blob, not N separate ones -- counting "blobs per column" always
+  // reads 0 or 1, never the real bead count. Fix: count beads by HEIGHT
+  // instead -- real measurement against the citation's known values
+  // (5,0,6,9,0 and 1,3,0,0,7 beads) found each column's merged-blob
+  // height divides by its own bead count to a remarkably consistent
+  // ~20.3-21.2px "height per bead" (6 real samples, min/max within 5% of
+  // each other) REGARDLESS of how many beads are stacked -- i.e. total
+  // height is closely linear in bead count with no meaningful offset
+  // term, so height / (one bead's height) directly gives the count.
+  // That per-bead-height constant is scale-DEPENDENT (a bigger/smaller
+  // crop changes it), so it's expressed as a fraction of the column
+  // slot's own width instead of a hard pixel constant, since both scale
+  // together with image resolution: real measurement gives ~0.19
+  // (colWidth 108px -> ~20.7px/bead).
+  const rods = findRodPositions(pixels, w, h, diagramCount * 5);
+  if (!rods) return null;
+  // Real bug found here: averaging the outermost-to-outermost rod span
+  // over (count-1) steps silently includes the GAP BETWEEN diagrams
+  // (much larger than a real within-diagram rod-to-rod gap) in the
+  // average, inflating the estimate and under-counting every bead
+  // height it's later divided into. Only average the WITHIN-diagram
+  // consecutive gaps (skip the 5th-to-6th-rod boundary between each
+  // diagram group).
+  const withinGaps = [];
+  for (let i = 1; i < rods.length; i++) if (i % 5 !== 0) withinGaps.push(rods[i] - rods[i - 1]);
+  const rodSpacing = withinGaps.length ? withinGaps.reduce((s, g) => s + g, 0) / withinGaps.length : w / (diagramCount * 5);
+  const BEAD_HEIGHT_TO_ROD_SPACING_RATIO = 0.27; // real measurement: ~20.7px/bead, ~76px rod spacing
+  const beadHeight = rodSpacing * BEAD_HEIGHT_TO_ROD_SPACING_RATIO;
+  const placeValues = [10000, 1000, 100, 10, 1];
+  const totals = new Array(diagramCount).fill(0);
+  const colBlobHeight = Array.from({ length: diagramCount }, () => [0, 0, 0, 0, 0]);
+  for (const b of blobs) {
+    // assign to the nearest rod, not a fixed equal-width slot -- see
+    // findRodPositions's own comment for why real rod positions (not
+    // assumed evenly-divided crop width) are needed here.
+    let nearest = 0, bestDist = Infinity;
+    for (let i = 0; i < rods.length; i++) {
+      const d = Math.abs(b.cx - rods[i]);
+      if (d < bestDist) { bestDist = d; nearest = i; }
+    }
+    const diagramIdx = Math.floor(nearest / 5);
+    const colIdx = nearest % 5;
+    const height = b.maxY - b.minY + 1;
+    colBlobHeight[diagramIdx][colIdx] = Math.max(colBlobHeight[diagramIdx][colIdx], height);
+  }
+  for (let d = 0; d < diagramCount; d++) {
+    for (let c = 0; c < 5; c++) {
+      const h2 = colBlobHeight[d][c];
+      const count = h2 === 0 ? 0 : Math.max(1, Math.round(h2 / beadHeight));
+      totals[d] += Math.min(9, count) * placeValues[c];
+    }
+  }
+  return totals;
+}
+
+function isAbacusReadingQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /算柱|算珠/.test(printed) && /寫出.{0,6}(所表示的數|表示的數字)|表示.{0,6}的數/.test(printed);
+}
+
+function verifyAbacusReading(item, crop) {
+  let photonImg;
+  try {
+    const nums = (String(item.studentAnswer || "").match(/\d+/g) || []).map(Number);
+    if (!nums.length) return { correct: null, correctAnswer: "" };
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    // Diagram count comes from how many numeric answers were given, not
+    // from re-deriving it here -- findAbacusBbox already counted the
+    // real 萬千百十個 occurrences when locating this crop, but that
+    // count isn't threaded through to this function; using the
+    // student's own answer count as a proxy is safe BECAUSE a mismatch
+    // either way still gets caught below (wrong length -> decline).
+    const diagramCount = nums.length;
+    const totals = readAbacusColumnsFromPixels(pixels, w, h, diagramCount);
+    if (!totals || totals.length !== nums.length) return { correct: null, correctAnswer: "" };
+    const allMatch = nums.every((n, i) => n === totals[i]);
+    return { correct: allMatch, correctAnswer: allMatch ? "" : totals.join(", ") };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 function verifyObjectCounting(item, crop) {
   let photonImg;
   try {
@@ -9003,6 +9262,14 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyShapeClassificationGrid(item, crop),
   },
   {
+    // Ticket 198 (2026-09-30): see readAbacusColumnsFromPixels's own long
+    // comment. isAbacusReadingQuestion shared with handleMark's bbox
+    // fallback (findAbacusBbox's call site).
+    name: "abacus_reading",
+    detect: (item) => isAbacusReadingQuestion(item),
+    verifyVisual: (item, crop) => verifyAbacusReading(item, crop),
+  },
+  {
     // Ticket 108 (2026-09-28): reverses the SHAPE_REFERENCE facts -- pure
     // text reasoning, no image needed. detect() requires BOTH a lateral-
     // face-shape keyword AND a plausible answer shape (not itself a bare
@@ -9325,6 +9592,62 @@ function findLetterGridBbox(visionWords, pageWidth, pageHeight, { minLetters = 4
     w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
     h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
     letterCount: best.items.length,
+  };
+}
+
+// Ticket 198 (2026-09-30): same "text-matching bbox can't anchor a fully-
+// Chinese question" gap as Ticket 197 (see findLetterGridBbox's own
+// comment), different real anchor: an abacus/counting-rod reading
+// question always prints the exact 5-character column-header sequence
+// 萬千百十個 (ten-thousands/thousands/hundreds/tens/units) directly UNDER
+// the bead diagram itself. Finding that exact ordered sequence in
+// Vision's word list locates the diagram far more reliably than the
+// question's own (fully Chinese) prose. A page can have more than one
+// abacus diagram (e.g. real citation TICKETS.md 198: parts (a) and (b)
+// side by side) -- every occurrence is found and the UNION of their
+// (label-row, extended upward to include the beads above) boxes is
+// returned as one crop covering all of them; readAbacusColumnsFromPixels
+// below is what actually separates them back out again.
+function findAbacusBbox(visionWords, pageWidth, pageHeight) {
+  if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return null;
+  const LABELS = ["萬", "千", "百", "十", "個"];
+  const occurrences = [];
+  for (let i = 0; i + LABELS.length <= visionWords.length; i++) {
+    let ok = true;
+    for (let k = 0; k < LABELS.length; k++) {
+      if (String(visionWords[i + k].text || "").trim() !== LABELS[k]) { ok = false; break; }
+    }
+    if (!ok) continue;
+    const group = visionWords.slice(i, i + LABELS.length);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const w of group) {
+      x0 = Math.min(x0, w.x); y0 = Math.min(y0, w.y);
+      x1 = Math.max(x1, w.x + w.w); y1 = Math.max(y1, w.y + w.h);
+    }
+    occurrences.push({ x0, y0, x1, y1, labelH: y1 - y0 });
+  }
+  if (!occurrences.length) return null;
+  // A real abacus column tops out at 9 beads (single-digit place value);
+  // beads observed in the real citation are each roughly as tall as the
+  // label text itself, so 9 beads plus margin needs several times the
+  // label row's own height of extra room above it -- 10x is a generous,
+  // deliberately safe multiple (better to crop extra blank space above,
+  // which costs nothing, than to clip real beads off the top).
+  const UPWARD_MULTIPLIER = 10;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const o of occurrences) {
+    x0 = Math.min(x0, o.x0);
+    y0 = Math.min(y0, o.y0 - o.labelH * UPWARD_MULTIPLIER);
+    x1 = Math.max(x1, o.x1);
+    y1 = Math.max(y1, o.y1);
+  }
+  y0 = Math.max(0, y0);
+  return {
+    x: Math.round((x0 / pageWidth) * 100),
+    y: Math.round((y0 / pageHeight) * 100),
+    w: Math.round(((x1 - x0) / pageWidth) * 100) || 5,
+    h: Math.round(((y1 - y0) / pageHeight) * 100) || 5,
+    diagramCount: occurrences.length,
   };
 }
 
@@ -9702,6 +10025,9 @@ async function handleMark(request, env) {
       // for something this anchor strategy was never validated against.
       if (isShapeClassificationGridQuestion(item)) {
         return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      if (isAbacusReadingQuestion(item)) {
+        return findAbacusBbox(pr.vision.words, pr.vision.width, pr.vision.height);
       }
       return null;
     })
@@ -10580,6 +10906,11 @@ export {
   parseLabelledParts,
   verifyShapeClassificationGrid,
   findLetterGridBbox,
+  readAbacusColumnsFromPixels,
+  isAbacusReadingQuestion,
+  verifyAbacusReading,
+  findAbacusBbox,
+  findRodPositions,
   verifySymbolicSubstitution,
   verifySymbolicRelation,
   verifyRelativeComparisonChain,
