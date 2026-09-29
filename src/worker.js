@@ -7926,6 +7926,64 @@ function readShapeClassificationFromPixels(pixels, w, h) {
   return ordered;
 }
 
+// Ticket 198 follow-up (2026-09-30, explicit user instruction: "珠算要
+// 任何顏色或者黑白都要做到" -- abacus reading must work for any bead
+// colour AND black-and-white). The first version detected beads via a
+// hardcoded "blue channel exceeds red channel" test, which only ever
+// matched this one real citation's blue beads and would find nothing
+// at all on a black-and-white photocopy or a worksheet using a
+// different bead colour.
+//
+// Two colour-matching redesigns were tried and real-tested before this
+// one, both found to have real bugs: (1) sampling the crop's four
+// CORNERS as "the background" broke as soon as the diagram's own local
+// background (a solid pink table cell in the real citation) differs
+// from the plain white margin cropItem's own generous padding adds
+// around it -- ink tests run against the wrong colour, corrupting
+// every count. (2) taking the single most-common colour across the
+// WHOLE crop has the same failure mode whenever that outer white
+// margin covers MORE pixels than the diagram's own local background,
+// which real crops can easily do (cropItem deliberately errs toward
+// extra margin). A "find non-white content first, then take the
+// dominant colour within just that region" two-pass attempt still
+// failed too -- a single stray dark pixel anywhere (a table border
+// line spanning nearly the whole crop, in the real citation) drags a
+// min/max bounding box out to cover almost the entire image again.
+//
+// Fixed with a fundamentally different, LUMINANCE-relative approach
+// that sidesteps background colour-matching entirely: paper is always
+// the BRIGHTEST thing in a real worksheet photo, regardless of its
+// exact shade (pure white, off-white, or a light colour like this
+// citation's pink) -- so instead of asking "what colour is the
+// background", ask "how much darker than the lightest common tone is
+// this pixel". A near-max (95th percentile, robust to a handful of
+// stray bright/dark outlier pixels) luminance establishes that
+// baseline directly from the crop itself, and ink is simply "notably
+// darker than that baseline" -- true for dark rod/bead ink on white
+// OR on a light colour cell, and for plain black ink on a grey/white
+// photocopy, without ever needing to know or match a specific hue.
+// Real measurement against the citation: white margin/pink cell both
+// sit within ~30 luminance points of the 95th-percentile baseline;
+// rods (~118 points darker) and even this citation's fairly light
+// blue beads (~43 points darker) clear a 35-point cutoff comfortably
+// while pink itself (~31 points darker) does not.
+function estimateBackgroundLuminance(pixels, w, h) {
+  const lums = new Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      lums[y * w + x] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+    }
+  }
+  lums.sort((a, b) => a - b);
+  return lums[Math.floor(lums.length * 0.95)];
+}
+
+function isInkByLuminance(pixels, idx, backgroundLuminance, threshold = 35) {
+  const lum = 0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2];
+  return backgroundLuminance - lum > threshold;
+}
+
 // Ticket 198 (2026-09-30): abacus/counting-rod reading. Real citation
 // (26週數學訓練 P3, Topic 5 Q1): two abacus diagrams side by side, each
 // 5 rods labelled 萬(10000s)/千(1000s)/百(100s)/十(10s)/個(1s), beads
@@ -7963,21 +8021,31 @@ function findRodPositions(pixels, w, h, expectedCount) {
   // uniform bar (see MIN_INK_FRACTION below) regardless of how many
   // beads they carry, while stray marks like an "(a)" bracket label
   // (only a few px tall) do not.
-  const isInk = (x, y) => {
-    const i = (y * w + x) * 4;
-    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    if (lum > 240) return false; // white background
-    if (r > g && g > b && lum > 195) return false; // pale pink table-cell background
-    return true;
-  };
+  // Colour-agnostic (2026-09-30 follow-up): was a hardcoded "white or
+  // pale pink" exclusion list, which only recognised THIS citation's
+  // specific background. Now uses the luminance-relative ink test (see
+  // estimateBackgroundLuminance's own long comment for the real
+  // debugging history behind why a colour-matching approach was
+  // abandoned in favour of this one) so it works for any background
+  // shade, including a black-and-white photocopy.
+  const backgroundLuminance = estimateBackgroundLuminance(pixels, w, h);
+  const isInk = (x, y) => isInkByLuminance(pixels, (y * w + x) * 4, backgroundLuminance);
   const colInk = new Array(w).fill(0);
   for (let x = 0; x < w; x++) {
     let cnt = 0;
     for (let y = 0; y < h; y++) if (isInk(x, y)) cnt++;
     colInk[x] = cnt;
   }
-  const MIN_INK_FRACTION = 0.4;
+  // Real bug found calibrating this against the real citation with the
+  // new luminance-relative ink test: a bead's antialiased edge can bleed
+  // outward far enough to weakly clear the ink test several px away
+  // from the rod itself, creating a spurious secondary "bump" in a
+  // neighbouring column's ink fraction (real measurement: ~0.40 at one
+  // such bleed point) that a 0.4 threshold (tuned for the old,
+  // narrower colour-specific test) let through as if it were its own
+  // rod. Real rods measure 0.69-0.78 in the same crop -- comfortably
+  // clear of a raised 0.55 cutoff while the antialiasing bleed is not.
+  const MIN_INK_FRACTION = 0.55;
   const candidateXs = [];
   for (let x = 0; x < w; x++) if (colInk[x] >= h * MIN_INK_FRACTION) candidateXs.push(x);
   if (!candidateXs.length) return null;
@@ -8044,74 +8112,46 @@ function findRodPositions(pixels, w, h, expectedCount) {
 }
 
 function readAbacusColumnsFromPixels(pixels, w, h, diagramCount) {
-  // Real bug found building this against the real citation: a plain
-  // "not white" luminance test (the approach that worked fine for
-  // Ticket 197's shapes-on-plain-white-background) fails hard here --
-  // the 萬千百十個 label row sits on a solid PINK/tan table-cell
-  // background, which is just as "not white" as the beads themselves,
-  // so the whole cell (background + beads + rods + text) flood-filled
-  // as one giant blob. Fix: beads in the real citation are a distinct
-  // blue/cyan color where the BLUE channel exceeds the RED channel by a
-  // clear margin (confirmed real samples: bead (163,218,253) B-R=90;
-  // background (244,215,194) B-R=-50; rod (142,124,112) B-R=-30) --
-  // detect ink by that color relationship instead of plain darkness.
-  // Disclosed real limitation: this assumes blue/cyan beads specifically
-  // (the only real citation available); a worksheet using differently-
-  // coloured beads would need recalibrating this test, not just the
-  // threshold.
+  // Colour-agnostic (2026-09-30 follow-up, explicit user instruction:
+  // "珠算要任何顏色或者黑白都要做到"). The first version detected beads
+  // via a hardcoded "blue channel exceeds red" test, and separately
+  // relied on flood-fill BLOB detection (beads touching each other on
+  // one rod merge into a single blob, counted by its HEIGHT). Both
+  // pieces assumed the specific blue-on-pink colour scheme of the one
+  // real citation available and would find nothing at all on a
+  // black-and-white photocopy or a differently-coloured worksheet.
+  //
+  // Real bug this rewrite fixes: simply swapping in a colour-agnostic
+  // "far from the sampled background colour" ink test (as
+  // findRodPositions now uses) is NOT enough on its own -- with a
+  // general ink test the ROD and its BEADS are the same "ink" colour
+  // class (unlike the old blue-vs-brown split), so flood-fill would
+  // merge an entire column's bare rod AND its beads into one blob
+  // spanning nearly the full diagram height regardless of bead count,
+  // making height-based counting meaningless.
+  //
+  // Fixed with a WIDTH-PROFILE scan instead of flood-fill blobs: at
+  // each already-known rod x-position (from findRodPositions), for
+  // every row measure how far the ink actually extends left/right of
+  // the rod. A bare rod is only a few px wide; a bead is much wider
+  // (real measurement: ~54px bead vs ~76px rod spacing, a bead is
+  // wide enough that a width threshold partway between "rod-thin" and
+  // "bead-wide" cleanly separates the two regardless of what colour
+  // either one is drawn in) -- rows whose ink width clears that
+  // threshold are "a bead is here"; counting contiguous such rows and
+  // dividing by the same per-bead-height calibration as before (now
+  // expressed, as already was, as a fraction of rod spacing) gives the
+  // bead count exactly as the old blob-height method did, just without
+  // needing beads to be any specific colour.
+  // See estimateBackgroundLuminance's own long comment for why this is
+  // luminance-relative, not colour-matching -- same reasoning applies
+  // here as in findRodPositions.
+  const backgroundLuminance = estimateBackgroundLuminance(pixels, w, h);
   const isInk = (x, y) => {
-    const i = (y * w + x) * 4;
-    return pixels[i + 2] - pixels[i] > 20;
+    if (x < 0 || x >= w || y < 0 || y >= h) return false;
+    return isInkByLuminance(pixels, (y * w + x) * 4, backgroundLuminance);
   };
-  const labels = new Int32Array(w * h).fill(-1);
-  const blobs = [];
-  for (let y0 = 0; y0 < h; y0++) {
-    for (let x0 = 0; x0 < w; x0++) {
-      const idx0 = y0 * w + x0;
-      if (labels[idx0] !== -1 || !isInk(x0, y0)) continue;
-      const label = blobs.length;
-      const stack = [[x0, y0]];
-      labels[idx0] = label;
-      let minX = x0, maxX = x0, minY = y0, maxY = y0, area = 0;
-      while (stack.length) {
-        const [x, y] = stack.pop();
-        area++;
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dy = -1; dy <= 1; dy++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            const nidx = ny * w + nx;
-            if (labels[nidx] !== -1 || !isInk(nx, ny)) continue;
-            labels[nidx] = label;
-            stack.push([nx, ny]);
-          }
-        }
-      }
-      if (area >= 20) blobs.push({ minX, maxX, minY, maxY, area, cx: minX + (maxX - minX) / 2, cy: minY + (maxY - minY) / 2 });
-    }
-  }
-  if (!blobs.length) return null;
 
-  // Real bug found against the real citation: beads stacked on the same
-  // rod visually TOUCH each other (no gap, by design -- that's how an
-  // abacus is drawn), so flood-fill merges an entire column's beads into
-  // ONE blob, not N separate ones -- counting "blobs per column" always
-  // reads 0 or 1, never the real bead count. Fix: count beads by HEIGHT
-  // instead -- real measurement against the citation's known values
-  // (5,0,6,9,0 and 1,3,0,0,7 beads) found each column's merged-blob
-  // height divides by its own bead count to a remarkably consistent
-  // ~20.3-21.2px "height per bead" (6 real samples, min/max within 5% of
-  // each other) REGARDLESS of how many beads are stacked -- i.e. total
-  // height is closely linear in bead count with no meaningful offset
-  // term, so height / (one bead's height) directly gives the count.
-  // That per-bead-height constant is scale-DEPENDENT (a bigger/smaller
-  // crop changes it), so it's expressed as a fraction of the column
-  // slot's own width instead of a hard pixel constant, since both scale
-  // together with image resolution: real measurement gives ~0.19
-  // (colWidth 108px -> ~20.7px/bead).
   const rods = findRodPositions(pixels, w, h, diagramCount * 5);
   if (!rods) return null;
   // Real bug found here: averaging the outermost-to-outermost rod span
@@ -8125,30 +8165,52 @@ function readAbacusColumnsFromPixels(pixels, w, h, diagramCount) {
   for (let i = 1; i < rods.length; i++) if (i % 5 !== 0) withinGaps.push(rods[i] - rods[i - 1]);
   const rodSpacing = withinGaps.length ? withinGaps.reduce((s, g) => s + g, 0) / withinGaps.length : w / (diagramCount * 5);
   const BEAD_HEIGHT_TO_ROD_SPACING_RATIO = 0.27; // real measurement: ~20.7px/bead, ~76px rod spacing
+  const BEAD_HALF_WIDTH_TO_ROD_SPACING_RATIO = 0.2; // real measurement: ~54px bead width, ~76px rod spacing -> half-width ratio ~0.355, halved again for a conservative "is this wide enough to be a bead, not just the rod" cutoff
   const beadHeight = rodSpacing * BEAD_HEIGHT_TO_ROD_SPACING_RATIO;
+  const widthThreshold = rodSpacing * BEAD_HALF_WIDTH_TO_ROD_SPACING_RATIO;
+  const searchRadius = Math.round(rodSpacing * 0.4);
+
+  // Real bug found calibrating this against the real citation: the
+  // 萬千百十個 label text row sits at the BOTTOM of the diagram, and a
+  // Chinese character glyph is wide enough to locally cross
+  // widthThreshold at some of its own rows -- with the old bead-colour-
+  // specific ink test this was harmless (plain black text never passed
+  // the "is this blue" check), but the new general luminance test also
+  // treats dark text as ink, so every column picked up a spurious extra
+  // "bead" purely from its own label row (real measurement: every
+  // column, including genuinely empty ones, read +1 higher than the
+  // true count until this was excluded). Fixed by scanning only the top
+  // ~85% of the crop -- real measurement puts the label row in roughly
+  // the bottom 14% of a real diagram crop, so this margin excludes it
+  // while still covering the tallest realistic (9-bead) stack.
+  const labelRowStartY = Math.round(h * 0.85);
   const placeValues = [10000, 1000, 100, 10, 1];
   const totals = new Array(diagramCount).fill(0);
-  const colBlobHeight = Array.from({ length: diagramCount }, () => [0, 0, 0, 0, 0]);
-  for (const b of blobs) {
-    // assign to the nearest rod, not a fixed equal-width slot -- see
-    // findRodPositions's own comment for why real rod positions (not
-    // assumed evenly-divided crop width) are needed here.
-    let nearest = 0, bestDist = Infinity;
-    for (let i = 0; i < rods.length; i++) {
-      const d = Math.abs(b.cx - rods[i]);
-      if (d < bestDist) { bestDist = d; nearest = i; }
+  for (let r = 0; r < rods.length; r++) {
+    const rodX = Math.round(rods[r]);
+    let beadRowCount = 0;
+    for (let y = 0; y < labelRowStartY; y++) {
+      let leftExtent = 0, rightExtent = 0;
+      for (let dx = 1; dx <= searchRadius; dx++) {
+        if (isInk(rodX - dx, y)) leftExtent = dx; else break;
+      }
+      for (let dx = 1; dx <= searchRadius; dx++) {
+        if (isInk(rodX + dx, y)) rightExtent = dx; else break;
+      }
+      if (leftExtent + rightExtent >= widthThreshold) beadRowCount++;
     }
-    const diagramIdx = Math.floor(nearest / 5);
-    const colIdx = nearest % 5;
-    const height = b.maxY - b.minY + 1;
-    colBlobHeight[diagramIdx][colIdx] = Math.max(colBlobHeight[diagramIdx][colIdx], height);
-  }
-  for (let d = 0; d < diagramCount; d++) {
-    for (let c = 0; c < 5; c++) {
-      const h2 = colBlobHeight[d][c];
-      const count = h2 === 0 ? 0 : Math.max(1, Math.round(h2 / beadHeight));
-      totals[d] += Math.min(9, count) * placeValues[c];
-    }
+    // Real bug found calibrating this against the real citation: a
+    // truly empty (0-bead) rod could still pick up a handful of stray
+    // "bead-width" rows from a NEIGHBOURING column's bead antialiasing
+    // bleeding into this rod's search radius -- with the old rule
+    // ("beadRowCount > 0 at all -> count at least 1"), that noise alone
+    // was enough to wrongly report 1 bead on an empty rod. Fixed by
+    // requiring at least a meaningful fraction (40%) of one real bead's
+    // height before counting anything -- real noise measured well
+    // under this bar, genuine single beads comfortably clear it.
+    const count = beadRowCount < beadHeight * 0.4 ? 0 : Math.max(1, Math.round(beadRowCount / beadHeight));
+    const diagramIdx = Math.floor(r / 5), colIdx = r % 5;
+    totals[diagramIdx] += Math.min(9, count) * placeValues[colIdx];
   }
   return totals;
 }
@@ -10911,6 +10973,8 @@ export {
   verifyAbacusReading,
   findAbacusBbox,
   findRodPositions,
+  estimateBackgroundLuminance,
+  isInkByLuminance,
   verifySymbolicSubstitution,
   verifySymbolicRelation,
   verifyRelativeComparisonChain,
