@@ -7852,6 +7852,198 @@ function verifyFractionShading(item, crop) {
   return { correct, correctAnswer: correct ? "" : expectedFraction };
 }
 
+// Ticket 203 (2026-09-30, real citation: 26週數學訓練 P3 Topic 23「三角
+// 形」math34pdf/p59.png Q4: "右圖中,把哪三點連起來,可得出一個等腰三角
+// 形?答案:___,___,___。" -- a dot grid with 5 labelled points (P,Q,R,S,
+// T); real answer key: Q,S,T.
+//
+// Genuinely a NEW architecture class (flagged as an open question by the
+// original citation-extraction pass): this needs BOTH a text fact (which
+// letter names which point -- only Vision OCR can read that) AND precise
+// pixel measurement (the point's exact position, since a letter is
+// printed NEXT TO its dot, never centred on it, and in a different
+// direction each time -- confirmed by inspecting the real image). Ticket
+// 199's OCR-marker pattern doesn't fit (nothing here needs OCR to READ a
+// calibration fact); instead this reuses the EXISTING bbox-finding
+// pattern (findAbacusBbox/findBarChartBbox already scan pr.vision.words
+// at the page level) and extends it: the SAME page-level step that finds
+// the crop region also resolves each letter's PAGE-pixel position, which
+// verifyGridPointIsosceles below converts into this specific crop's own
+// LOCAL pixel coordinates. That conversion needed a real (small,
+// additive) architecture change: cropItem's returned crop object now
+// also carries its own originX/originY/pageWidth/pageHeight -- every
+// existing verifyVisual handler ignores these extra fields and is
+// unaffected.
+//
+// Real bug found+fixed while building: a naive "any sufficiently dark
+// blob near a letter" dot search finds the wrong thing, because the dot
+// sits EXACTLY ON a grid line intersection and touches that line with no
+// gap -- an ordinary flood-fill merges the small round dot with the thin
+// grid line into one long line-shaped blob (confirmed on the real image:
+// a 269x35-to-150px elongated blob, not a small dot). Fixed with a
+// morphological-erosion-style "core" test instead of flood-filling raw
+// ink: a pixel only counts if a small (5x5) window around it is ENTIRELY
+// dark -- a thin 1-2px grid line can never satisfy this, but the dot's
+// solid ~13px-diameter interior easily does, cleanly separating dots
+// from the grid lines and letter strokes they touch.
+function findGridDotPositions(pixels, w, h) {
+  const isDark = (x, y) => {
+    const i = (y * w + x) * 4;
+    return (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]) < 150;
+  };
+  const N = 2; // half-window -> 5x5 core test
+  const isCore = (x, y) => {
+    if (x < N || x >= w - N || y < N || y >= h - N) return false;
+    for (let dx = -N; dx <= N; dx++) for (let dy = -N; dy <= N; dy++) if (!isDark(x + dx, y + dy)) return false;
+    return true;
+  };
+  const visited = new Uint8Array(w * h);
+  const dots = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (visited[idx0] || !isCore(x0, y0)) continue;
+      const stack = [[x0, y0]];
+      visited[idx0] = 1;
+      let size = 0, sumX = 0, sumY = 0;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        size++; sumX += x; sumY += y;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (visited[nidx] || !isCore(nx, ny)) continue;
+            visited[nidx] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (size >= 10) dots.push({ x: sumX / size, y: sumY / size });
+    }
+  }
+  return dots;
+}
+
+// Shared clustering helper (same greedy proximity-clustering shape as
+// findLetterGridBbox/findBarChartBbox above): groups single-uppercase-
+// letter Vision words that sit close together (a real labelled-point
+// diagram), discarding any stray single-letter word elsewhere on the
+// page (e.g. an unrelated MC option letter). Returns the best cluster's
+// words, or [] if none qualifies.
+function clusterSingleLetterWords(visionWords, pageWidth, pageHeight, minCount) {
+  if (!visionWords || !visionWords.length || !pageWidth || !pageHeight) return [];
+  const single = visionWords.filter((w) => /^[A-Z]$/.test(String(w.text || "").trim()));
+  if (single.length < minCount) return [];
+  const pts = single.map((w) => ({ x: w.x + w.w / 2, y: w.y + w.h / 2, w }));
+  const maxGap = Math.max(pageWidth, pageHeight) * 0.25;
+  const clusters = [];
+  for (const p of pts) {
+    let placed = false;
+    for (const c of clusters) {
+      if (Math.abs(p.x - c.cx) <= maxGap && Math.abs(p.y - c.cy) <= maxGap) {
+        c.items.push(p);
+        c.cx = c.items.reduce((s, q) => s + q.x, 0) / c.items.length;
+        c.cy = c.items.reduce((s, q) => s + q.y, 0) / c.items.length;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) clusters.push({ cx: p.x, cy: p.y, items: [p] });
+  }
+  const best = clusters.filter((c) => c.items.length >= minCount).sort((a, b) => b.items.length - a.items.length)[0];
+  return best ? best.items : [];
+}
+
+function isGridPointIsoscelesQuestion(item) {
+  return /把哪三點連起來.{0,10}可得出.{0,4}等腰三角形/.test(String(item.printedQuestion || "").replace(/\s+/g, ""));
+}
+
+function extractLabeledGridPoints(visionWords, pageWidth, pageHeight) {
+  return clusterSingleLetterWords(visionWords, pageWidth, pageHeight, 3)
+    .map((p) => ({ letter: String(p.w.text).trim(), px: p.x, py: p.y }));
+}
+
+function findGridPointsBbox(visionWords, pageWidth, pageHeight) {
+  const items = clusterSingleLetterWords(visionWords, pageWidth, pageHeight, 3);
+  if (!items.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of items) {
+    x0 = Math.min(x0, p.w.x); y0 = Math.min(y0, p.w.y);
+    x1 = Math.max(x1, p.w.x + p.w.w); y1 = Math.max(y1, p.w.y + p.w.h);
+  }
+  // Generous extra padding beyond the letters' own bbox -- dots sit
+  // OUTSIDE each letter's bounding box (adjacent, not overlapping), and
+  // the grid itself extends further still.
+  const padX = (x1 - x0) * 0.6 + pageWidth * 0.03, padY = (y1 - y0) * 0.6 + pageHeight * 0.03;
+  x0 -= padX; y0 -= padY; x1 += padX; y1 += padY;
+  return {
+    x: Math.max(0, Math.round((x0 / pageWidth) * 100)),
+    y: Math.max(0, Math.round((y0 / pageHeight) * 100)),
+    w: Math.round(((x1 - x0) / pageWidth) * 100),
+    h: Math.round(((y1 - y0) / pageHeight) * 100),
+  };
+}
+
+function verifyGridPointIsosceles(item, crop) {
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer || !item.gridPointLabels || item.gridPointLabels.length < 3) return { correct: null, correctAnswer: "" };
+  if (crop.originX == null || crop.originY == null) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let resolved;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const dots = findGridDotPositions(pixels, w, h);
+    if (!dots.length) return { correct: null, correctAnswer: "" };
+    resolved = item.gridPointLabels.map((p) => {
+      const localX = p.px - crop.originX, localY = p.py - crop.originY;
+      let best = null, bestD = Infinity;
+      for (const d of dots) {
+        const dist = Math.hypot(d.x - localX, d.y - localY);
+        if (dist < bestD) { bestD = dist; best = d; }
+      }
+      // A real dot always sits within a bounded radius of its own letter
+      // (never across the whole diagram) -- a match far beyond that is
+      // treated as unresolved rather than silently binding to the wrong dot.
+      if (!best || bestD > Math.max(w, h) * 0.25) return null;
+      return { letter: p.letter, x: best.x, y: best.y };
+    });
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (resolved.some((r) => r === null)) return { correct: null, correctAnswer: "" };
+
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const triples = [];
+  for (let i = 0; i < resolved.length; i++) {
+    for (let j = i + 1; j < resolved.length; j++) {
+      for (let k = j + 1; k < resolved.length; k++) {
+        const [a, b, c] = [resolved[i], resolved[j], resolved[k]];
+        const [ab, bc, ca] = [dist(a, b), dist(b, c), dist(c, a)];
+        const maxSide = Math.max(ab, bc, ca);
+        // Real grid-snapped distances measured from pixel data carry
+        // only a fraction of a pixel of noise (real measurement: exact
+        // matches differed by ~0.1px) -- but real DIFFERENT grid-unit
+        // pairs can still be as close as ~4% of the longest side apart
+        // (confirmed on the real citation's own other point triples), so
+        // a tolerance has to sit well below that gap, not near it. 3%
+        // cleanly separates both cases on the real data.
+        const isIsosceles = Math.abs(ab - bc) < maxSide * 0.03 || Math.abs(bc - ca) < maxSide * 0.03 || Math.abs(ca - ab) < maxSide * 0.03;
+        if (isIsosceles) triples.push([a.letter, b.letter, c.letter]);
+      }
+    }
+  }
+  if (triples.length !== 1) return { correct: null, correctAnswer: "" }; // ambiguous or none found -- fail open
+  const expected = triples[0];
+  const given = answer.split(/[,，、\s]+/).filter(Boolean);
+  const correct = given.length === 3 && [...expected].sort().join() === [...given].sort().join();
+  return { correct, correctAnswer: correct ? "" : expected.join(",") };
+}
+
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
 // visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
 // with arrowhead decorations pointing inward or outward at both ends,
@@ -10142,6 +10334,16 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyFractionShading(item, crop),
   },
   {
+    // Ticket 203 (2026-09-30): see verifyGridPointIsosceles's own long
+    // comment for the real citation and the new crop-origin plumbing
+    // this needed. isGridPointIsoscelesQuestion shared with handleMark's
+    // bbox fallback (findGridPointsBbox's call site), same convention as
+    // 198/199/197's own dedicated finders.
+    name: "grid_point_isosceles",
+    detect: (item) => isGridPointIsoscelesQuestion(item),
+    verifyVisual: (item, crop) => verifyGridPointIsosceles(item, crop),
+  },
+  {
     // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
     // P/Q/R all equal length" MC. See readLineShaftLengths's own long
     // comment above for the real+synthetic double validation. detect()
@@ -11063,6 +11265,16 @@ async function handleMark(request, env) {
       if (isBarChartQuestion(item)) {
         return findBarChartBbox(pr.vision.words, pr.vision.width, pr.vision.height, item.barChart);
       }
+      if (isGridPointIsoscelesQuestion(item)) {
+        // Ticket 203: mutates item in place to attach the page-pixel
+        // letter positions the verifyVisual step below needs -- same
+        // "item mutated at whichever pipeline stage has the data"
+        // convention already used for barChart/calendarGrid/etc, just at
+        // this earlier bbox stage since only here do we have BOTH the
+        // item and pr.vision.words together before verification runs.
+        item.gridPointLabels = extractLabeledGridPoints(pr.vision.words, pr.vision.width, pr.vision.height);
+        return findGridPointsBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
       return null;
     })
   );
@@ -11815,7 +12027,14 @@ function cropItem(r, images, photonCache) {
   const cropped = crop(photonImg, x1, y1, x2, y2);
   const outBytes = cropped.get_bytes_jpeg(90);
   cropped.free();
-  return { data: bytesToBase64(outBytes), mediaType: "image/jpeg" };
+  // originX/originY/pageWidth/pageHeight (2026-09-30, Ticket 203): purely
+  // additive fields -- every existing verifyVisual consumer only ever
+  // reads .data/.mediaType, so this changes nothing for them. Lets a
+  // handler that ALSO has page-coordinate facts (e.g. Vision word
+  // positions from findGridPointsBbox) convert them into this specific
+  // crop's own local pixel coordinates, which was otherwise impossible
+  // since verifyVisual never received the crop's own page offset.
+  return { data: bytesToBase64(outBytes), mediaType: "image/jpeg", originX: x1, originY: y1, pageWidth: W, pageHeight: H };
 }
 
 function base64ToBytes(b64) {
@@ -11947,6 +12166,12 @@ export {
   readFractionShadingFromPixels,
   isFractionShadingQuestion,
   verifyFractionShading,
+  findGridDotPositions,
+  clusterSingleLetterWords,
+  isGridPointIsoscelesQuestion,
+  extractLabeledGridPoints,
+  findGridPointsBbox,
+  verifyGridPointIsosceles,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
