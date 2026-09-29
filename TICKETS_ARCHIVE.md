@@ -1042,3 +1042,26 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 ## 2026年9月30號：清理重複嘅Ticket 28 test file
 
 - ✅ **28重複清理,已接落生產環境。** 兩份獨立起嘅collision test file(舊嗰份`handler-collision.test.js` + 今晚背景任務整多嗰份`cross-collision-framework.test.js`)覆蓋緊唔同嘅handler,但共用埋一模一樣嘅temp檔案名——如果node test runner平行行,有真實race condition風險。合併做一個file,保留晒兩邊全部真citation(冇刪走任何嘢),仲搵到多一個真order-dependent配對(common_factors_count vs word_problem_total,即係當初Ticket 183嗰單)加咗落allowlist。832/832測試通過,已push(commit f0b24d7)。
+
+## 2026年9月30號：Ticket 41修好（自動檢查本身失效嘅問題）+ /api/test-noai-check補漏
+
+- ✅ **41. 診斷route管理,已接落生產環境。** 真發現:`test/no-orphaned-debug-routes.test.js`(Ticket 41自己嘅自動執行機制)本身一直失效——佢淨係搵`/api/debug/*`格式嘅route,但真實嘅臨時route全部叫`/api/test-*`,即係話呢個檢查由起咗到而家,一直冇真正check過任何嘢。擴闊咗個regex去match返真實用緊嘅命名,加咗一個allowlist畀Ticket 46刻意保留(唔刪)嘅3條latency route。檢查真正生效之後,即刻搵到`/api/test-noai-check`冇追蹤——再查落去發現佢完全冇auth(同Ticket 46之前搵到嘅3條一樣嘅漏洞,但呢條漏咗冇補)。已經補返DEBUG_TOKEN gate,同加咗待刪追蹤行。832/832測試通過,已push(commit 036bc93)。
+
+## 2026年9月30號：「3下A 數作業.pdf」question type audit(29頁全部睇晒)
+
+用戶send嘅新PDF,用獨立背景任務(第二次,第一次失控咗)睇晒全部29頁。冇做任何code/git改動,純研究。
+
+**大部分(a類,已有handler)**:普通加減乘除、括號order-of-operations、比較差幾多、單位換算、找續、足夠/不足夠判斷、三角形true/false事實(已有`triangle_fact_true_false`)、最多鈍角個數(已有`max_obtuse_angle_in_triangle`)——118個已registered handler好似本身就係跟呢一系列書起嘅。**未逐條verify detect()內部邏輯**,呢個係「好可能」唔係「confirm咗」。
+
+**新搵到7個(b類,睇落code可以做但未起)**:
+1. 約數MC(邊條算式最啱用嚟估算)——p8 Q7、p11 Q7
+2. Order-of-operations等值/最大MC——p10 Q5、p12 Q7、p16 Q4
+3. 解方程MC(1205+★=3702)、直式減法兩個唔同符號空格——p2 Q9、p16 Q5
+4. **淨係要求列算式、唔使計答案**——p14全部5條,呢個format全新(要check運算式結構,唔係check個數字答案)
+5. 三角形三邊能否組成三角形(a+b>c判斷)——p21 Q11-13,純數字邏輯唔使睇圖
+6. 三角形子類型(等邊/等腰/直角)睇圖分類——p18、p20、p23、p25多次,**同已知嘅Ticket 204缺口(菱形/梯形分唔到)係同一個未解決問題**,呢本書成個Unit 3都靠呢個
+7. 摺紙/剪紙之後嘅三角形類型判斷——p19、p23、p24,同上6但仲要睇摺痕圖
+
+**AI-only(c類)**:邏輯推理拼圖題(p12 Q10、p19 Q9)、複合圖形入面數特定三角形(p19 Q7、p25 Q8a)、畫圖/設計題(p22全部、單元10「繡曲線」p26-28)、開放式文字解釋題(p17 Q13)。
+
+**重要披露**:呢本書本身**冇答案key**,7個(b)候選全部未有真實答案verify過——跟返project嘅硬規矩,要有真答案先可以起code,呢個仍然係「搵到,未起」階段。
