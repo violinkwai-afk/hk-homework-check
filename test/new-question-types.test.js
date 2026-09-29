@@ -547,6 +547,26 @@ test("word problem total: wrong answer is caught, correctAnswer given", async ()
   assert.equal(r.correctAnswer, "56");
 });
 
+// 2026-09-30, real bug found via a direct verification pass against a
+// real 3下A workbook PDF (no handler had ever been run against it
+// before -- exactly the "逐條驗證" methodology this test demonstrates):
+// "農場有雞3429隻，比鴨多917隻。農場共有雞和鴨多少隻？" has "共" and 2
+// raw numbers, so the naive sum logic confidently computed 3429+917=4346
+// -- silently treating 917 (the DIFFERENCE between chickens and ducks)
+// as if it were the duck count itself. Real answer: ducks=3429-917=2512,
+// total=3429+2512=5941. Fixed by declining (null) whenever a "比...多/少"
+// relative-comparison marker is present, same discipline as the
+// existing "每" rate-marker guard just above it.
+test("word problem total: declines (null) on a relative-comparison-then-total shape, does NOT sum the raw numbers", async () => {
+  const r = mod.verifyWordProblemTotal("農場有雞3429隻，比鴨多917隻。農場共有雞和鴨多少隻？", "4346");
+  assert.equal(r.correct, null, "must not confidently return the wrong sum (4346) -- 917 is a difference, not a directly-addable quantity");
+});
+
+test("word problem total: still sums correctly when 比...多/少 is genuinely absent (regression guard on the fix above)", async () => {
+  const r = mod.verifyWordProblemTotal("樓上有10人，樓下有4人，共有多少人？", "14");
+  assert.equal(r.correct, true);
+});
+
 test("word problem total: no '共' keyword present stays null (avoids misreading a comparison-shaped problem)", async () => {
   const r = mod.verifyWordProblemTotal("水果店有橙27個，蘋果比橙多13個，水果店有多少個蘋果？", "40");
   assert.equal(r.correct, null);

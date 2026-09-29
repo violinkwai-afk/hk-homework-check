@@ -4543,6 +4543,20 @@ function verifyWordProblemTotal(printedQuestion, studentAnswer) {
   // not be swept into that decision by the shared keyword. See
   // verifyWordProblemRateMultiplication for the dedicated handler.
   if (/每/.test(printed) || /\bper\b/i.test(printed) || /\beach\b.{0,15}\bhas\b/i.test(printed)) return { correct: null, correctAnswer: "" };
+  // 2026-09-30 real bug found (verification pass against a real 3下A
+  // workbook PDF, no handler was ever run against it before): a
+  // relative-comparison-then-total shape ("農場有雞3429隻，比鴨多917隻。
+  // 農場共有雞和鴨多少隻？" -- 3429 chickens, 917 MORE than ducks, total
+  // chickens+ducks) also has "共" and >=2 raw numbers, so this function's
+  // naive "sum every number" logic confidently computed 3429+917=4346
+  // instead of the real answer 3429+(3429-917)=5941 -- silently treating
+  // the DIFFERENCE (917) as if it were the second quantity itself. Same
+  // failure family as the already-guarded "每" rate shape: a "比...多/少"
+  // relative-comparison marker means at least one of the "numbers found
+  // in the text" is not a directly-addable quantity, so this function
+  // must decline rather than guess, matching
+  // verifyPriceTableLookup's own "比...貴/平/多/少" pattern.
+  if (/比.{0,10}(多|少)/.test(printed)) return { correct: null, correctAnswer: "" };
   const nums = (printed.match(/(?<!第)\d+/g) || []).map(Number);
   if (nums.length < 2) return { correct: null, correctAnswer: "" };
   const expected = nums.reduce((a, b) => a + b, 0);
