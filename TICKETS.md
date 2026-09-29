@@ -998,7 +998,6 @@
 
 已完成嘅ticket即刻搬去TICKETS_ARCHIVE.md（2026-09-30起嘅新規矩），呢度淨係留返仲未做嘅：
 
-- 🔲 **220（同「暫停explanation」範圍衝突，擺低）**：AI-fallback嗰個note wiring改動冇獨立test直接覆蓋。
-- 🔲 **221（同上）**：129個handler入面124個未有explanation，建議用「按運算類型共用樣板」做，未經用戶同意唔會做。
+（暫時冇未做嘅新ticket——220、221用戶已經決定唔做，搬咗去archive）
 
 217-219已完成並push（commit 42d99d2），詳情見TICKETS_ARCHIVE.md。

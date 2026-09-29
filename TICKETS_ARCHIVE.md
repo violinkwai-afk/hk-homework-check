@@ -15,6 +15,9 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 
 7個新test，834/834測試通過，`wrangler deploy --dry-run`確認打包正常。已push（commit 42d99d2），已生效。
 
+- ⚪ **220（用戶決定唔做）**：AI-fallback嗰個note wiring改動冇獨立test直接覆蓋。
+- ⚪ **221（用戶決定唔做）**：129個handler入面124個未有explanation，建議用「按運算類型共用樣板」做。
+
 ## 2026年9月30號：Show correct answers for wrong items in the normal Telegram flow
 
 - ✅ **（Ticket 1，正確答案顯示）** 每題wrong item嘅correctAnswer已經全部計好，但之前淨係喺CPU-guard文字fallback path先會顯示——而家正常嘅annotated-photo path都會send埋一個follow-up文字訊息列出邊題錯+啱嘅答案。5個新test，808/808測試通過，已push（commit 810e180）。
