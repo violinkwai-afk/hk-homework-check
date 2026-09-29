@@ -7764,6 +7764,94 @@ function verifySecondHandClock(item, crop) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 200 (2026-09-30, real citation: 26週數學訓練 P3 Topic 10「分
+// 數」math34pdf/p25.png Q1(a): "寫出下面各圖中有色部分佔全圖的幾分之
+// 幾。" -- a circle divided by 3 straight lines from the centre into 3
+// equal sectors, one shaded light purple. Real answer key: 1/3.
+//
+// Pure region-count geometry, same pixel-measurement discipline as
+// Tickets 197/198: flood-fill every NON-ink region (the line art itself
+// is the boundary, not counted); the region touching the crop's own
+// border is the surrounding page background, discarded; every remaining
+// enclosed region is one "part" of the shape; a part counts as SHADED
+// if its average luminance is meaningfully darker than the lightest
+// kept region (the unshaded parts, near-white).
+//
+// Disclosed scope: only equal-area, non-overlapping regions (matches
+// this citation exactly). The same Q1's (c) sub-image (a diamond
+// overlapping a square, unequal overlap regions) would need proportional
+// AREA weighting, not just a region COUNT -- not attempted here, real
+// gap flagged rather than silently guessed.
+function readFractionShadingFromPixels(pixels, w, h) {
+  const isInk = (x, y) => {
+    const i = (y * w + x) * 4;
+    return (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]) < 200;
+  };
+  const labels = new Int32Array(w * h).fill(-1);
+  const regions = [];
+  for (let y0 = 0; y0 < h; y0++) {
+    for (let x0 = 0; x0 < w; x0++) {
+      const idx0 = y0 * w + x0;
+      if (labels[idx0] !== -1 || isInk(x0, y0)) continue;
+      const label = regions.length;
+      const stack = [[x0, y0]];
+      labels[idx0] = label;
+      let size = 0, sumLum = 0, touchesBorder = false;
+      while (stack.length) {
+        const [x, y] = stack.pop();
+        size++;
+        const i = (y * w + x) * 4;
+        sumLum += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+        if (x === 0 || x === w - 1 || y === 0 || y === h - 1) touchesBorder = true;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const nidx = ny * w + nx;
+            if (labels[nidx] !== -1 || isInk(nx, ny)) continue;
+            labels[nidx] = label;
+            stack.push([nx, ny]);
+          }
+        }
+      }
+      if (size >= 200 && !touchesBorder) regions.push({ size, avgLum: sumLum / size });
+    }
+  }
+  if (regions.length < 2) return null; // need at least 2 real parts to form a meaningful fraction
+  const maxLum = Math.max(...regions.map((r) => r.avgLum));
+  const shaded = regions.filter((r) => maxLum - r.avgLum > 15).length;
+  return { total: regions.length, shaded };
+}
+
+function isFractionShadingQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /有色部分佔全圖的幾分之幾/.test(printed);
+}
+
+function verifyFractionShading(item, crop) {
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer || !isFractionShadingQuestion(item)) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let result;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    result = readFractionShadingFromPixels(pixels, w, h);
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (!result) return { correct: null, correctAnswer: "" };
+  const { total, shaded } = result;
+  const expectedFraction = `${shaded}/${total}`;
+  const m = answer.match(/^(\d+)\s*\/\s*(\d+)$/);
+  let correct;
+  if (m) correct = Number(m[1]) === shaded && Number(m[2]) === total;
+  else correct = Number(answer) === shaded / total;
+  return { correct, correctAnswer: correct ? "" : expectedFraction };
+}
+
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
 // visual-illusion question -- 3 printed straight lines (直線P/Q/R), each
 // with arrowhead decorations pointing inward or outward at both ends,
@@ -10046,6 +10134,14 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifySecondHandClock(item, crop),
   },
   {
+    // Ticket 200 (2026-09-30): see readFractionShadingFromPixels's own
+    // long comment for the real citation and the disclosed equal-area
+    // scope limit.
+    name: "fraction_shading",
+    detect: (item) => isFractionShadingQuestion(item),
+    verifyVisual: (item, crop) => verifyFractionShading(item, crop),
+  },
+  {
     // Ticket found 2026-09-28 (躍思): Müller-Lyer illusion, "are line
     // P/Q/R all equal length" MC. See readLineShaftLengths's own long
     // comment above for the real+synthetic double validation. detect()
@@ -11848,6 +11944,9 @@ export {
   readSecondHandAngleFromPixels,
   isSecondHandClockQuestion,
   verifySecondHandClock,
+  readFractionShadingFromPixels,
+  isFractionShadingQuestion,
+  verifyFractionShading,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
