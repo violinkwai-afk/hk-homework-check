@@ -227,13 +227,13 @@ async function handleTestModelRealPhoto(request, env) {
     : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
     : await env.OPENROUTER_API_KEY.get();
   if (!openrouterKey) return json({ error: "no_key" }, 500);
-  const { model, items, imageBase64, mediaType, reasoning } = await request.json();
+  const { model, items, imageBase64, mediaType, reasoning, maxTokens } = await request.json();
   if (!model) return json({ error: "no_model" }, 400);
   const prompt = buildAiFallbackPrompt(items);
   const t0 = Date.now();
   const body = {
     model,
-    max_tokens: 4000,
+    max_tokens: maxTokens || 4000,
     temperature: 0,
     messages: [{
       role: "user",
