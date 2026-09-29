@@ -20,7 +20,8 @@ import { annotateImage } from "./annotate.js";
 
 // 2026-09-23, explicit instruction: "At the testing stage, do NOT use
 // Sonnet/Opus to solve any questions." Claude Sonnet/Opus are meaningfully
-// more expensive per call than the OpenRouter cheap tiers (Qwen/DeepSeek) --
+// more expensive per call than the OpenRouter cheap tier (Gemini, as of
+// Ticket 196 -- was Qwen/DeepSeek before 2026-09-29) --
 // a real past incident (see the comment above the callClaude call in
 // handleCheckInner) burned through the account's whole prepaid balance in
 // under 10 real submissions. Single kill switch checked at every call site
@@ -430,7 +431,7 @@ async function handleCheck(request, env) {
 async function handleCheckInner(request, env) {
   const startedAt = Date.now();
   // Previously hard-required ANTHROPIC_API_KEY up front even though the
-  // OpenRouter cheap tiers (Qwen/DeepSeek) are tried FIRST and often
+  // OpenRouter cheap tier (Gemini, as of Ticket 196) is tried FIRST and often
   // succeed on their own -- with DISABLE_ANTHROPIC_DURING_TESTING on,
   // Anthropic is never reached at all (see the Sonnet call site below), so
   // requiring the key here would fail the whole endpoint over a key this
@@ -619,19 +620,23 @@ async function handleCheckInner(request, env) {
       ? `\n\n附加：呢頁屬於同一份功課嘅其中一部份，以下係其他頁面已經批改咗嘅結果（僅供參考，唔使批改，亦睇唔到嗰啲頁面嘅相）：${JSON.stringify(priorPagesContext).slice(0, 3000)}。如果依家呢頁嘅題目同上面嘅結果有數值關係（例如加減關係），可以用嚟核對，但如果冇睇到相關題目就照舊自己判斷，唔使勉強搵關係。`
       : '');
 
-  // DeepSeek-only, deliberately condensed version of the same prompt --
-  // Sonnet keeps the full one above untouched. Real testing 2026-09-20
-  // showed prompt length/complexity directly drives DeepSeek's internal
-  // "reasoning" token usage (same image+task: the short prompt below used
-  // ~7000 reasoning tokens and finished; the full prompt maxed out 20000
-  // and failed outright) -- speed/cost took priority over exhaustive edge-
+  // Cheap-tier-only, deliberately condensed version of the same prompt --
+  // Sonnet keeps the full one above untouched. Originally written for
+  // DeepSeek specifically (real testing 2026-09-20 showed prompt length/
+  // complexity directly drives a reasoning model's internal "reasoning"
+  // token usage: same image+task, the short prompt below used ~7000
+  // reasoning tokens and finished, the full prompt maxed out 20000 and
+  // failed outright) -- speed/cost took priority over exhaustive edge-
   // case coverage per explicit instruction. Keeps only the highest-value,
   // confirmed-real-bug protections (faint pencil misread as blank; using
   // stated numbers over counting illustration objects); drops the longer
   // tail of narrower edge-case rules (coins, angles, tally marks, position
   // value, compass tricks, fraction shading, etc.) that Sonnet still covers
-  // when DeepSeek fails or when this item lands in the null->verify tier.
-  const deepseekPrompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁）。冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
+  // when the cheap tier fails or when this item lands in the null->verify
+  // tier. Kept as-is after the 2026-09-29 Qwen/DeepSeek->Gemini swap below
+  // -- still the right length/complexity tradeoff for a fast cheap-tier
+  // call, name just no longer implies one specific model.
+  const cheapTierPrompt = `你是一位細心的小學老師，正在批改學生的功課相片（共${images.length}頁）。冇提供標準答案——請你自己諗清楚每一題應該點答，再同學生手寫嘅答案比較。
 
 要求（精簡）：
 1. 相有機會打橫/倒轉，先確認閱讀方向啱先答題，尤其留意6/9呢類易錯數字。
@@ -657,50 +662,35 @@ async function handleCheckInner(request, env) {
       : '');
 
   let parsed;
-  const usage = { primaryModel: null, qwenFailReason: null, deepseekFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
-  // Two-tier cheap pipeline, tried when OPENROUTER_API_KEY is configured --
-  // per explicit instruction 2026-09-20: Sonnet's real cost (~£5 gone in
-  // ~20 real submissions before this session's fixes) makes it
-  // unacceptable as a silent fallback. Neither tier ever falls through to
-  // Sonnet; a page either gets a real answer from Qwen/DeepSeek or a
+  const usage = { primaryModel: null, geminiFailReason: null, sonnet: null, sonnetZoom: null, opus: null };
+  // Ticket (2026-09-29, explicit user instruction "Fallback全部換晒
+  // gemini 唔好留deepseek" -- confirming the same swap already done for
+  // /api/mark's Ticket 13/196 AI-fallback also applies here): the
+  // Qwen-then-DeepSeek two-tier cheap pipeline is REPLACED with a single
+  // Gemini call, same reasoning as Ticket 196 (real comparison data --
+  // see project_ai_model_watch.md / TICKETS.md 2026-09-29 entries --
+  // found Gemini more accurate than Qwen and more reliable/cheaper than
+  // DeepSeek, which repeatedly truncated at a hard 4000-completion-token
+  // ceiling regardless of the requested maxTokens). Per explicit
+  // instruction 2026-09-20 (unchanged): Sonnet's real cost (~£5 gone in
+  // ~20 real submissions before that session's fixes) makes it
+  // unacceptable as a silent fallback -- this cheap tier never falls
+  // through to Sonnet; a page either gets a real answer from Gemini or a
   // clear "couldn't grade, please check by hand" response.
-  //
-  // 1. Qwen first (non-reasoning, fast, ~0.5-4s) -- cheapest and quickest
-  //    when it works, but real testing showed it silently gives up
-  //    (empty results, caught by callOpenRouterVisionModel's guard) on
-  //    visually complex layouts (circling/ticking/matching).
-  // 2. DeepSeek second, only if Qwen didn't produce usable results --
-  //    slower and less predictable (internal "reasoning" token usage
-  //    varies a lot run-to-run) but has handled everything Qwen gave up
-  //    on in testing so far.
-  // 3. If both fail, tell the user plainly rather than erroring out --
-  //    at least some pages/pass may have partial results already cached
-  //    from prior attempts on retry, and "please check by hand" is more
-  //    actionable than a generic service error.
   if (openrouterKey) {
-    // Downscaled once, shared by both tiers -- see downscaleForCheapTier's
-    // own comment for why this exists. bbox stays valid: the model reports
-    // position as a 0-100% fraction of the page, not pixels, so a smaller
-    // image sent to the API doesn't change what the client draws against
-    // the original photo.
+    // Downscaled once -- see downscaleForCheapTier's own comment for why
+    // this exists. bbox stays valid: the model reports position as a
+    // 0-100% fraction of the page, not pixels, so a smaller image sent to
+    // the API doesn't change what the client draws against the original
+    // photo.
     const cheapTierImages = images.concat(exemplars).map((img) => downscaleForCheapTier(img, 640));
     try {
-      const r = await callQwen(cheapTierImages, deepseekPrompt, openrouterKey);
+      const r = await callGemini(cheapTierImages, cheapTierPrompt, openrouterKey);
       parsed = r.parsed;
-      usage.primaryModel = "qwen";
-      usage.qwen = r.usage;
+      usage.primaryModel = "gemini";
+      usage.gemini = r.usage;
     } catch (e) {
-      usage.qwenFailReason = e.kind || "unknown";
-    }
-    if (!parsed) {
-      try {
-        const r = await callDeepSeek(cheapTierImages, deepseekPrompt, openrouterKey);
-        parsed = r.parsed;
-        usage.primaryModel = "deepseek";
-        usage.deepseek = r.usage;
-      } catch (e) {
-        usage.deepseekFailReason = e.kind || "unknown";
-      }
+      usage.geminiFailReason = e.kind || "unknown";
     }
     if (!parsed) {
       return json({ error: "upstream_error", message: "部分題目暫時無法批改，建議家長人手核對，或一分鐘後再試一次。" }, 502);
@@ -9508,7 +9498,8 @@ async function handleMark(request, env) {
   // there's no per-page reason to split it) -- items it resolves with
   // high confidence are written straight into `results` and removed from
   // `pendingForAiByPage`; every other item is untouched and flows into
-  // the existing Qwen/DeepSeek fallback exactly as before. Real
+  // the image-based AI fallback below exactly as before (Gemini as of
+  // Ticket 196, 2026-09-29 -- was Qwen/DeepSeek before that). Real
   // per-call cost/timing logged below (mark_usage) alongside the
   // existing AI-fallback usage, per the same "always know cost after a
   // change" standing rule.
@@ -9584,10 +9575,10 @@ async function handleMark(request, env) {
   }
 
   // Module 4, Ticket 13 (2026-09-26): AI judges what code couldn't.
-  // Ticket 15 (2026-09-26, real production finding): a single 10-item
-  // batch made BOTH tiers (Qwen 8s, DeepSeek 12s) time out -- confirmed
-  // live, not theoretical (see TICKETS.md). Real data points: 5 items
-  // succeeded in 3.9s, 4 items in 3.2s, 10 items failed both tiers
+  // Ticket 15 (2026-09-26, real production finding, Qwen/DeepSeek era): a
+  // single 10-item batch made BOTH tiers (Qwen 8s, DeepSeek 12s) time out
+  // -- confirmed live, not theoretical (see TICKETS.md). Real data points:
+  // 5 items succeeded in 3.9s, 4 items in 3.2s, 10 items failed both tiers
   // entirely. Sample is small (3 data points) -- the exact safe
   // threshold isn't precisely known, but 5 is a defensible cutoff given
   // what actually succeeded. AI_FALLBACK_BATCH_SIZE caps each call at 5
@@ -9599,7 +9590,9 @@ async function handleMark(request, env) {
   // suggestion (batch + parallelize, not "make the model faster", which
   // has no reliable lever -- see the batch-size discussion in memory/
   // chat for why "reduce max_tokens" was considered and rejected as too
-  // weak a lever to rely on).
+  // weak a lever to rely on). Kept at 5 after the Ticket 196 Gemini swap
+  // (2026-09-29) -- Gemini's own real testing showed similar single-digit-
+  // second latency per call, no evidence yet that a larger batch is safe.
   const AI_FALLBACK_BATCH_SIZE = 5;
   const aiFallbackBatches = []; // { pageIdx, pendingItems }
   pendingForAiByPage.forEach((pendingItems, pageIdx) => {
@@ -9607,7 +9600,7 @@ async function handleMark(request, env) {
       aiFallbackBatches.push({ pageIdx, pendingItems: pendingItems.slice(i, i + AI_FALLBACK_BATCH_SIZE) });
     }
   });
-  // A page's fallback failing (both Qwen and DeepSeek) leaves its items
+  // A page's fallback failing (Gemini, as of Ticket 196) leaves its items
   // exactly as already built above -- needs_review, verifiedBy
   // "pending" -- never a regression versus not having this stage at
   // all. `aiFallbackUsage` is logged below (mark_usage) so real
