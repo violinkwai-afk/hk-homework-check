@@ -18,6 +18,17 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 - ⚪ **220（用戶決定唔做）**：AI-fallback嗰個note wiring改動冇獨立test直接覆蓋。
 - ⚪ **221（用戶決定唔做）**：129個handler入面124個未有explanation，建議用「按運算類型共用樣板」做。
 
+## 2026年9月30號：Tickets 207-210（用戶要求「work on 207-210」）
+
+- ✅ **209. 加減運算符填空,已接落生產環境。** 真相citation:26週數學訓練 P3 Topic 8圓括號 math34pdf/p18.png Q5「在○內填「+」或「-」，使算式正確」,兩個空格運算符,已有printed括號定死運算次序。4條真題全部自己brute-force驗證過答案key（answers_p02.png Topic 8 Q5）先寫code:(a) 297○(172○125)=0→-;+ (b) 168○(286○118)=0→-;- (c) 168○(156○176)=500→+;+ (d) 297○(308○105)=500→+;-,全部啱。
+  detect()容忍幾種可能嘅blank符號(○/□/_)同答案分隔格式——呢個係全新item形狀,未有真實submission確認過OCR實際點transcribe,已披露。
+  9個新test,843/843測試通過,已push（commit 530ce70）。
+
+- ⚠️ **210（真相：已經做咗，舊清單記錯）。** 用戶要求work on 210,搵到真citation(math34pdf/p53.png Q2英文字母 + p54.png Q6中文字)之後先發現：**呢個ticket其實已經做咗、已經commit（`ee3757e` "Add Ticket 210 (letter/character parallel-stroke lookup table)"）**，`cjk_parallel_lines_mc`/`latin_parallel_lines_count`兩個handler已經生產環境用緊，答案key同我岩岩查嗰兩個一模一樣。TICKETS.md之前直情一直錯標做🔲——同今晚早前搵到嘅「鐘面讀時間」舊清單錯誤係同一種問題（做咗但清單冇update）。
+  過程中我已經照住寫多咗一份重複嘅實現，跑全套test先撞到handler-name collision先發現，即刻revert咗，冇commit落去。
+
+- 🔲 **207（未做）**：長除法多個散開嘅缺格填空。真citation已搵到(math34pdf/p14.png Q5)，但要解析一條完整直式嘅版位（多個分散喺唔同位置嘅缺格），需要加一個新嘅結構化OCR marker（類似PRICE_TABLE/CALENDAR_GRID嗰種），會改動production嘅OCR prompt本身——風險同範圍都大過209，未動手，等用戶決定優先次序。
+
 ## 2026年9月30號：Show correct answers for wrong items in the normal Telegram flow
 
 - ✅ **（Ticket 1，正確答案顯示）** 每題wrong item嘅correctAnswer已經全部計好，但之前淨係喺CPU-guard文字fallback path先會顯示——而家正常嘅annotated-photo path都會send埋一個follow-up文字訊息列出邊題錯+啱嘅答案。5個新test，808/808測試通過，已push（commit 810e180）。

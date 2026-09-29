@@ -998,6 +998,6 @@
 
 已完成嘅ticket即刻搬去TICKETS_ARCHIVE.md（2026-09-30起嘅新規矩），呢度淨係留返仲未做嘅：
 
-（暫時冇未做嘅新ticket——220、221用戶已經決定唔做，搬咗去archive）
+- 🔲 **207. 長除法多個散開嘅缺格填空** — 真citation搵到咗(math34pdf/p14.png Q5),但要新增一個結構化OCR marker先解析到條直式嘅版位,會改動production嘅OCR prompt,風險/範圍都大過209,未動手。
 
-217-219已完成並push（commit 42d99d2），詳情見TICKETS_ARCHIVE.md。
+217-219、209已完成並push，詳情見TICKETS_ARCHIVE.md。**210查證咗其實老早已經做咗**(commit `ee3757e`,`cjk_parallel_lines_mc`/`latin_parallel_lines_count`)——舊嘅🔲標記本身就係錯嘅,已經喺TICKETS_ARCHIVE.md補返正確記錄。
