@@ -909,3 +909,36 @@ paper from the prior session) was also confirmed. Two V-tier types (calendar
 reading, compass-direction reading) now have a genuine SECOND independent real
 example each, which matters for the "never call solved from one example" rule
 once they're actually attempted — they are still untested, not solved.
+
+## 2026年9月30號：Explanation coverage tracker (Code 題解釋部分 — 逐個handler補)
+
+用戶明確要求（Telegram）：AI-fallback判斷同code判斷嘅wrong item都要有一個
+簡短「點解錯」嘅explanation，唔淨係correctAnswer。AI-fallback嗰邊已經全部
+做咗（同一個Gemini call，加咗個instruction，零新增call）。Code-verified嗰
+邊，129個verify function入面，呢個表track緊邊啲已經有`explanation`欄位，
+邊啲未有——避免將呢份進度記錄再加落已經太長嘅TICKETS.md度。
+
+**已補（2026-09-30，commit 2d4c285）：**
+- `verifyMath`（包括佢入面嘅trySubstituteBlank/verifyDivisionRemainder子路徑，
+  即係普通算式、填空、除法有餘數）
+- `verifyWordProblemTotal`（文字題求總數）
+- `verifyPriceTableLookup`（價目表求和/求差）
+- `verifyDigitCountOfNPlusOne`（N+1嘅位數）
+- `verifyCompoundUnitConversion`（複合單位換算）
+
+**未補（~124個handler，未來session逐個嚟，優先順序建議）：**
+1. 高頻常見類：`multi_blank_math`、`missing_digit_in_number`、
+   `sequence_fill`、`sort_numbers`、`comparison_symbol`、`computation_mc`、
+   `number_word_conversion`
+2. 日曆/時間類：`verifyCalendarGridQuery`、`weekday_offset`、
+   `readClockHandsFromPixels`（202已加咗秒針但未有explanation）
+3. 視覺/幾何類（197-212全部）：形狀分類、算珠、棒形圖、分數塗色、座標幾何、
+   梯形分類等——呢批本身要睇圖，explanation要講返個幾何/像素量度嘅邏輯，
+   複雜度高過純文字/數字類，擺最後做。
+
+**設計原則（供未來session跟）**：喺handler嘅`verify`/`verifyVisual`函數個
+return object度加一個`explanation`欄位（`correct`為false先要有值，true就留
+空字串）——`classifyAndVerify`已經自動spread落`verdict`，`results.push`嗰
+度已經會讀`verdict.explanation`落`note`，唔使再改wiring。字眼要求：一句起、
+廿字內、講清楚錯喺邊/點解啱嘅答案係咁，唔係淨係複述個答案（果個已經由
+correctAnswer做咗）。
