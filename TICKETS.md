@@ -976,3 +976,14 @@
   真相citation：26週數學訓練 P3 Topic 15秒 math34pdf/p41.png Q1（(a)10時___分,再過了___秒 (b)___時45分,再過了___秒),自己度過真相答案key(28,8 / 4,22)完全啱。
   用「離圓心最遠嗰粒橙色像素」嘅角度嚟計,兩張相都啱啱好啱。fixture裁相時特登用programmatic方法搵返個真bezel bounding box做圓心(唔係憑肉眼估),先撞得中依家用嘅「圖片中心=鐘面圓心」呢個假設。
   8個新測試,772/772測試通過,已push(d9a4bc6)。
+
+- ✅ **200. 分數塗色圖讀數,已接落生產環境。** 純region-count幾何,同197/198一路：flood-fill所有冇墨嘅圍封region（墨線本身係邊界,唔計落去）,撞到crop邊嘅係頁面背景(去走),剩低邊個region夠暗（同最光嗰個比）就係塗咗色。
+  真相citation：26週數學訓練 P3 Topic 10分數 math34pdf/p25.png Q1(a)（圓形分3等份,1份塗紫色),啱啱好1/3,對返真答案key確認過。
+  **範圍披露**：淨係做到「等面積、冇重疊」嘅region(啱返呢個真citation)。同一條Q1嘅(c)（兩個圖形重疊,面積唔相等)要用面積比例嚟計,唔係淨係數region個數,未做,老實披露唔係靜雞雞當佢做咗。
+  7個新測試,779/779測試通過,已push(d05085b)。
+
+- ✅ **203. 座標格點幾何(等腰三角形判斷),已接落生產環境。** **呢個係全新架構class**（同199一樣,做之前記憶note已經flag咗「可能要OCR-marker approach,未assess過」）：要識(a)邊個字母代表邊個點（純文字fact,一定要OCR/Vision先讀到）+(b)嗰個點精確嘅像素位置（一定要靠幾何量度,因為個字母永遠印喺個dot隔籬,唔係印喺dot正中,而且每次偏嘅方向都唔同）。
+  做法：復用而家已有嘅`findAbacusBbox`/`findBarChartBbox`嗰種「喺page級掃vision.words搵bbox」做法,加多一步：喺同一個page級步驟,將每個字母嘅page像素位置都攞埋(`item.gridPointLabels`)。跟住要將page像素位置轉做crop本身嘅local像素位置,先要幫`cropItem`加咗一個細細嘅、純加法嘅架構改動：crop個object而家多咗`originX/originY/pageWidth/pageHeight`四個欄位——現有任何一個verifyVisual handler都淨係讀`.data/.mediaType`,完全唔受影響。
+  真相citation：26週數學訓練 P3 Topic 23三角形 math34pdf/p59.png Q4（P/Q/R/S/T 5個標咗字母嘅dot grid,「把哪三點連起來,可得出一個等腰三角形」),對返真答案key（Q,S,T)確認過。
+  2個真bug：(1) dot本身企喺grid線交叉點上、同條線冇縫接住,普通flood-fill會將圓形dot同條幼線撈埋做一條長長嘅blob——改用「侵蝕(erosion)式」判斷：淨係當一個像素周圍5x5窗全部係墨先算「核心」,幼線(1-2px闊)永遠冇可能滿足,但dot(直徑~13px)就冇問題,乾淨咁分開dot同線。(2) 用「10%相對容差」判斷「兩邊相等」太寬鬆——真citation嘅5個點入面,搵到另外2組唔啱嘅組合(P,Q,T同Q,R,S)都跌咗入嗰個容差,令「應該淨係得一組等腰三角形」呢個check變得唔肯定——量返真雜訊其實細過1px,收窄做3%,先啱啱好將真啱嗰組(差0.1px)同真唔啱嗰兩組(差12-21px)分返開。
+  9個新測試,788/788測試通過,已push(e6e1585)。
