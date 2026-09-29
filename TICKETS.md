@@ -892,3 +892,21 @@
   `handleCheckInner`而家淨係call一次`callGemini`(復用196已經有嘅同一個function),唔再有第二層。順手改埋幾樣舊命名/comment等佢哋唔再誤導:共用prompt變數`deepseekPrompt`改名做`cheapTierPrompt`(唔再淨係得DeepSeek專用);usage tracking嘅`qwenFailReason`/`deepseekFailReason`合併做`geminiFailReason`;附近幾段提到「Qwen/DeepSeek cascade」嘅comment都更新做反映現狀。
   `callQwen`/`callDeepSeek`兩個function本身冇刪(仍然存在,`/api/test-deepseek-latency`呢個獨立診斷route仲有用返`callQwen`做latency測試,冇改)——而家production嘅判斷路徑(`/api/mark`嘅AI-fallback同`/api/check`)兩條都100%淨係用Gemini,冇任何地方仲會用Qwen/DeepSeek做真正批改判斷。
   698/698測試通過,已push(d15bd8e)。
+
+## 2026年9月29-30號:用「幾何計算」(唔靠AI)解決部分Category C視覺題——第一個真正接落production嘅非AI視覺判斷方法
+
+用戶問:「咁有冇專睇圖嘅AI」——引申出一個關鍵研究方向:分開「通用LLM睇圖」(Gemini/GPT呢類,理解緊張圖再估答案)同「傳統圖像處理」(computer vision,純幾何量度,唔靠語言模型)。對住「數幾多隻角/係咪圓形/係咪正方形」呢類問題,傳統CV理論上可以做到接近100%(因為唔係靠估,係實際量度)。
+
+**驗證過程**(見memory `project_hk_homework_check_launch_readiness_visual_ceiling.md`完整記錄):
+1. 用Python/OpenCV(淨係測試環境,production冇用OpenCV)驗證個演算法本身work唔work——測試用Gemini之前答錯嗰兩條真題:「花+莖」複合圖形(形狀互相接觸) 5/6隻角先啱7隻(因為形狀接觸,拆唔開);「12格形狀分類A-L」(形狀冇接觸)第一次已經6/6(100%)。
+2. 用真正可以擺落Cloudflare Workers嘅輕量JS工具(`d3-contour`+`simplify-js`,唔用OpenCV)重新起,搵到並修正3個真bug(揀邊條線先係真正輪廓、marching squares要用模糊咗嘅field先啱、判斷長方形要用真正嘅「最小面積旋轉方框」唔可以淨係用垂直方框)。
+3. **搵到第4個bug**(接落production code嗰陣先發現):`simplify-js`閉合模式會將個頭尾點重複多計一次,導致每個形狀讀多咗一隻角——修正之後,真正production code跑真相都係**6/6(100%)**。
+
+- ✅ **197. 幾何形狀分類(2D shape classification grid),已接落生產環境。** 只做返「觀察下面的平面圖形(A-L)...寫出代表答案的英文字母」呢種題型——診斷每個形狀係咪正方形/長方形/六邊形/圓形等,同學生答案比對。
+  新增`readShapeClassificationFromPixels`(flood-fill分隔每個形狀blob → d3-contour追蹤輪廓 → simplify-js數幾多隻角 → 判斷形狀)、`verifyShapeClassificationGrid`、`findLetterGridBbox`(專門搵法:唔用返現有靠題目文字定位嗰個機制(淨係識英數字,中文題搵唔到),改用搵晒啲形狀入面自己印住嘅英文字母標籤(A、B、C...)嘅聚集位置嚟定位個圖表,更準)。
+  **診斷唔到嘅形狀種類明確披露**:菱形、梯形、平行四邊形、八邊形——呢個分類器分唔到菱形同正方形(兩者都係4隻角、長寬比~1)、分唔到梯形同其他不規則四邊形,`detect()`見到呢啲字眼會直接唔接手,唔會估。
+  **已知未解決嘅限制**:形狀互相接觸/穿插(例如花瓣連住莖嗰種複合圖)呢個方法分唔到——已經試過用「線條骨架化+平面圖分面」呢個更複雜嘅方法(見下面獨立記錄),但今晚未搞掂,呢個handler只接落「確認冇接觸」嘅題型。
+  真相測試:用返Gemini之前答錯嗰張真相(P.68, A-L 12個形狀),官方答案key(正方形A,I;長方形F;六邊形E,J;圓形H)全部啱。10個新測試(包括直接reproduce Gemini真實答錯嗰個答案,確認會正確判佢錯),710/710測試通過。`wrangler deploy --dry-run`確認打包成功,736.78KiB(gzip),遠低於Workers上限。已push(98469c5)。
+  **未做**:仲未有真實用戶submission經過呢個handler驗證(跟返「換過嘢一定要用返真正dispatch path驗證」嘅規矩,下次有真實match嘅submission要留意)。
+
+**另一個方向(接觸形狀)嘅進度,老實記低——未成功,但有真正進展**:用`scikit-image`嘅skeletonize將線條圖轉做1像素闊嘅骨架,再搵晒所有分岔點(度數≥3嘅像素)——呢部分work得好好,visually confirm咗啱晒個結構。跟住要將呢個骨架圖轉做「平面圖分面」(用`networkx`嘅`PlanarEmbedding`),搵每一舊「面」(即係一個形狀)——呢部分寫嗰陣程式卡死咗(懷疑`add_half_edge`個rotation system起錯咗),未解決。呢個留返做獨立、需要專門時間嘅研究項目。
