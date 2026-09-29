@@ -22,3 +22,23 @@ date,test_batch,step,model,question_id,category,time_ms,cost_usd,correct
 2026-09-29,vision_only_10,ai_fallback,google/gemini-3.1-flash-lite,8,CGP odd-one-out,2983,0.00072,UNVERIFIED
 2026-09-29,vision_only_10,ai_fallback,google/gemini-3.1-flash-lite,9,2D形狀分類,2852,0.00073,FALSE
 2026-09-29,vision_only_10,ai_fallback,google/gemini-3.1-flash-lite,10,邊組砌三角形MC,3468,0.00062,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,1,非標準單位點算,2275,0.00056,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,2,角度分類,3467,0.00066,FALSE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,3,3D形狀認名,868,0.00045,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,4,複合圖形數形狀個數,868,0.00045,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,5,圖形剪裁命名,2710,0.00033,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,6,幾何分割MC,2710,0.00033,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,7,複合棒形圖,3526,0.00054,TRUE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,8,CGP odd-one-out,582,0.00049,UNVERIFIED
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,9,2D形狀分類,1991,0.0005,FALSE
+2026-09-29,vision_only_10,ai_fallback,qwen/qwen3-vl-235b-a22b-instruct,10,邊組砌三角形MC,917,0.00043,FALSE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,1,非標準單位點算,3515,0.00052,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,2,角度分類,1878,0.00295,TRUNCATED(finish_reason=length;20000cap_still_hit_4000)
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,3,3D形狀認名,2686,0.001,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,4,複合圖形數形狀個數,2686,0.001,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,5,圖形剪裁命名,3270,0.00296,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,6,幾何分割MC,3270,0.00296,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,7,複合棒形圖,7735,0.00297,TRUE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,8,CGP odd-one-out,2366,0.00364,UNVERIFIED
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,9,2D形狀分類,1381,0.00337,FALSE
+2026-09-29,vision_only_10,ai_fallback,deepseek/deepseek-v4.1-flash,10,邊組砌三角形MC,1410,0.00049,TRUE
