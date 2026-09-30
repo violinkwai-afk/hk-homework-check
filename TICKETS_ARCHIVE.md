@@ -1099,3 +1099,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   用返真實OCR輸出格式，經classifyAndVerify嘅真dispatch路徑confirm咗Q12(a)(b)兩題都判斷啱。866/866測試通過(8個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
 
 **額外發現(未做，記低留意)**：Q13(a)(b)而家context都齊晒，理論上都可以起code(a問「用3條膠棒能圍成一個___三角形」，因為得返2種長度，任揀3條實有2條相等，答案必然係「等腰」；b問「揀一條膠棒，一定唔可以同邊組膠棒圍成三角形」，要逐個option試同兩種現有長度配唔配到)——但呢個未做，Pattern5本身(Q12)已經完成你要求嘅部分。
+
+## 2026年9月30號：小學英文「完整句子」閱讀理解評分準則加入AI-fallback prompt
+
+- ✅ **已接落生產環境(commit b04c2e6)。** 真citation:Junius Publications "Practice in Reading 3"("Answer the questions in COMPLETE sentences")。你要求要跟返香港**小學**英文老師嘅真實做法，唔可以夾雜DSE(HKEAA)嗰套比較寬鬆嘅標準。
+  真研究搵到(嚟源：家長教育媒體訪問補習老師嘅小學層面實戰經驗總結，非官方文件)嘅6個常見扣分位：淨係照抄原文唔識轉format、答案唔係完整句子、時式同段落唔一致、代名詞/單複數錯、答非所問(問詞搞混)。已寫成新嘅COMPLETE_SENTENCE_READING_REFERENCE指示，加落buildAiFallbackPrompt度，淨係英文WH-question+句子長度答案先觸發(唔係逢有問題都加，慳token)。
+  順帶答咗你問嘅「Jev做唔做到」:Jev對代名詞閱讀理解題本身信心分就偏低(之前Ticket31真實數據0.12-0.43)，會自動fall through去用返呢一層新指示嘅AI-fallback judge，唔使特登改Jev。
+  871/871測試通過(5個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
