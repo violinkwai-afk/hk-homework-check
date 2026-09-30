@@ -4685,6 +4685,30 @@ function classifyPrepositionOfTimeExpected(printed, targetBlankIndex) {
     });
     if (sameTypeIdx.length >= 2 && sameTypeIdx[0] === myIndex) return "from";
     if (sameTypeIdx.length >= 2 && sameTypeIdx[1] === myIndex) return "to";
+    // Real dispatch finding (2026-10-01, 9-photo pipeline test): OCR
+    // does NOT reliably keep a "from ... to ..." pair's two blanks in
+    // one shared printedQuestion -- on one real worksheet (a poster
+    // with "The party is __ nine thirty __ the morning __ seven thirty
+    // __ the evening.") each blank became its OWN separate item, with
+    // NO trailing "." and no sibling blank visible at all, so this
+    // function had no way to see the "seven thirty" partner while
+    // resolving "nine thirty". The confident standaloneDefault fallback
+    // used to fire here regardless, and got 4 real, teacher-marked-
+    // correct items CONFIDENTLY WRONG (expected "from"/"to" from
+    // pairing, got "at" from the blind default) -- a genuine accuracy-
+    // floor violation, not just a coverage gap. Fix: only trust
+    // standaloneDefault when this item's own printedQuestion actually
+    // ends at a real sentence boundary (a "." right after this blank's
+    // classified expression) -- that's the one positive signal
+    // available that OCR captured the WHOLE original sentence, not a
+    // truncated fragment that might have had an invisible pairing
+    // partner. No trailing period -> decline (null) rather than guess.
+    // Real cost: several genuinely-standalone items (e.g. "an animal
+    // show __ ten fifteen" with no trailing period either, despite
+    // truly having no partner) now also decline instead of resolving
+    // -- an accepted, deliberate trade (lost coverage, not lost
+    // accuracy) per this project's accuracy-floor rule.
+    if (periodAfter === -1) return null;
     return standaloneDefault;
   }
   return null;
