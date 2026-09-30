@@ -1065,3 +1065,9 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 **AI-only(c類)**:邏輯推理拼圖題(p12 Q10、p19 Q9)、複合圖形入面數特定三角形(p19 Q7、p25 Q8a)、畫圖/設計題(p22全部、單元10「繡曲線」p26-28)、開放式文字解釋題(p17 Q13)。
 
 **重要披露**:呢本書本身**冇答案key**,7個(b)候選全部未有真實答案verify過——跟返project嘅硬規矩,要有真答案先可以起code,呢個仍然係「搵到,未起」階段。
+
+## 2026年9月30號：真bug——word_problem_total計錯「相對比較」題型
+
+- ✅ **已接落生產環境。** 用戶問「How would you 逐條驗證内部邏輯」,直接攞返「3下A 數作業.pdf」入面真實題目去試`classifyAndVerify()`嘅時候,搵到一個真bug:`verifyWordProblemTotal`本身用嚟判斷「兩個數加埋等於總數」呢種題型(例如「農場有雞X隻,鴨Y隻,一共幾多隻」),但當題目其實係「相對比較」形式(例如「雞比鴨多几隻」)嗰陣,呢個handler照樣當成普通加總嚟計,計出嚟嘅「正確答案」其實係錯嘅。
+  修法:喺`verifyWordProblemTotal`入面加多一個guard——見到`/比.{0,10}(多|少)/`呢種relative-comparison字眼,直接return `{correct:null}`(即係唔識判斷,交返俾AI fallback),唔再用個錯嘅加總邏輯屈啲判斷出嚟。
+  已加2個新測試喺`test/new-question-types.test.js`,確認個guard生效。已push(commit 822ca27)。
