@@ -3227,17 +3227,50 @@ function buildDiagramMarkerHint(item) {
   return "呢一頁OCR仲抽取咗以下圖表資料(可能同呢一題有關，都可能冇關，自己判斷)：\n" + parts.join("\n");
 }
 
+// Ticket 222 "code hints Jev" (2026-10-01): same Ticket-190 pattern as
+// buildDiagramMarkerHint above, applied to preposition-of-time items
+// that reach Jev unresolved -- either because verifyPrepositionOfTime
+// itself declined (ambiguous/unclassifiable), or because the item never
+// even reached that handler's verify() at all (its detect()/verify()
+// both gate on studentAnswer being one of on/in/at/from/to, so a
+// garbled answer like a real "bo" typo never gets dispatched there in
+// the first place -- this hint fires purely off printedQuestion's
+// shape, independent of that gate, so it still reaches Jev for exactly
+// that case). Real motivating finding, from re-reading an already-run
+// 22-item Jev test's archived output rather than a fresh paid call:
+// 3 of 12 English items landed in Jev's uncertain band --
+//  - "Henry goes to bed __nine thirty__night."/"at;at": noul=0.14
+//    (wrongly leaning toward "wrong") even though it's correct --
+//    classifyPrepositionOfTimeExpected resolves this one confidently,
+//    so in the real pipeline it's now caught by the code handler
+//    itself and never reaches Jev at all.
+//  - "My grandfather watches TV __noon."/"from": noul=0.46 (uncertain)
+//    -- also code-resolvable (expected "at"), same as above.
+//  - "My uncle watches TV __midnight."/"bo": noul=0.12 (just barely
+//    short of the confident-wrong cutoff) -- "bo" fails the whitelist
+//    gate so the handler never even sees it; THIS is the case this
+//    hint function exists for, phrased as an advisory fact ("the blank
+//    expects one of on/in/at/from/to") rather than a verdict, since
+//    code has no way to confirm the handwriting was actually meant to
+//    be a preposition at all.
+function buildPrepositionTimeHint(item) {
+  const expected = classifyPrepositionOfTimeExpected(String(item.printedQuestion || ""), item.targetBlankIndex);
+  if (expected === null) return "";
+  return `呢個空格屬於「時間介詞」類題目，跟住嘅文字顯示呢度通常應該填「${expected}」——僅供參考，你要自己核實呢個分析岩唔岩，唔好盲目跟。`;
+}
+
 function buildJevQuestions(pendingItems) {
   const questions = {};
   pendingItems.forEach((item) => {
     const diagramHint = buildDiagramMarkerHint(item);
+    const prepTimeHint = buildPrepositionTimeHint(item);
     questions[String(item.resultIndex)] = {
       type: "noul",
       // Ticket 54: wordBankHint (if present) appends the one piece of
       // cross-item context this item wouldn't otherwise have -- Jev
       // normally judges every item in total isolation, with no idea
       // another item on the same page used the identical bank phrase.
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}`,
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -4620,40 +4653,27 @@ function isPrepositionOfTimeQuestion(item) {
   return blanks.some((b) => classifyPrepTimeExpr(printed.slice(b.index + b[0].length)) !== null);
 }
 
-function verifyPrepositionOfTime(item) {
-  const printed = String(item.printedQuestion || "");
-  const answer = String(item.studentAnswer || "").trim().toLowerCase();
-  if (!["on", "in", "at", "from", "to"].includes(answer)) return { correct: null, correctAnswer: "" };
-
-  const blankPositions = [...printed.matchAll(/_{2,}/g)];
-  if (blankPositions.length === 0) return { correct: null, correctAnswer: "" };
-
-  // This item's own target blank is, by default, the FIRST blank in its
-  // printed context, matching this file's established its/it's
-  // convention (see verifyGrammarCloze's its/it's branch). That default
-  // is only wrong for the SECOND half of a from/to pair when the full
-  // shared sentence (both blanks) is what OCR hands this item -- for
-  // that case, upstream dispatch can set item.targetBlankIndex (0-based)
-  // to say which blank is this item's own. Not yet confirmed whether
-  // real OCR extraction actually provides that index (unverified real-
-  // dispatch risk, disclosed above); defaults to 0 when absent, which
-  // is already correct for the majority of real cases (every standalone
-  // on/in/at blank, and the "from" half of every pair).
-  const myIndex = Number.isInteger(item.targetBlankIndex) && item.targetBlankIndex >= 0 && item.targetBlankIndex < blankPositions.length
-    ? item.targetBlankIndex
+// Pure classification, independent of studentAnswer -- shared by
+// verifyPrepositionOfTime (the dispatch-path verdict) and
+// buildPrepositionTimeHint (the Jev-hint path below, which needs the
+// same "what SHOULD this blank be" reasoning for items whose answer
+// didn't pass the preposition-word gate, or that no code handler
+// claimed at all). Returns null when the printed text has no blank or
+// the blank's following text doesn't classify.
+function classifyPrepositionOfTimeExpected(printed, targetBlankIndex) {
+  const blankPositions = [...String(printed || "").matchAll(/_{2,}/g)];
+  if (blankPositions.length === 0) return null;
+  const myIndex = Number.isInteger(targetBlankIndex) && targetBlankIndex >= 0 && targetBlankIndex < blankPositions.length
+    ? targetBlankIndex
     : 0;
   const classifications = blankPositions.map((b) => classifyPrepTimeExpr(printed.slice(b.index + b[0].length)));
   const myType = classifications[myIndex];
-  if (myType === null) return { correct: null, correctAnswer: "" };
+  if (myType === null) return null;
 
-  let expected;
-  if (myType === "NOON_MIDNIGHT" || myType === "NIGHT") {
-    expected = "at";
-  } else if (myType === "WEEKDAY_DAYPART") {
-    expected = "on";
-  } else if (myType === "DAYPART" || myType === "SEASON" || myType === "MONTH") {
-    expected = "in";
-  } else if (myType === "DATE" || myType === "CLOCK_TIME") {
+  if (myType === "NOON_MIDNIGHT" || myType === "NIGHT") return "at";
+  if (myType === "WEEKDAY_DAYPART") return "on";
+  if (myType === "DAYPART" || myType === "SEASON" || myType === "MONTH") return "in";
+  if (myType === "DATE" || myType === "CLOCK_TIME") {
     const standaloneDefault = myType === "DATE" ? "on" : "at";
     const periodBefore = printed.lastIndexOf(".", blankPositions[myIndex].index);
     const sentenceStart = periodBefore === -1 ? 0 : periodBefore + 1;
@@ -4663,16 +4683,20 @@ function verifyPrepositionOfTime(item) {
     blankPositions.forEach((b, i) => {
       if (b.index >= sentenceStart && b.index < sentenceEnd && classifications[i] === myType) sameTypeIdx.push(i);
     });
-    if (sameTypeIdx.length >= 2 && sameTypeIdx[0] === myIndex) {
-      expected = "from";
-    } else if (sameTypeIdx.length >= 2 && sameTypeIdx[1] === myIndex) {
-      expected = "to";
-    } else {
-      expected = standaloneDefault;
-    }
-  } else {
-    return { correct: null, correctAnswer: "" };
+    if (sameTypeIdx.length >= 2 && sameTypeIdx[0] === myIndex) return "from";
+    if (sameTypeIdx.length >= 2 && sameTypeIdx[1] === myIndex) return "to";
+    return standaloneDefault;
   }
+  return null;
+}
+
+function verifyPrepositionOfTime(item) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim().toLowerCase();
+  if (!["on", "in", "at", "from", "to"].includes(answer)) return { correct: null, correctAnswer: "" };
+
+  const expected = classifyPrepositionOfTimeExpected(printed, item.targetBlankIndex);
+  if (expected === null) return { correct: null, correctAnswer: "" };
 
   const correct = answer === expected;
   return { correct, correctAnswer: correct ? "" : expected };
@@ -13346,6 +13370,7 @@ export {
   callJevPreCheck,
   buildJevQuestions,
   buildDiagramMarkerHint,
+  buildPrepositionTimeHint,
   buildAiFallbackPrompt,
   mentionsMoneyDenomination,
   mentionsShapeGeometry,
@@ -13562,6 +13587,7 @@ export {
   isVerbFormFillQuestion,
   verifyVerbFormFill,
   classifyPrepTimeExpr,
+  classifyPrepositionOfTimeExpected,
   isPrepositionOfTimeQuestion,
   verifyPrepositionOfTime,
   verifyPictureMatchFormat,

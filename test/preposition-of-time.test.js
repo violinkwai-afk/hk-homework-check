@@ -259,3 +259,59 @@ test("verifyPrepositionOfTime: declines (null) when the student answer isn't a p
   });
   assert.equal(r.correct, null);
 });
+
+// ---- Ticket 222 "code hints Jev" (2026-10-01) ----
+// Real motivating case, from re-reading an already-run 22-item Jev
+// test's archived output (no new spend): "My uncle watches TV
+// ____midnight." answered "bo" -- Jev landed at noul=0.12, just short
+// of the confident-wrong cutoff (0.1). verifyPrepositionOfTime's own
+// detect()/verify() both gate on studentAnswer being a real preposition
+// word, so this item never reaches that handler's verdict at all --
+// buildPrepositionTimeHint exists specifically to still surface the
+// blank's expected type to Jev for exactly this case.
+
+test("buildPrepositionTimeHint: real E10 citation -- fires even though studentAnswer ('bo') isn't a real preposition", async () => {
+  const worker = await import(TMP);
+  const hint = worker.buildPrepositionTimeHint({
+    printedQuestion: "My uncle watches TV ____ midnight.",
+    studentAnswer: "bo",
+  });
+  assert.match(hint, /at/);
+  assert.match(hint, /僅供參考/);
+});
+
+test("buildPrepositionTimeHint: empty string when the blank doesn't classify at all", async () => {
+  const worker = await import(TMP);
+  const hint = worker.buildPrepositionTimeHint({
+    printedQuestion: "I like to play ____ football with my friends.",
+    studentAnswer: "bo",
+  });
+  assert.equal(hint, "");
+});
+
+test("buildPrepositionTimeHint: empty string when there's no blank at all", async () => {
+  const worker = await import(TMP);
+  const hint = worker.buildPrepositionTimeHint({
+    printedQuestion: "Just a plain sentence with no blank.",
+    studentAnswer: "bo",
+  });
+  assert.equal(hint, "");
+});
+
+test("buildJevQuestions: the preposition hint actually reaches Jev's instructions text", async () => {
+  const worker = await import(TMP);
+  const items = [{
+    resultIndex: 1,
+    printedQuestion: "My uncle watches TV ____ midnight.",
+    studentAnswer: "bo",
+  }];
+  const questions = worker.buildJevQuestions(items);
+  assert.match(questions["1"].instructions, /時間介詞/);
+});
+
+test("classifyPrepositionOfTimeExpected: agrees with verifyPrepositionOfTime's own expected value on a real from/to case", async () => {
+  const worker = await import(TMP);
+  const printed = "The concert is ____ eight fifteen ____ eleven o'clock.";
+  assert.equal(worker.classifyPrepositionOfTimeExpected(printed, 0), "from");
+  assert.equal(worker.classifyPrepositionOfTimeExpected(printed, 1), "to");
+});
