@@ -149,21 +149,24 @@ test("reconstructSplitSentenceItems: does not merge items with only a short/triv
 // tells them apart via targetBlankIndex, but Jev/buildAiFallbackPrompt
 // read printedQuestion as plain text and would have no way to know
 // which of the 4 identical "____" a one-word answer is about.
-// displayPrintedQuestionForJudge marks the ONE target blank distinctly
-// for exactly this reason.
+// displayPrintedQuestionForJudge fixes this by filling every OTHER
+// blank with that sibling's own real studentAnswer (a further real
+// suggestion from the user, better than the first version which just
+// left them as bare "____") and bracketing only the one being judged
+// -- reads as one natural sentence with exactly one word marked out.
 
-test("displayPrintedQuestionForJudge: real citation -- marks only this item's own blank, others stay plain", async () => {
+test("displayPrintedQuestionForJudge: real citation -- fills every OTHER blank with that sibling's real answer, brackets only the target", async () => {
   const worker = await import(TMP);
   const items = worker.reconstructSplitSentenceItems(worker.parseOcrLine(REAL_CHRISTMAS_POSTER_OCR));
-  const item2 = items.find((i) => i.label === "2"); // targetBlankIndex 0
+  const item2 = items.find((i) => i.label === "2"); // targetBlankIndex 0, siblings' real answers: from,in,to,in
   const item4 = items.find((i) => i.label === "4"); // targetBlankIndex 2
   assert.equal(
     worker.displayPrintedQuestionForJudge(item2),
-    "The party is 【這一格：____】 nine thirty ____ the morning ____ seven thirty ____ the evening."
+    "The party is 【from】 nine thirty in the morning to seven thirty in the evening."
   );
   assert.equal(
     worker.displayPrintedQuestionForJudge(item4),
-    "The party is ____ nine thirty ____ the morning 【這一格：____】 seven thirty ____ the evening."
+    "The party is from nine thirty in the morning 【to】 seven thirty in the evening."
   );
 });
 
@@ -179,8 +182,8 @@ test("buildJevQuestions: the marker and disambiguation note both actually reach 
   const items = worker.reconstructSplitSentenceItems(worker.parseOcrLine(REAL_CHRISTMAS_POSTER_OCR));
   const item2 = { ...items.find((i) => i.label === "2"), resultIndex: 1 };
   const questions = worker.buildJevQuestions([item2]);
-  assert.match(questions["1"].instructions, /【這一格：____】/);
-  assert.match(questions["1"].instructions, /淨係要判斷標咗/);
+  assert.match(questions["1"].instructions, /【from】/);
+  assert.match(questions["1"].instructions, /淨係要判斷/);
 });
 
 test("buildAiFallbackPrompt: the marker and disambiguation note both actually reach the AI-fallback prompt text", async () => {
@@ -188,6 +191,6 @@ test("buildAiFallbackPrompt: the marker and disambiguation note both actually re
   const items = worker.reconstructSplitSentenceItems(worker.parseOcrLine(REAL_CHRISTMAS_POSTER_OCR));
   const item2 = { ...items.find((i) => i.label === "2"), question: "1" };
   const prompt = worker.buildAiFallbackPrompt([item2]);
-  assert.match(prompt, /【這一格：____】/);
-  assert.match(prompt, /淨係判斷標咗/);
+  assert.match(prompt, /【from】/);
+  assert.match(prompt, /淨係判斷/);
 });

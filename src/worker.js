@@ -3114,7 +3114,7 @@ function buildAiFallbackPrompt(pendingItems) {
   // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
   // (which additionally sees the real photo) should still know about it.
-  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${displayPrintedQuestionForJudge(it)}」，學生手寫答案「${it.studentAnswer}」${Number.isInteger(it.targetBlankIndex) ? "（呢句入面有幾個空格，淨係判斷標咗「【這一格：____】」嗰一個）" : ""}${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
+  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${displayPrintedQuestionForJudge(it)}」，學生手寫答案「${it.studentAnswer}」${Number.isInteger(it.targetBlankIndex) ? "（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，淨係判斷【用方括號括住】嗰一個）" : ""}${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
   const referenceBlocks = [
     mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
     mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
@@ -3270,7 +3270,7 @@ function buildJevQuestions(pendingItems) {
       // cross-item context this item wouldn't otherwise have -- Jev
       // normally judges every item in total isolation, with no idea
       // another item on the same page used the identical bank phrase.
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${displayPrintedQuestionForJudge(item)}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${Number.isInteger(item.targetBlankIndex) ? "\n（呢句入面有幾個空格，你淨係要判斷標咗「【這一格：____】」嗰一個，其他空格唔使理。）" : ""}${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${displayPrintedQuestionForJudge(item)}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${Number.isInteger(item.targetBlankIndex) ? "\n（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，你淨係要判斷【用方括號括住】嗰一個，其他嘅唔使理。）" : ""}${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -3499,8 +3499,17 @@ function reconstructSplitSentenceItems(items) {
       runMembers.forEach((m, i) => {
         reconstructed += (i === 0 ? "" : " ") + "____" + m.suffix;
       });
+      // Real user suggestion (2026-10-01), better than the first
+      // shipped version: instead of showing a judge 4 identical bare
+      // "____" blanks, fill every blank EXCEPT the one being judged
+      // with that sibling's own real studentAnswer -- already-known
+      // data (every sibling's answer came from the same OCR pass),
+      // zero extra cost, and it reads as a natural, grammatically
+      // complete sentence with exactly one word bracketed, instead of
+      // an abstract fill-in-the-blank with disconnected snippets.
+      const siblingAnswers = runMembers.map((m) => String(items[m.idx].studentAnswer || ""));
       runMembers.forEach((m, i) => {
-        items[m.idx] = { ...items[m.idx], printedQuestion: reconstructed, targetBlankIndex: i };
+        items[m.idx] = { ...items[m.idx], printedQuestion: reconstructed, targetBlankIndex: i, siblingAnswers };
       });
     }
   }
@@ -3516,20 +3525,43 @@ function reconstructSplitSentenceItems(items) {
 // 4 near-identical questions with no marker, Jev/AI-fallback would
 // have no way to know WHICH of the 4 identical-looking blanks a given
 // one-word answer is actually about -- a real remaining gap in cases
-// this reconstruction doesn't let code itself resolve outright. Fixes
-// it by marking the ONE target blank distinctly (deliberately with
-// Chinese zh brackets, unlikely to collide with the underlying "____"
-// matching every other handler's regex relies on) wherever
-// printedQuestion is shown to a text-based judge -- the stored
-// item.printedQuestion itself (what code's own "_{2,}" matching reads)
-// stays untouched.
+// this reconstruction doesn't let code itself resolve outright.
+//
+// Real user suggestion, better than the first shipped version (which
+// just marked the target and left every other blank as a bare
+// "____"): fill every OTHER blank with that sibling's own real
+// studentAnswer (already known, zero extra cost -- every sibling's
+// answer came from the same OCR pass) and bracket only the one being
+// judged. Reads as one natural, grammatically complete sentence with
+// exactly one word marked out, e.g. "The party is 【from】 nine thirty
+// in the morning to seven thirty in the evening." -- easier for a
+// judge to reason about than 4 disconnected blank markers, and it's
+// literally the real sentence the student was working from. Falls
+// back to the plain-blank marker when siblingAnswers isn't present
+// (defensive -- reconstructSplitSentenceItems always sets both
+// together, but never assume a caller couldn't construct a
+// targetBlankIndex without it). The stored item.printedQuestion itself
+// (what code's own "_{2,}" matching reads) is never touched by this --
+// only what's SHOWN to a text-based judge.
 function displayPrintedQuestionForJudge(item) {
   const printed = String(item.printedQuestion || "");
   if (!Number.isInteger(item.targetBlankIndex)) return printed;
   const blanks = [...printed.matchAll(/_{2,}/g)];
   const target = blanks[item.targetBlankIndex];
   if (!target) return printed;
-  return printed.slice(0, target.index) + "【這一格：____】" + printed.slice(target.index + target[0].length);
+  if (!Array.isArray(item.siblingAnswers)) {
+    return printed.slice(0, target.index) + "【這一格：____】" + printed.slice(target.index + target[0].length);
+  }
+  let result = "";
+  let cursor = 0;
+  blanks.forEach((b, i) => {
+    result += printed.slice(cursor, b.index);
+    const answer = String(item.siblingAnswers[i] || "____");
+    result += i === item.targetBlankIndex ? `【${answer}】` : answer;
+    cursor = b.index + b[0].length;
+  });
+  result += printed.slice(cursor);
+  return result;
 }
 
 // Minimal, safe arithmetic evaluator -- no eval(). Supports +, -, x/×/*,
