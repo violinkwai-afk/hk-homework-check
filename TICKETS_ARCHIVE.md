@@ -1106,3 +1106,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   真研究搵到(嚟源：家長教育媒體訪問補習老師嘅小學層面實戰經驗總結，非官方文件)嘅6個常見扣分位：淨係照抄原文唔識轉format、答案唔係完整句子、時式同段落唔一致、代名詞/單複數錯、答非所問(問詞搞混)。已寫成新嘅COMPLETE_SENTENCE_READING_REFERENCE指示，加落buildAiFallbackPrompt度，淨係英文WH-question+句子長度答案先觸發(唔係逢有問題都加，慳token)。
   順帶答咗你問嘅「Jev做唔做到」:Jev對代名詞閱讀理解題本身信心分就偏低(之前Ticket31真實數據0.12-0.43)，會自動fall through去用返呢一層新指示嘅AI-fallback judge，唔使特登改Jev。
   871/871測試通過(5個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：Crossword grid-consistency演算法（純結構檢查，未接OCR）
+
+- ✅ **演算法已接落生產環境(commit 858bed1)，但未完整可用。** 真citation:2022/2023 P2 General English考試,crossword填形容詞題型。你提出嘅真insight:crossword答案嘅「字數」同「同其他答案共用格嘅字母」可以純靠grid幾何對比,唔使識英文，可以100%肯定咁篩走一批錯答案。
+  已寫好+測試(6個新test)呢個演算法(`parseCrosswordGrid`/`crosswordSlotCells`/`checkCrosswordConsistency`)，用合成grid數據驗證過,confirm邏輯啱(捉到字數唔啱、捉到交叉字母矛盾、亦都明確confirm「結構啱」唔等於「confirmed答啱個clue」)。
+  **未做嘅部分(老實披露,冇假裝做完)**：冇接任何OCR擷取機制去讀真實crossword嘅格仔座標,亦都未有真實相片confirm到AI識唔識讀到crossword嘅grid結構——今次張相係手機screenshot,唔夠清楚可以手動度返啲座標,所以呢個citation嘅真實座標從未驗證過。要真正用得，仲要：(1)加新OCR擷取(讀crossword嘅slot位置)，(2)真相測試confirm讀唔讀到，(3)接返QUESTION_TYPE_HANDLERS。
+  877/877測試通過(6個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
