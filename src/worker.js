@@ -2855,7 +2855,7 @@ async function callQwenOcrText(images, openrouterKey) {
   const { objectHeights, cleanedText: cleanedText23 } = extractObjectHeights(cleanedText22);
   const { barChart, cleanedText: cleanedText24 } = extractBarChart(cleanedText23);
   const { stickLengths, cleanedText } = extractStickLengths(cleanedText24);
-  const items = parseOcrLine(cleanedText);
+  const items = reconstructSplitSentenceItems(parseOcrLine(cleanedText));
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
   // BOTH are empty, not just items.
@@ -3114,7 +3114,7 @@ function buildAiFallbackPrompt(pendingItems) {
   // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
   // (which additionally sees the real photo) should still know about it.
-  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${it.printedQuestion}」，學生手寫答案「${it.studentAnswer}」${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
+  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${displayPrintedQuestionForJudge(it)}」，學生手寫答案「${it.studentAnswer}」${Number.isInteger(it.targetBlankIndex) ? "（呢句入面有幾個空格，淨係判斷標咗「【這一格：____】」嗰一個）" : ""}${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
   const referenceBlocks = [
     mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
     mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
@@ -3270,7 +3270,7 @@ function buildJevQuestions(pendingItems) {
       // cross-item context this item wouldn't otherwise have -- Jev
       // normally judges every item in total isolation, with no idea
       // another item on the same page used the identical bank phrase.
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${item.printedQuestion}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${displayPrintedQuestionForJudge(item)}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${Number.isInteger(item.targetBlankIndex) ? "\n（呢句入面有幾個空格，你淨係要判斷標咗「【這一格：____】」嗰一個，其他空格唔使理。）" : ""}${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -3421,6 +3421,115 @@ function parseOcrLine(text) {
     items.push({ label, printedQuestion, studentAnswer });
   }
   return items;
+}
+
+// Ticket 222 "cross-item context" (2026-10-01): real finding from a
+// 9-photo full-pipeline test -- OCR sometimes splits ONE printed
+// sentence's several blanks into SEPARATE items, each only showing its
+// own local snippet (real citation: "The party is ____ nine thirty" /
+// "The party is ____ the morning" / "The party is ____ seven thirty" /
+// "The party is ____ the evening." are 4 separate items, really one
+// sentence "The party is 2 nine thirty 3 the morning 4 seven thirty 5
+// the evening."). This silently broke EVERY downstream judge the SAME
+// way, not just code -- Jev (text-only) and even the real vision AI-
+// fallback (which CAN see the whole poster image) both independently
+// defaulted to the same wrong answer, because both are fed this same
+// truncated per-item text and neither naturally cross-references
+// sibling items on its own. See memory
+// project_hk_homework_check_cross_item_context_gap.md for the full
+// real-data account.
+//
+// Fix: reconstruct the shared original sentence from its fragments
+// BEFORE dispatch, so code/Jev/AI-fallback all see the full context
+// through the ordinary printedQuestion field -- no separate hint
+// mechanism needed, and no change required to any of the three judges
+// themselves.
+//
+// Detection: items whose text before the FIRST blank marker is
+// IDENTICAL are treated as fragments of one original sentence (OCR
+// repeats the shared lead-in verbatim per fragment, confirmed across
+// 3 real fragment groups in the citation above). Reconstruction order
+// is ascending by each item's own numeric label -- confirmed matching
+// the worksheet's own blank numbering in the same real citation
+// (labels "2","3","4","5"). Deliberately conservative to avoid
+// accidentally merging two UNRELATED items that happen to start with
+// the same short phrase (e.g. two different "I like ___." fill-ins on
+// the same page): requires the shared prefix to be at least
+// MIN_SHARED_PREFIX_LEN characters AND both items to have a purely
+// numeric label (an "and/or" or "B1"-style label never merges).
+const MIN_SHARED_PREFIX_LEN = 12;
+function reconstructSplitSentenceItems(items) {
+  const groups = new Map();
+  items.forEach((item, idx) => {
+    const printed = String(item.printedQuestion || "");
+    const blankMatch = printed.match(/_{2,}/);
+    if (!blankMatch) return;
+    const prefix = printed.slice(0, blankMatch.index);
+    if (prefix.trim().length < MIN_SHARED_PREFIX_LEN) return;
+    const labelNum = Number(item.label);
+    if (!Number.isFinite(labelNum)) return;
+    const suffix = printed.slice(blankMatch.index + blankMatch[0].length);
+    if (!groups.has(prefix)) groups.set(prefix, []);
+    groups.get(prefix).push({ idx, labelNum, suffix });
+  });
+
+  for (const [prefix, members] of groups) {
+    members.sort((a, b) => a.labelNum - b.labelNum);
+    // A shared prefix alone isn't enough -- two genuinely UNRELATED
+    // sentences on the same page can coincidentally start the same way
+    // (real bug caught here before shipping: "The party is ____ 25th
+    // December (Christmas Day)." shares "The party is " with the next
+    // 4 items, but is itself a COMPLETE sentence, not a fragment of
+    // theirs). Split into runs at a sentence boundary: a member whose
+    // OWN suffix already ends in "." closes its run right there
+    // (whether that run has 1 member or several) -- only a run that
+    // ends because a LATER same-prefix member's suffix has the closing
+    // period is a genuine multi-fragment reconstruction.
+    let run = [];
+    const runs = [];
+    for (const m of members) {
+      run.push(m);
+      if (/\.\s*$/.test(m.suffix)) { runs.push(run); run = []; }
+    }
+    if (run.length) runs.push(run);
+
+    for (const runMembers of runs) {
+      if (runMembers.length < 2) continue;
+      let reconstructed = prefix;
+      runMembers.forEach((m, i) => {
+        reconstructed += (i === 0 ? "" : " ") + "____" + m.suffix;
+      });
+      runMembers.forEach((m, i) => {
+        items[m.idx] = { ...items[m.idx], printedQuestion: reconstructed, targetBlankIndex: i };
+      });
+    }
+  }
+  return items;
+}
+
+// Real validating question (2026-10-01, arrived while building the fix
+// above): reconstructSplitSentenceItems gives 4 items the SAME full
+// sentence text with all 4 blanks looking identical ("____"), each
+// paired with only its own one-word studentAnswer -- code tells them
+// apart via targetBlankIndex, but Jev/buildAiFallbackPrompt still just
+// read item.printedQuestion as plain text with no such field. Sent as
+// 4 near-identical questions with no marker, Jev/AI-fallback would
+// have no way to know WHICH of the 4 identical-looking blanks a given
+// one-word answer is actually about -- a real remaining gap in cases
+// this reconstruction doesn't let code itself resolve outright. Fixes
+// it by marking the ONE target blank distinctly (deliberately with
+// Chinese zh brackets, unlikely to collide with the underlying "____"
+// matching every other handler's regex relies on) wherever
+// printedQuestion is shown to a text-based judge -- the stored
+// item.printedQuestion itself (what code's own "_{2,}" matching reads)
+// stays untouched.
+function displayPrintedQuestionForJudge(item) {
+  const printed = String(item.printedQuestion || "");
+  if (!Number.isInteger(item.targetBlankIndex)) return printed;
+  const blanks = [...printed.matchAll(/_{2,}/g)];
+  const target = blanks[item.targetBlankIndex];
+  if (!target) return printed;
+  return printed.slice(0, target.index) + "【這一格：____】" + printed.slice(target.index + target[0].length);
 }
 
 // Minimal, safe arithmetic evaluator -- no eval(). Supports +, -, x/×/*,
@@ -13586,6 +13695,8 @@ export {
   verifySequentialSubtractionRemaining,
   verifyMatchingValueExpressionSetMC,
   parseOcrLine,
+  reconstructSplitSentenceItems,
+  displayPrintedQuestionForJudge,
   recordCpuGuardUsage,
   isCpuGuardTripped,
   buildWrongAnswersSummary,
