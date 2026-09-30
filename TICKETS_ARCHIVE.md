@@ -1054,10 +1054,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 **大部分(a類,已有handler)**:普通加減乘除、括號order-of-operations、比較差幾多、單位換算、找續、足夠/不足夠判斷、三角形true/false事實(已有`triangle_fact_true_false`)、最多鈍角個數(已有`max_obtuse_angle_in_triangle`)——118個已registered handler好似本身就係跟呢一系列書起嘅。**未逐條verify detect()內部邏輯**,呢個係「好可能」唔係「confirm咗」。
 
 **新搵到7個(b類,睇落code可以做但未起)**:
-1. 約數MC(邊條算式最啱用嚟估算)——p8 Q7、p11 Q7
-2. Order-of-operations等值/最大MC——p10 Q5、p12 Q7、p16 Q4
-3. 解方程MC(1205+★=3702)、直式減法兩個唔同符號空格——p2 Q9、p16 Q5
-4. **淨係要求列算式、唔使計答案**——p14全部5條,呢個format全新(要check運算式結構,唔係check個數字答案)
+1. 約數MC(邊條算式最啱用嚟估算)——~~p8 Q7、p11 Q7~~ **已於2026-10-01重新核實，原citation全錯：真位置係footer page2 Q10、footer page10 Q7**（背景任務逐頁核實29頁，我親自抽查confirm過）。
+2. Order-of-operations等值/最大MC——~~p10 Q5、p12 Q7、p16 Q4~~ **已重新核實：p12 Q7、p16 Q4一直啱，p10 Q5錯咗，真位置係footer p8 Q5、footer p10 Q8（唔係Q5）、footer p12 Q7、footer p16 Q4**（共4個真example，多過原本記錄嘅3個）。
+3. 解方程MC(1205+★=3702)、直式減法兩個唔同符號空格——**已重新核實，footer p2 Q9、footer p16 Q5，同原citation脗合**。
+4. **淨係要求列算式、唔使計答案**——~~p14全部5條~~ **已重新核實：真喺footer p14，但範圍細過原本話嘅「全部5條」——實際上淨係Q1(a)(b)+Q2(a)(b)共4條，呢版仲有Q3-5係另一個要求計答案嘅獨立部分(唔同instruction header)，唔屬於呢個pattern。**
 5. 三角形三邊能否組成三角形(a+b>c判斷)——p21 Q11-13,純數字邏輯唔使睇圖
 6. 三角形子類型(等邊/等腰/直角)睇圖分類——p18、p20、p23、p25多次,**同已知嘅Ticket 204缺口(菱形/梯形分唔到)係同一個未解決問題**,呢本書成個Unit 3都靠呢個
 7. 摺紙/剪紙之後嘅三角形類型判斷——p19、p23、p24,同上6但仲要睇摺痕圖
