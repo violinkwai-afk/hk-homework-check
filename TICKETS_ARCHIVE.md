@@ -1148,3 +1148,13 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   邏輯：睇blank後面跟住乜嘢——日期/星期+時段→on，時段/季節/月份→in，night/noon/midnight→at(固定例外)，鐘點單獨出現→at，鐘點或日期喺同一句入面成對出現(from...to)就用返配對邏輯。喺全部3張相、34個真空格逐個核對過，全部啱。
   **老實披露未驗證嘅部分**：未做過真OCR dispatch測試(要真銀兩,要你話事先可以做)——設計假設咗OCR會保留成句context(其他handler都係咁)，先至識判斷"from...to"配對；如果OCR淨係俾好短嘅碎片，配對嗰部分會跌返落去預設(on/at)，但24/34條純on/in/at(唔使配對)嘅真空格唔受影響。第二個配對嘅blank("to"嗰邊)要靠一個新加嘅可選欄位`item.targetBlankIndex`先分得出邊個先係自己嘅blank——呢個欄位真OCR/dispatch會唔會有得用都未驗證過。
   923/923測試通過(18個新，直接喺今次commit前後跑過確認)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：Code幫Jev判斷——介詞hint接入Jev prompt
+
+- ✅ **已接落生產環境(commit c1af9f3)。** 你問「code識唔識幫jev判斷」，跟返Ticket190(圖表資料hint)已經驗證過嘅同一個做法：code冇最終判斷權，淨係將自己分析到嘅事實加一句落Jev嘅prompt度，畀Jev自己核實，唔係靜雞雞覆蓋Jev嘅判斷。
+  真實搵到嘅case(冇使新錢,翻查舊有22條Jev測試嘅log)：12條英文題入面3條Jev落咗「唔夠信心」嗰個灰色地帶。查落去發現：
+  - 「Henry goes to bed__nine thirty__night.」/「at;at」：Jev noul=0.14(仲偏向估錯)，但其實啱——而家我份介詞code自己就已經confident解決到呢題，喺真pipeline入面根本唔使問到Jev。
+  - 「My grandfather watches TV__noon.」/「from」：Jev noul=0.46——仲有個意外收穫：呢條測試嗰陣嘅ground truth本身錯咗(標咗啱，其實「from」係錯，真啱嘅係「at」)，code而家嘅判斷同啱嘅真相一致。
+  - 「My uncle watches TV__midnight.」/「bo」：Jev noul=0.12(差0.02就到confident-wrong門檻)——呢條code handler自己嘅detect/verify都會拒收(因為「bo」根本唔喺on/in/at/from/to呢個名單入面)，所以新起咗`buildPrepositionTimeHint`專門補呢種情況：唔理學生答案係乜，淨係靠blank後面跟住嘅字判斷「呢度應該係咩類型嘅介詞」，包裝成「僅供參考,你要自己核實」嘅提示句，加落Jev prompt度。
+  將原本喺verifyPrepositionOfTime入面嘅分類邏輯抽出成`classifyPrepositionOfTimeExpected`，畀verify()同新hint function共用，冇重複邏輯。
+  928/928測試通過(5個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
