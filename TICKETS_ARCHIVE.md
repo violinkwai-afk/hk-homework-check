@@ -1164,3 +1164,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 - ✅ **已接落生產環境(commit 220e6d5)，優先級高(真accuracy問題)。** 起源：影相編排返9張英文功課相諗住做全pipeline測試嗰陣，先睇晒9張相內容，搵到一個同一頁入面嘅矛盾example——之前確立「兩個子句都否定→or」條rule嘅citation嗰2張相入面，其中一張("Linking word (2)"呢個單元嘅letter-completion page)嘅**另一個練習**(頁頂「Rewrite the sentences using and/but/or」)入面：「I don't like dolls. I don't like teddy bears.」真老師批改嘅啱答案係「I don't like dolls **and** teddy bears.」——兩個子句都係否定，但真啱答案係「and」唔係「or」，直接同之前個rule矛盾。
   由於`verifyConjunctionFill`得返(clauseA, clauseB, studentAnswer)呢啲資訊，分唔出邊種練習形式，所以安全做法係：兩個都否定嘅情況而家改做decline(null)，唔再confident噉答"or"。兩個都肯定→and、一肯一否→but呢兩種冇搵到反例，維持confident。
   929/929測試通過(改咗5個舊test反映新行為)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：修好真accuracy bug——preposition_of_time喺真pipeline度confident答錯咗
+
+- ✅ **已接落生產環境(commit cbbebd9)，優先級最高(真pipeline測試搵到嘅confident wrong verdict)。** 跑緊9張相全pipeline測試嗰陣，真OCR結果顯示：「from...to」呢種一對blank，OCR唔一定會擺埋同一個item度——Christmas poster嗰張相，每個blank分開變成獨立item，冇trailing句號，睇唔到配對嗰個blank。之前嘅程式邏輯見唔到配對就confident噉default答"at"，結果4條真係老師批啱嘅題(應該係from/to)畀程式confident噉判錯。
+  修法：淨係喺呢個item嘅printedQuestion本身有真正句號收尾(即係有信心OCR攞齊晒成句，冇被截斷)先至信個default答案；冇句號就decline(null)，唔再靠估。代價：有幾條真係獨立(唔使配對)嘅題，因為冇句號都會而家decline——呢個係刻意嘅取捨(犧牲覆蓋率，保accuracy)。
+  用真9張相dispatch數據確認：4條false positive全部消失，1條真係學生寫錯嘅case(「at」→真啱係「in」)照樣捉到。
+  929/929測試通過(冇改動任何test，全部原本嘅34個真citation都用返成句,冇受影響)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
