@@ -25,16 +25,15 @@
 //
 // Real verified ground truth used below: 等邊三角形 (C,E) matches the
 // student's real handwritten answer on the actual worksheet EXACTLY
-// (case-insensitive "c, e"). The other two real answers on this same
-// page (④等腰直角三角形：B, ⑤不等邊三角形：D,F,G,B) were flagged to the
-// user as an unresolved discrepancy against this code's own precise
-// angle measurement (F measures a right angle at 90.9°, isosceles by
-// side length; B measures no angle within 22° of 90° at all) -- NOT
-// asserted here as ground truth pending that resolution; only the
-// unambiguous 等邊/C,E match and the code's internal self-consistency
-// (whichever shape the code calls "isosceles-right" must also appear
-// in both the 等腰 and 直角 result sets) are tested against the real
-// fixture.
+// (case-insensitive "c, e"). The worksheet's own handwritten answer for
+// ④等腰直角三角形 (B) initially conflicted with this code's precise
+// angle measurement (F measures a right angle at 90.9° and is isosceles
+// by side length; B measures no angle within 22° of 90° at all) --
+// flagged to the user rather than assumed either way. **Resolved
+// 2026-09-30: the user confirmed the real correct answer is F, not
+// B** -- the worksheet's own handwritten "B" was a genuine mistake on
+// that real submission, not a code bug. F is now asserted directly
+// below as confirmed ground truth.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -150,16 +149,21 @@ test("verifyTriangleSubtypeLetterQuestion: real citation, wrong answer reports t
   assert.equal(result.correctAnswer, "C,E");
 });
 
-test("verifyTriangleSubtypeLetterQuestion: internal self-consistency -- whichever shape is isosceles-right also appears in both 等腰 and 直角 result sets", async () => {
+test("verifyTriangleSubtypeLetterQuestion: real citation, 等腰直角三角形 = F (user-confirmed 2026-09-30; the worksheet's own handwritten 'B' was a real mistake, not a code bug)", async () => {
   const worker = await import(TMP);
   const crop = { data: loadFixtureBase64("p18-shapes-a-g.png") };
-  const rightItem = { printedQuestion: "等腰直角三角形：", studentAnswer: "A" };
-  const rightResult = worker.verifyTriangleSubtypeLetterQuestion(rightItem, crop);
+  const item = { printedQuestion: "等腰直角三角形：", studentAnswer: "F" };
+  const result = worker.verifyTriangleSubtypeLetterQuestion(item, crop);
+  assert.equal(result.correct, true);
+});
+
+test("verifyTriangleSubtypeLetterQuestion: internal self-consistency -- F (isosceles-right) also appears in both 等腰 and 直角 result sets", async () => {
+  const worker = await import(TMP);
+  const crop = { data: loadFixtureBase64("p18-shapes-a-g.png") };
   const isoLetters = worker.verifyTriangleSubtypeLetterQuestion({ printedQuestion: "等腰三角形：", studentAnswer: "A" }, crop).correctAnswer.split(",");
   const rightAngleLetters = worker.verifyTriangleSubtypeLetterQuestion({ printedQuestion: "直角三角形：", studentAnswer: "A" }, crop).correctAnswer.split(",");
-  const isoRightLetter = rightResult.correctAnswer;
-  assert.ok(isoLetters.includes(isoRightLetter));
-  assert.ok(rightAngleLetters.includes(isoRightLetter));
+  assert.ok(isoLetters.includes("F"));
+  assert.ok(rightAngleLetters.includes("F"));
 });
 
 test("triangle_subtype_letter handler: registered, wins dispatch on the real citation format", async () => {
