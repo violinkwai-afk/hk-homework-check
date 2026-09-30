@@ -8,15 +8,15 @@
 // Q8: "下面的六邊形每條邊的長度都相等。[cut into A/B/C/D, drawn apart]
 //      圖A是（直角/等腰/等邊）三角形。(把答案圈起來)" -- reuses the same
 //      real polygon-geometry measurement as triangle_subtype_letter.
-//      NOT independently verified against a real handwritten answer
-//      (none was sent for this specific sub-question) -- confidence
-//      instead comes from a strong geometric self-consistency check:
-//      the hexagon's own left-right symmetry means piece A and piece D
-//      (the two end slivers) are mirror images and MUST classify the
-//      same way, and piece B/C (the two middle pieces) likewise -- the
-//      real measured data below shows exactly that pairing (A,D both
-//      isosceles; B,C both right), which would not happen by chance if
-//      the geometry extraction were unreliable.
+//      A real OCR test on this citation read the PDF's own baked-in
+//      answer as "等邊" (equilateral), conflicting with this code's
+//      measured geometry (isosceles, cross-checked via the hexagon's
+//      own A/D and B/C mirror symmetry) -- flagged to the user rather
+//      than assumed either way. **Resolved 2026-09-30: the user
+//      confirmed the real correct answer is 等腰**, matching this code's
+//      own measurement -- the PDF's baked-in "等邊" was not reliable
+//      ground truth (likely from the same screen-written source
+//      flagged earlier the same night, not a real answer key).
 // Q9: "詠恩把正方形紙依以下的方法摺和剪...打開後，把正方形紙沿摺痕剪
 //      開，可得出8個____三角形。" -- real answer 等腰 (confirmed). Closed-
 //      form fact: this fold-twice-then-cut-diagonal method always
