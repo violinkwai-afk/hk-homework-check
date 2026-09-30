@@ -1113,3 +1113,11 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   已寫好+測試(6個新test)呢個演算法(`parseCrosswordGrid`/`crosswordSlotCells`/`checkCrosswordConsistency`)，用合成grid數據驗證過,confirm邏輯啱(捉到字數唔啱、捉到交叉字母矛盾、亦都明確confirm「結構啱」唔等於「confirmed答啱個clue」)。
   **未做嘅部分(老實披露,冇假裝做完)**：冇接任何OCR擷取機制去讀真實crossword嘅格仔座標,亦都未有真實相片confirm到AI識唔識讀到crossword嘅grid結構——今次張相係手機screenshot,唔夠清楚可以手動度返啲座標,所以呢個citation嘅真實座標從未驗證過。要真正用得，仲要：(1)加新OCR擷取(讀crossword嘅slot位置)，(2)真相測試confirm讀唔讀到，(3)接返QUESTION_TYPE_HANDLERS。
   877/877測試通過(6個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：修好嚴重真bug——OCR喺空白考卷度自己計答案充當學生手寫
+
+- ✅ **已接落生產環境(commit 4f19803)，優先級最高。** 你叫我做「成個pipeline」真測試,用返Part C(對話配對)、Part D(動詞)、Part E(詩歌MC)3張**未填過嘅空白考卷**，搵到一個好嚴重嘅真bug:AI冇report「呢啲位冇人填過」，反而自己諗咗個似樣嘅答案出嚟,當成「學生手寫」交返俾我——直接違反咗production prompt自己明文嘅規定。仲有兩個self-計嘅答案(Part C嘅②③)獨立驗證後係錯嘅(同真正邏輯啱嘅答案掉轉咗)，即係話唔淨係「自己計咗個岩答案」咁簡單,係「自己計錯咗仲當真」。
+  真實風險：如果真學生漏答咗一條題，系統有機會自己幫佢計個答案出嚟,俾佢一個佢根本冇答過嘅「啱」。
+  修法：喺OCR prompt加咗一個明確嘅「留空」worked example(「|」後面乜都唔好寫)，同specifically點名MC/括號選項/文法填充呢幾類——用返同一張空白考卷重新真測試confirm，3個case全部修好晒，仲有個額外收穫:Part F(mini-robot文章)之前完全讀唔到任何題目item，而家都啱晒讀到全部6條。
+  新增2個永久regression test(真實pre-fix/post-fix嘅raw OCR文字都保存咗)。新開咗benchmark/english-subject-pipeline-test-log.csv記錄每次英文科pipeline test嘅完整細節(OCR讀到乜、cost、time、confidence)。
+  879/879測試通過(2個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
