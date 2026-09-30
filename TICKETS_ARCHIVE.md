@@ -1090,3 +1090,12 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   858/858測試通過(11個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
 
 **遺留疑點——已解決(commit ed4415c)**：Q8圖A嘅類型，code真實量度話係等腰(用A/D、B/C鏡射對稱做咗交叉檢查)，但個PDF原本已有嘅答案讀出嚟係「等邊」。你confirm咗真正啱嘅答案係等腰，同code嘅量度脗合——個PDF原本嘅「等邊」唔可靠(可能都係嗰個screen-written嘅來源，唔係真答案key)。
+
+## 2026年9月30號：Ticket 222——Pattern 5（三角形組唔組到，數字淨係印喺圖度）
+
+- ✅ **已接落生產環境(commit 1816cb4)。** 今晚較早時間試過Q12(8cm/6cm/4cm竹簽組唔組到三角形/等腰三角形)，發現8cm/6cm/4cm呢啲數字淨係印喺圖度，唔喺句子文字入面，令個handler永遠都唔會被觸發，已經revert咗個舊嘗試。
+  今次真正解決：喺production OCR prompt加咗一個新嘅結構化擷取行「STICK_LENGTHS: 8cm;6cm;4cm」(同而家已有嘅PRICE_TABLE/WORD_BANK做法一樣)，教AI將圖度印嘅長度數字都抄埋落嚟，唔理句子本身有冇提到。仲加多一條指示，提醒AI：如果(a)(b)兩個細題共用返之前一句「資源」context句子(例如Q13「樂兒有2條10cm...2條15cm...」)，每個細題自己都要重複返嗰句，唔可以淨係第一個先有。
+  真OCR測試(花費$0.0022，經你"Ok"批准)confirm兩個改動都真係work：STICK_LENGTHS讀到啱晒(8cm;6cm;4cm)，Q13(a)(b)兩個細題而家都各自完整包含埋嗰句context句子。
+  用返真實OCR輸出格式，經classifyAndVerify嘅真dispatch路徑confirm咗Q12(a)(b)兩題都判斷啱。866/866測試通過(8個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+**額外發現(未做，記低留意)**：Q13(a)(b)而家context都齊晒，理論上都可以起code(a問「用3條膠棒能圍成一個___三角形」，因為得返2種長度，任揀3條實有2條相等，答案必然係「等腰」；b問「揀一條膠棒，一定唔可以同邊組膠棒圍成三角形」，要逐個option試同兩種現有長度配唔配到)——但呢個未做，Pattern5本身(Q12)已經完成你要求嘅部分。
