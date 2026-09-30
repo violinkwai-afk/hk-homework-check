@@ -533,24 +533,32 @@ test("conjunction fill: an answer that isn't 'but'/'and'/'or' at all stays null,
   assert.equal(r.correct, null);
 });
 
-// Ticket 222 (2026-10-01): "or" for two negative clauses -- real,
-// confirmed across 2 more real photos (a but/and dialogue sheet, a
-// letter-completion sheet), 16 real scored blanks combined, zero
-// exceptions to this polarity rule across the whole real dataset.
-test("conjunction fill: both clauses negative -> or (real: 'I don't like cheese ___ milk')", async () => {
+// Ticket 222 (2026-10-01): both-negative clauses were briefly treated
+// as confidently "or" (16 real scored blanks, zero exceptions in that
+// dataset) -- but a same-day, same-worksheet counter-example ("I don't
+// like dolls. I don't like teddy bears." -> real teacher-marked correct
+// answer "I don't like dolls AND teddy bears.") showed the rule isn't
+// reliable from (clauseA, clauseB, studentAnswer) alone. Both-negative
+// now declines (null) rather than guesses -- see verifyConjunctionFill's
+// own comment for the full account.
+test("conjunction fill: both clauses negative -> declines (null), real evidence is split (see worker.js comment)", async () => {
   const r = mod.verifyConjunctionFill("I don't like cheese", "milk", "or");
-  assert.equal(r.correct, true);
+  assert.equal(r.correct, null);
 });
 
-test("conjunction fill: both clauses negative, full verb in clause B -> or (real: 'I can't swim ___ ride a bicycle')", async () => {
+test("conjunction fill: both clauses negative, full verb in clause B -> declines (null)", async () => {
   const r = mod.verifyConjunctionFill("I can't swim", "ride a bicycle", "or");
-  assert.equal(r.correct, true);
+  assert.equal(r.correct, null);
 });
 
-test("conjunction fill: wrong answer on a two-negative-clauses item reports 'or', not 'and'", async () => {
+test("conjunction fill: both clauses negative, 'and' answer also declines (null), not wrongly marked wrong", async () => {
   const r = mod.verifyConjunctionFill("I don't like cheese", "milk", "and");
-  assert.equal(r.correct, false);
-  assert.equal(r.correctAnswer, "or");
+  assert.equal(r.correct, null);
+});
+
+test("conjunction fill: real counter-example citation -- 'I don't like dolls AND teddy bears' is the real teacher-marked correct answer, must not be marked wrong", async () => {
+  const r = mod.verifyConjunctionFill("I don't like dolls", "teddy bears", "and");
+  assert.equal(r.correct, null);
 });
 
 // --- Word problem: 2 numbers -> total -----------------------------------
@@ -1867,25 +1875,25 @@ test("classifyAndVerify: conjunction_fill correctly reports a wrong but/and answ
   assert.equal(v.correctAnswer, "but");
 });
 
-// Ticket 222 (2026-10-01): "or" is now a real, confirmed third case --
-// found across 2 more real photos (16 scored blanks combined) that
-// English uses "or" (not "and") when BOTH clauses are negative ("I
-// can't swim ___ ride a bicycle" -> or, matching "I can't swim AND I
-// can't ride a bicycle" in meaning, but "or" in real English usage).
-// This exact citation was previously asserted as "must NOT dispatch to
-// conjunction_fill" before this rule was found -- corrected here to
-// assert the real, now-supported behavior instead.
-test("classifyAndVerify: conjunction_fill now also handles 'or' for two negative clauses (real citation)", () => {
+// Ticket 222 (2026-10-01): "or" for both-negative clauses was briefly
+// treated as a confirmed third case (16 real scored blanks, zero
+// exceptions in that dataset) -- but a same-day counter-example on a
+// same-page sibling exercise ("I don't like dolls AND teddy bears",
+// real teacher-marked correct, both clauses negative) showed the rule
+// isn't reliable from clauseA/clauseB/studentAnswer alone. Both-
+// negative now declines via the dispatcher too -- see
+// verifyConjunctionFill's own comment in worker.js for the full
+// account.
+test("classifyAndVerify: conjunction_fill declines (falls through, doesn't verdict) on both-negative clauses -- real evidence is split", () => {
   const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I can't swim ____ ride a bicycle.", studentAnswer: "or" });
   assert.equal(v.handler, "conjunction_fill");
-  assert.equal(v.correct, true);
+  assert.equal(v.correct, null);
 });
 
-test("classifyAndVerify: conjunction_fill catches a wrong answer on a two-negative-clauses item, reports 'or'", () => {
+test("classifyAndVerify: conjunction_fill does not wrongly mark 'and' as wrong on a both-negative item either", () => {
   const v = mod.classifyAndVerify({ label: "1", printedQuestion: "I can't swim ____ ride a bicycle.", studentAnswer: "and" });
   assert.equal(v.handler, "conjunction_fill");
-  assert.equal(v.correct, false);
-  assert.equal(v.correctAnswer, "or");
+  assert.equal(v.correct, null);
 });
 
 test("classifyAndVerify: conjunction_fill does not collide with number_word_conversion on a real elliptical example", () => {

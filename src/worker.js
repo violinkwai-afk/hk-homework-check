@@ -4794,10 +4794,22 @@ function verifyLiteralKeywordMC(passageText, options, studentAnswer) {
 // ___ milk" -> or (NOT "I don't like cheese and milk", which is not
 // how negation distributes across a list in English); "I can't swim
 // ___ ride a bicycle" -> or. Confirmed consistently: every real both-
-// negative blank on both new photos used "or", every real both-positive
-// blank used "and", every real mixed-polarity blank used "but" -- zero
-// exceptions across the combined real dataset. Anything neither
-// clause's polarity can be read from returns null, never a guess.
+// negative blank in those 16 used "or", every real both-positive blank
+// used "and", every real mixed-polarity blank used "but" -- zero
+// exceptions in THAT dataset.
+//
+// 2026-10-01, same day, REAL COUNTER-EXAMPLE found on a same-page
+// sibling exercise not included in the 16 above (the top-of-page
+// "rewrite the two sentences as one" section, same photo as the
+// letter-completion sheet cited above): "I don't like dolls. I don't
+// like teddy bears." -> real teacher-marked correct answer "I don't
+// like dolls AND teddy bears." -- both clauses negative, yet "and" is
+// correct, directly contradicting the both-negative->"or" rule above.
+// Cannot tell from (clauseA, clauseB, studentAnswer) alone which real
+// exercise shape this is, so the safe fix is to STOP guessing on
+// both-negative and decline (null) instead -- the both-positive->and
+// and mixed->but branches remain confidently ruled since no
+// counter-example has appeared for either of those.
 function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
   const answer = String(studentAnswer || "").trim().toLowerCase();
   if (answer !== "but" && answer !== "and" && answer !== "or") return { correct: null, correctAnswer: "" };
@@ -4814,9 +4826,11 @@ function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
   };
   const polA = polarityOf(a, true);
   const polB = polarityOf(b, polA);
-  // Same polarity: both positive -> "and", both negative -> "or".
-  // Different polarity -> "but".
-  const expected = polA === polB ? (polA ? "and" : "or") : "but";
+  // Same polarity: both positive -> "and" (still confident). Both
+  // negative -> genuinely unresolved (real evidence is split), decline
+  // rather than guess. Different polarity -> "but".
+  if (polA === polB && !polA) return { correct: null, correctAnswer: "" };
+  const expected = polA === polB ? "and" : "but";
   return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
 }
 
