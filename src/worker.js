@@ -2855,7 +2855,7 @@ async function callQwenOcrText(images, openrouterKey) {
   const { objectHeights, cleanedText: cleanedText23 } = extractObjectHeights(cleanedText22);
   const { barChart, cleanedText: cleanedText24 } = extractBarChart(cleanedText23);
   const { stickLengths, cleanedText } = extractStickLengths(cleanedText24);
-  const items = reconstructSplitSentenceItems(parseOcrLine(cleanedText));
+  const items = stripWorkedExampleEcho(reconstructSplitSentenceItems(parseOcrLine(cleanedText)));
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
   // BOTH are empty, not just items.
@@ -3114,7 +3114,7 @@ function buildAiFallbackPrompt(pendingItems) {
   // Ticket 54: same wordBankHint cross-item context as buildJevQuestions
   // -- if Jev couldn't confidently resolve a word-bank clash, this judge
   // (which additionally sees the real photo) should still know about it.
-  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${displayPrintedQuestionForJudge(it)}」，學生手寫答案「${it.studentAnswer}」${Number.isInteger(it.targetBlankIndex) ? "（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，淨係判斷【用方括號括住】嗰一個）" : ""}${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}`).join("\n");
+  const itemsText = pendingItems.map((it) => `${it.question}: 題目「${displayPrintedQuestionForJudge(it)}」，學生手寫答案「${it.studentAnswer}」${Number.isInteger(it.targetBlankIndex) ? "（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，淨係判斷【用方括號括住】嗰一個）" : ""}${it.wordBankHint ? "（" + it.wordBankHint + "）" : ""}${buildWordRearrangementHint(it) ? "（" + buildWordRearrangementHint(it) + "）" : ""}`).join("\n");
   const referenceBlocks = [
     mentionsMoneyDenomination(pendingItems) ? HK_CURRENCY_REFERENCE : null,
     mentionsShapeGeometry(pendingItems) ? SHAPE_REFERENCE : null,
@@ -3259,18 +3259,61 @@ function buildPrepositionTimeHint(item) {
   return `呢個空格屬於「時間介詞」類題目，跟住嘅文字顯示呢度通常應該填「${expected}」——僅供參考，你要自己核實呢個分析岩唔岩，唔好盲目跟。`;
 }
 
+// Ticket 222 "word-order-rearrangement task framing" (2026-10-01),
+// companion to stripWorkedExampleEcho above -- even after stripping the
+// worked-example echo, the remaining printedQuestion ("When New Year
+// is") has no "_{2,}" blank marker at all, so Jev/AI-fallback's default
+// framing ("is this the answer to this printed question") doesn't
+// describe the actual task ("rearrange these given words into a
+// correct sentence/question"). Without this framing, a judge has no
+// reason to treat printedQuestion as a word BANK rather than a
+// question with a missing word. Detection: no blank marker present,
+// AND studentAnswer's own words (minus punctuation) are ALMOST
+// entirely the same multiset as printedQuestion's words -- the real
+// signature of a pure reordering task (real citations: "When New Year
+// is"/"When is New Year?" and "play basketball you can"/"Can you play
+// basketball?", both from 2 different real worksheets, both a near-
+// exact word-for-word match modulo order and capitalization).
+// Deliberately conservative (requires 90%+ word overlap in BOTH
+// directions) so an ordinary short-answer question that happens to
+// reuse a couple of the question's own words doesn't get mis-flagged.
+function isWordRearrangementItem(item) {
+  const printed = String(item.printedQuestion || "");
+  if (/_{2,}/.test(printed)) return false;
+  const wordsOf = (s) => String(s || "").toLowerCase().replace(/[?.!,']/g, "").split(/\s+/).filter(Boolean);
+  const pWords = wordsOf(printed);
+  const aWords = wordsOf(item.studentAnswer);
+  if (pWords.length < 2 || aWords.length < 2) return false;
+  const overlap = (from, against) => {
+    const pool = [...against];
+    let hits = 0;
+    for (const w of from) {
+      const idx = pool.indexOf(w);
+      if (idx !== -1) { hits++; pool.splice(idx, 1); }
+    }
+    return hits / from.length;
+  };
+  return overlap(pWords, aWords) >= 0.9 && overlap(aWords, pWords) >= 0.9;
+}
+
+function buildWordRearrangementHint(item) {
+  if (!isWordRearrangementItem(item)) return "";
+  return "呢題唔係普通問題——題目文字係一堆俾學生砌句用嘅詞語(word bank)，唔係問緊嘢嘅句子本身。請判斷學生手寫嗰句係咪用晒呢啲詞、砌成一句合乎文法嘅句子/問句。";
+}
+
 function buildJevQuestions(pendingItems) {
   const questions = {};
   pendingItems.forEach((item) => {
     const diagramHint = buildDiagramMarkerHint(item);
     const prepTimeHint = buildPrepositionTimeHint(item);
+    const wordOrderHint = buildWordRearrangementHint(item);
     questions[String(item.resultIndex)] = {
       type: "noul",
       // Ticket 54: wordBankHint (if present) appends the one piece of
       // cross-item context this item wouldn't otherwise have -- Jev
       // normally judges every item in total isolation, with no idea
       // another item on the same page used the identical bank phrase.
-      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${displayPrintedQuestionForJudge(item)}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${Number.isInteger(item.targetBlankIndex) ? "\n（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，你淨係要判斷【用方括號括住】嗰一個，其他嘅唔使理。）" : ""}${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}`,
+      instructions: `你是一位細心的小學老師，冇提供標準答案，要自己諗清楚呢一題應該點答，再判斷學生嘅手寫答案啱唔啱：題目「${displayPrintedQuestionForJudge(item)}」，學生手寫答案「${item.studentAnswer}」。呢個答案啱唔啱？${Number.isInteger(item.targetBlankIndex) ? "\n（呢句原本有幾個空格，其餘已經填返學生自己嗰題嘅答案方便你睇成句，你淨係要判斷【用方括號括住】嗰一個，其他嘅唔使理。）" : ""}${item.wordBankHint ? "\n" + item.wordBankHint : ""}${diagramHint ? "\n" + diagramHint : ""}${prepTimeHint ? "\n" + prepTimeHint : ""}${wordOrderHint ? "\n" + wordOrderHint : ""}`,
       criteria: { true: "學生答案正確", false: "學生答案錯誤或明顯唔完整" },
     };
   });
@@ -3514,6 +3557,54 @@ function reconstructSplitSentenceItems(items) {
     }
   }
   return items;
+}
+
+// Ticket 222 "word-order-rearrangement OCR noise" (2026-10-01). Real
+// citation: "When New Year is Q: When is New Year? A: It's on the
+// first of January."/"When is New Year?" -- a real, clearly ✓-marked-
+// correct answer that Jev confidently marked WRONG (noul=0.04),
+// discovered asking directly why Jev was inaccurate on this shape (see
+// the 9-photo pipeline test / project_hk_homework_check_cross_item_
+// context_gap.md's sibling finding for the full account).
+//
+// Root cause: this worksheet's "Rearrange the words to form a
+// question. Follow the example." exercise prints a full worked
+// example with its OWN "Q: ... A: ..." labels on the page -- OCR
+// faithfully transcribes those literal printed labels into
+// printedQuestion, so the student's whole rearranged sentence ends up
+// duplicated TWICE in the item (once inside printedQuestion right
+// after "Q:", once again as studentAnswer) with an unrelated trailing
+// "A: <given answer>" fact bolted on. Jev/AI-fallback have no reason
+// to know the "Q:"-prefixed text is scaffolding, not a real fact to
+// weigh -- it reads like a contradiction ("the text already says the
+// answer is X, why is the student's answer ALSO X being asked about")
+// and produces poor, low-confidence-or-wrong judgments.
+//
+// NOTE: this "Q:/A:" duplication is specific to THIS worksheet's
+// literal printed layout -- a different real word-order worksheet
+// (modals_canCant, "play basketball you can"/"Can you play
+// basketball?") has no such noise at all (its own page never prints
+// "Q:"/"A:" labels), so this cleanup only fires when the exact pattern
+// is present, never assumes every word-order item needs it.
+//
+// Fix: strip the "Q: ... A: ..." suffix back down to just the leading
+// word-tile portion (what the student was actually given to rearrange)
+// -- ONLY when the "Q:" portion is close to studentAnswer (confirms
+// this really is the redundant-echo pattern, not some other unrelated
+// use of the literal text "Q:"/"A:" in a printed question). Declines
+// (leaves the item untouched) otherwise, rather than guessing.
+function stripWorkedExampleEcho(items) {
+  const QA_PATTERN = /^(.*?)\s+Q:\s*(.+?)\s*\?\s*A:\s*.+$/i;
+  return items.map((item) => {
+    const printed = String(item.printedQuestion || "");
+    const m = printed.match(QA_PATTERN);
+    if (!m) return item;
+    const tiles = m[1].trim();
+    const echoedQuestion = m[2].trim();
+    const answer = String(item.studentAnswer || "").trim().replace(/\?$/, "");
+    if (!tiles || echoedQuestion.toLowerCase() !== answer.toLowerCase()) return item;
+    return { ...item, printedQuestion: tiles };
+  });
 }
 
 // Real validating question (2026-10-01, arrived while building the fix
@@ -13728,7 +13819,10 @@ export {
   verifyMatchingValueExpressionSetMC,
   parseOcrLine,
   reconstructSplitSentenceItems,
+  stripWorkedExampleEcho,
   displayPrintedQuestionForJudge,
+  isWordRearrangementItem,
+  buildWordRearrangementHint,
   recordCpuGuardUsage,
   isCpuGuardTripped,
   buildWrongAnswersSummary,
