@@ -1127,3 +1127,24 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 - ✅ **已接落生產環境(commit faf998d)。** 真citation(已重新核實)：footer p2 Q10、footer p10 Q7。邏輯：將原本算式入面每個數字都round去「自己嗰個數位嘅最高位」(4位數round到千、3位數round到百)，運算符號/括號唔變，同MC選項逐個比對邊個岩。
   真實做法有個disclosed嘅scope gap：p10 Q7呢種「算式直接印喺題目度」嘅格式做到；但p2 Q10係「要由word problem敘述(原有...賺得...用咗...)自己度返條算式」呢種,難好多,未做，會老實噉decline(null)唔會估。
   901/901測試通過(6個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：Ticket222——動詞變化(verb_form_fill)
+
+- ✅ **已接落生產環境(commit e7444a1)。** 真citation：2張真P2/P3考試相——"My classmate, Sam is a good boy. He ___(get) up early..."（現在式為主）同"I want to ___(join) the Cookery Club..."/"Last week, I ___(go) on a school picnic..."（現在/過去式混合，仲有問句倒裝）。
+  範圍比grammar_cloze（淨係be動詞）闊：主詞單複數決定現在式變化，"did"/"want to"/"can"等觸發詞決定用原形，"last week"/"yesterday"等時間詞決定過去式，用返常見不規則動詞對照表。唔識嘅情況一律decline(null)，唔會亂估。
+  真dispatch測試搵到一個真bug：真OCR文字每個blank前面會夾一粒獨立數字（"He 1 ____ (get)"），拉低咗主詞辨識——已修好（剝走blank前面嗰粒孤立數字先至去辨識主詞）。
+  新增test/verb-form-fill.test.js（16條新test，全部通過），已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：conjunction_fill擴展支援"or"（兩個否定句子）
+
+- ✅ **已接落生產環境(commit c49f6a9)。** 真citation：2張新真相(16條真題)搵到嘅新規律——兩個子句都係否定式，正確答案係「or」而唔係「and」（例："I don't like cheese ___ milk."、"I can't swim ___ ride a bicycle." 兩條都係→or）。
+  原本verifyConjunctionFill淨係識同/but兩選一，而家擴展成and/but/or三選一：兩邊肯定→and，兩邊否定→or，一肯一否→but。detect()都跟住擴展埋，接受「or」做答案先會match。
+  順帶改正咗一個之前寫錯嘅舊test(同一條真citation"I can't swim ___ ride a bicycle."/"or")——舊test之前斷言"or唔應該match"，而家改返做斷言正確嘅新dispatch+判斷。
+  已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：Ticket222——介詞(on/in/at/from...to)
+
+- ✅ **已接落生產環境(commit 8a0df53)。** 真citation：3張真相，全部直接由相入面重新核實（之前一份對話總結入面嘅記憶重構有錯，已更正）——"Prepositions of time (1)"海報(淨係on同from...to,9個空格)、"Prepositions of time (2)"(9題13個空格,規則盒confirm咗on=日期/星期(幾)/星期+時段，from...to=一段時間，at=鐘點/night，in=季節/時段/月份，仲有「at noon/at midnight」呢個特例)、"Super Kids Christmas Party"海報(12個空格)。
+  邏輯：睇blank後面跟住乜嘢——日期/星期+時段→on，時段/季節/月份→in，night/noon/midnight→at(固定例外)，鐘點單獨出現→at，鐘點或日期喺同一句入面成對出現(from...to)就用返配對邏輯。喺全部3張相、34個真空格逐個核對過，全部啱。
+  **老實披露未驗證嘅部分**：未做過真OCR dispatch測試(要真銀兩,要你話事先可以做)——設計假設咗OCR會保留成句context(其他handler都係咁)，先至識判斷"from...to"配對；如果OCR淨係俾好短嘅碎片，配對嗰部分會跌返落去預設(on/at)，但24/34條純on/in/at(唔使配對)嘅真空格唔受影響。第二個配對嘅blank("to"嗰邊)要靠一個新加嘅可選欄位`item.targetBlankIndex`先分得出邊個先係自己嘅blank——呢個欄位真OCR/dispatch會唔會有得用都未驗證過。
+  923/923測試通過(18個新，直接喺今次commit前後跑過確認)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
