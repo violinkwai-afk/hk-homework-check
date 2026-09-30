@@ -4619,24 +4619,34 @@ function verifyLiteralKeywordMC(passageText, options, studentAnswer) {
   return { correct: answer === correctLetter, correctAnswer: answer === correctLetter ? "" : correctLetter };
 }
 
-// "Finish the sentences with 'but' or 'and'" linking-word fill (real
-// example: benchmark/photos/batch3/p2_english_but_and_dialogue.jpg --
-// the worksheet's own instruction box states the rule explicitly: "but"
-// links DIFFERENT/opposite ideas, "and" links SIMILAR ideas. Confirmed
-// against all 8 real scored blanks on that page (items 1-5, some with
-// 2-3 sub-blanks each) -- every one matches a simple POLARITY rule:
-// detect whether each clause is affirmative or negative (a negation
-// marker: not/n't/don't/doesn't/can't/won't/isn't/aren't/didn't/
-// wasn't/weren't); if the two clauses share the same polarity -> "and",
-// if they differ -> "but". A short clause with no verb of its own (e.g.
-// "one sister", "badminton", "soya milk") has no pronoun or negation
-// marker either, so it inherits clause A's polarity -- matches all 3
-// real elliptical examples on the page (items 3, 4a, 5a). Anything
-// neither clause's polarity can be read from returns null, never a
-// guess.
+// "Finish the sentences with 'but', 'and' or 'or'" linking-word fill
+// (real example: benchmark/photos/batch3/p2_english_but_and_dialogue.jpg
+// -- the worksheet's own instruction box states the rule explicitly:
+// "but" links DIFFERENT/opposite ideas, "and" links SIMILAR ideas.
+// Confirmed against all 8 real scored blanks on that page (items 1-5,
+// some with 2-3 sub-blanks each) -- every one matches a simple POLARITY
+// rule: detect whether each clause is affirmative or negative (a
+// negation marker: not/n't/don't/doesn't/can't/won't/isn't/aren't/
+// didn't/wasn't/weren't); if the two clauses share the same polarity
+// -> "and", if they differ -> "but". A short clause with no verb of its
+// own (e.g. "one sister", "badminton", "soya milk") has no pronoun or
+// negation marker either, so it inherits clause A's polarity -- matches
+// all 3 real elliptical examples on the page (items 3, 4a, 5a).
+//
+// Ticket 222 (2026-10-01) extended the rule to a real THIRD case found
+// across 2 more real photos (a "but/and" dialogue sheet and a letter-
+// completion sheet, 16 real scored blanks combined): when BOTH clauses
+// are NEGATIVE, English uses "or", not "and" -- "I don't like cheese
+// ___ milk" -> or (NOT "I don't like cheese and milk", which is not
+// how negation distributes across a list in English); "I can't swim
+// ___ ride a bicycle" -> or. Confirmed consistently: every real both-
+// negative blank on both new photos used "or", every real both-positive
+// blank used "and", every real mixed-polarity blank used "but" -- zero
+// exceptions across the combined real dataset. Anything neither
+// clause's polarity can be read from returns null, never a guess.
 function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
   const answer = String(studentAnswer || "").trim().toLowerCase();
-  if (answer !== "but" && answer !== "and") return { correct: null, correctAnswer: "" };
+  if (answer !== "but" && answer !== "and" && answer !== "or") return { correct: null, correctAnswer: "" };
   const a = String(clauseA || "");
   const b = String(clauseB || "");
   if (!a.trim()) return { correct: null, correctAnswer: "" };
@@ -4650,7 +4660,9 @@ function verifyConjunctionFill(clauseA, clauseB, studentAnswer) {
   };
   const polA = polarityOf(a, true);
   const polB = polarityOf(b, polA);
-  const expected = polA === polB ? "and" : "but";
+  // Same polarity: both positive -> "and", both negative -> "or".
+  // Different polarity -> "but".
+  const expected = polA === polB ? (polA ? "and" : "or") : "but";
   return { correct: answer === expected, correctAnswer: answer === expected ? "" : expected };
 }
 
@@ -11164,7 +11176,7 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
       const answer = String(item.studentAnswer || "").trim().toLowerCase();
-      return (answer === "but" || answer === "and") && /_{2,}/.test(printed);
+      return (answer === "but" || answer === "and" || answer === "or") && /_{2,}/.test(printed);
     },
     verify: (item) => {
       const printed = String(item.printedQuestion || "");
