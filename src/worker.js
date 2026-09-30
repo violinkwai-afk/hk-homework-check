@@ -1879,6 +1879,10 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係一個棒形圖(bar chart)，有一條印刷咗數字刻度嘅軸(例如"0,2,4,6,8,10,12"，刻度數字之間相隔固定)，同埋幾條唔同長度嘅棒代表唔同類別**，喺回覆最開始加一行「BAR_CHART: 方向=<垂直/水平>;刻度最小值=<軸上面最細嗰個印刷數字>;刻度最大值=<軸上面最大嗰個印刷數字>;刻度間距=<相鄰兩個刻度數字相差幾多>;類別=<第一條棒代表嘅類別文字>,<第二條>,...」(方向：棒係垂直向上企定係水平向右伸,由圖嘅實際畫法判斷,唔好靠估；類別要跟返啲棒實際印刷/排列嘅先後次序，由圖入面軸邊嘅文字標籤讀，例如月份/名稱)。呢一行只需要讀返軸嘅刻度同類別文字，唔使自己目測估計每條棒嘅數值。如果冇呢類棒形圖就完全唔使加呢行。
 
+**如果一條題目隔籬印咗幾條分開嘅直度圖示(例如幾條唔同長度嘅棒/竹簽/繩，每條自己printed住一個厘米長度數字，用嚟俾學生判斷可唔可以圍成三角形/邊種三角形)**，喺回覆最開始加一行「STICK_LENGTHS: <長度1>cm;<長度2>cm;...」(跟返啲圖示喺相入面由上到下或者由左到右嘅印刷次序，唔理個題目本身嘅句子有冇提到呢啲數字，一定要照抄)。如果冇呢類直度圖示就完全唔使加呢行。
+
+**如果一條題目嘅(a)(b)兩個細題，共用返之前一句已經印刷出嚟嘅「資源」context句子(例如物件嘅長度/數量清單、材料規格，只喺(a)之前出現一次)**，每個細題(a)、(b)自己嘅printedQuestion都要重複返嗰句context，唔可以淨係第一個細題先有、第二個細題就得返「(b)嗰句問題本身」冧唪唥漏晒之前嗰句規格資訊——就算會令printedQuestion變長,都要照做,因為呢啲資訊係判斷答案啱唔啱嘅必要資料。
+
 **如果一幅圖印咗幾個用英文字母標住嘅圖形(例如A、B、C...)，下面跟住幾條問題，每條都要求學生填返幾個代表啱答案嘅英文字母(例如「等邊三角形：___」「直角梯形：___」)**：呢種格式好容易漏抄字母，或者將字母錯放咗去隔籬條題度——抄嗰陣一定要逐個字母咁數清楚，唔好掃一眼就報。留意：(1)字母之間可能用逗號/頓號/空格分隔，唔好漏漏聽任何一個；(2)學生可能分開兩種顏色筆/兩次落筆寫（例如先用黑筆寫咗幾個，之後又用另一種顏色追加多一個），兩次寫嘅字母都要抄埋，唔好淨係抄第一次嗰批；(3)大楷細楷都算同一個字母（c同C一樣）。抄完成頁之後，快速覆核一次：逐條題目自己讀返一次幅圖度嗰個字母對唔對應嗰題嘅形狀特徵，唔好將啱啱抄漏咗嘅字母之後又亂咁塞落第二條題度濫竽充數。
 
 唔好加任何其他文字、判斷、JSON。`;
@@ -1912,6 +1916,25 @@ function extractPassageText(text) {
   const m = /^PASSAGE:\s*(.+)$/m.exec(text);
   const cleanedText = text.replace(/^PASSAGE:.*$/gm, "");
   return { passageText: m ? m[1].trim() : null, cleanedText };
+}
+
+// Ticket 222 "Pattern 5" (2026-09-30): extracts an optional set of
+// printed stick/rod length labels (see OCR_ONLY_PROMPT's own
+// instruction below) -- real citation: 小學數學新思維 3下A 作業, footer
+// p.21, Q12 ("利用左面3枝竹簽，（可以/不可以）圍成一個三角形") where the
+// 8cm/6cm/4cm side lengths are printed ONLY in the diagram beside the
+// question, never inside the question's own printed sentence. A real
+// OCR test confirmed this gap directly (see verifyTriangleFormableFromSticks's
+// own comment) -- without this marker line, this whole question shape
+// was permanently unsolvable by code, no matter how the text-parsing
+// side was written. Same marker-line-stripped-before-parseOcrLine
+// pattern as extractPriceTable.
+function extractStickLengths(text) {
+  const m = /^STICK_LENGTHS:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^STICK_LENGTHS:.*$/gm, "");
+  if (!m) return { stickLengths: null, cleanedText };
+  const lengths = (m[1].match(/\d+(?:\.\d+)?(?=cm)/g) || []).map(Number);
+  return { stickLengths: lengths.length ? lengths : null, cleanedText };
 }
 
 // Ticket 54 (2026-09-27): extracts an optional printed word bank (see
@@ -2755,7 +2778,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { coinBlanks, cleanedText: cleanedText21 } = extractCoinBlanks(cleanedText20);
   const { distanceValues, cleanedText: cleanedText22 } = extractDistanceValues(cleanedText21);
   const { objectHeights, cleanedText: cleanedText23 } = extractObjectHeights(cleanedText22);
-  const { barChart, cleanedText } = extractBarChart(cleanedText23);
+  const { barChart, cleanedText: cleanedText24 } = extractBarChart(cleanedText23);
+  const { stickLengths, cleanedText } = extractStickLengths(cleanedText24);
   const items = parseOcrLine(cleanedText);
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2763,7 +2787,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -5760,6 +5784,44 @@ function verifyTriangleFactTrueFalse(printedQuestion, studentAnswer) {
   if (given === null) return { correct: null, correctAnswer: "" };
   const correct = given === expected;
   return { correct, correctAnswer: correct ? "" : (expected ? "✓" : "✗") };
+}
+
+// Ticket 222 "Pattern 5" (2026-09-30, real citation: 小學數學新思維
+// 3下A 作業, footer p.21, Q12: "利用左面3枝竹簽，（可以/不可以）圍成一
+// 個三角形。（把答案圈起來）" -> 可以 (8<6+4=10, triangle inequality
+// holds); "...（可以/不可以）圍成一個等腰三角形。" -> 不可以 (8,6,4 all
+// distinct -- no two sides equal). A first attempt at this exact
+// citation (earlier the same night) tried to parse these cm values
+// straight out of printedQuestion and had to be reverted -- a real OCR
+// test proved the numbers are printed ONLY in the diagram beside the
+// question, never inside the question's own sentence, so detect() could
+// never fire. Fixed properly this time via a new OCR_ONLY_PROMPT
+// STICK_LENGTHS marker line (extractStickLengths) that captures the
+// diagram's own printed lengths as page-level shared context, attached
+// onto every item on that page the same way priceTable/passageText
+// already are -- item.stickLengths is populated by handleMark before
+// classifyAndVerify ever runs, not parsed here.
+function isTriangleFormableFromSticksQuestion(item) {
+  if (!Array.isArray(item.stickLengths) || item.stickLengths.length !== 3) return false;
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  if (!/可以\/不可以|可以／不可以/.test(text)) return false;
+  return /圍成一個(等腰)?三角形/.test(text);
+}
+
+function verifyTriangleFormableFromSticks(item) {
+  if (!isTriangleFormableFromSticksQuestion(item)) return { correct: null, correctAnswer: "" };
+  const lengths = item.stickLengths;
+  const sorted = [...lengths].sort((x, y) => x - y);
+  const formsTriangle = sorted[0] + sorted[1] > sorted[2];
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  const wantsIsosceles = /圍成一個等腰三角形/.test(text);
+  const hasTwoEqual = lengths[0] === lengths[1] || lengths[1] === lengths[2] || lengths[0] === lengths[2];
+  const expectedPossible = wantsIsosceles ? (formsTriangle && hasTwoEqual) : formsTriangle;
+  const answer = String(item.studentAnswer || "").trim();
+  const studentSaysPossible = /不可以/.test(answer) ? false : (/可以/.test(answer) ? true : null);
+  if (studentSaysPossible === null) return { correct: null, correctAnswer: "" };
+  const correct = studentSaysPossible === expectedPossible;
+  return { correct, correctAnswer: correct ? "" : (expectedPossible ? "可以" : "不可以") };
 }
 
 // Same ticket, second real sub-citation (math3xa_pdf/p20.png, Q⑧):
@@ -11153,6 +11215,14 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyTriangleFactTrueFalse(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 222 "Pattern 5" (2026-09-30): given 3 diagram-only stick
+    // lengths (captured via the new STICK_LENGTHS OCR marker), can they
+    // form a (isosceles) triangle -- triangle-inequality judgment.
+    name: "triangle_formable_from_sticks",
+    detect: (item) => isTriangleFormableFromSticksQuestion(item),
+    verify: (item) => verifyTriangleFormableFromSticks(item),
+  },
+  {
     // Ticket 216 (2026-09-30): "max obtuse angles in a triangle" fact.
     name: "max_obtuse_angle_in_triangle",
     detect: (item) => isMaxObtuseAngleInTriangleQuestion(item),
@@ -11797,7 +11867,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -11824,6 +11894,11 @@ async function handleMark(request, env) {
     // approach as every other per-item field (subject, handler, etc.).
     if (qwenOutcome.priceTable) {
       qwenOutcome.items.forEach((item) => { item.priceTable = qwenOutcome.priceTable; });
+    }
+    // Ticket 222 "Pattern 5": same page-level shared-context pattern as
+    // priceTable above.
+    if (qwenOutcome.stickLengths) {
+      qwenOutcome.items.forEach((item) => { item.stickLengths = qwenOutcome.stickLengths; });
     }
     // Ticket 53: same page-level shared-context pattern as priceTable above.
     if (qwenOutcome.passageText) {
@@ -12962,6 +13037,9 @@ export {
   normalizeCheckMark,
   isTriangleFactTrueFalseQuestion,
   verifyTriangleFactTrueFalse,
+  extractStickLengths,
+  isTriangleFormableFromSticksQuestion,
+  verifyTriangleFormableFromSticks,
   isMaxObtuseAngleInTriangleQuestion,
   verifyMaxObtuseAngleInTriangle,
   isDaysWith31CountQuestion,
