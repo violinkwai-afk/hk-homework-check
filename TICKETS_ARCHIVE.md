@@ -1121,3 +1121,9 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   修法：喺OCR prompt加咗一個明確嘅「留空」worked example(「|」後面乜都唔好寫)，同specifically點名MC/括號選項/文法填充呢幾類——用返同一張空白考卷重新真測試confirm，3個case全部修好晒，仲有個額外收穫:Part F(mini-robot文章)之前完全讀唔到任何題目item，而家都啱晒讀到全部6條。
   新增2個永久regression test(真實pre-fix/post-fix嘅raw OCR文字都保存咗)。新開咗benchmark/english-subject-pipeline-test-log.csv記錄每次英文科pipeline test嘅完整細節(OCR讀到乜、cost、time、confidence)。
   879/879測試通過(2個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：Ticket222——Pattern1(估算MC)
+
+- ✅ **已接落生產環境(commit faf998d)。** 真citation(已重新核實)：footer p2 Q10、footer p10 Q7。邏輯：將原本算式入面每個數字都round去「自己嗰個數位嘅最高位」(4位數round到千、3位數round到百)，運算符號/括號唔變，同MC選項逐個比對邊個岩。
+  真實做法有個disclosed嘅scope gap：p10 Q7呢種「算式直接印喺題目度」嘅格式做到；但p2 Q10係「要由word problem敘述(原有...賺得...用咗...)自己度返條算式」呢種,難好多,未做，會老實噉decline(null)唔會估。
+  901/901測試通過(6個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
