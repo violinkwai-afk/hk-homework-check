@@ -4548,6 +4548,136 @@ function verifyVerbFormFill(item) {
   return { correct, correctAnswer: correct ? "" : expected };
 }
 
+// Ticket 222 "Prepositions of time" (2026-10-01, real citations --
+// directly re-read from the source photos just now, not carried over
+// from an earlier in-context summary, which had gotten two details
+// wrong: invented an "at"/"in" pair for a worksheet that only teaches
+// on/from...to, and got the noon/midnight exception backwards). Three
+// real worksheets, all teacher-checked:
+//  "Prepositions of time (1)" (poster, dates only): on x3, from/to x3
+//    pairs -- ①on(30th March) ②from③to(31st March/1st April) ④on(2nd
+//    April) ⑤from⑥to(3rd/4th April) ⑦on(5th April) ⑧from⑨to(6th/7th
+//    April).
+//  "Prepositions of time (2)" (9 items, rules box confirms: on=date/
+//    weekday(s)/weekday morning(s), from...to=a period, at=clock time/
+//    night, in=season/daypart/month; "Let's Learn" box: at noon, at
+//    midnight): 1.on(Sunday mornings) 2.on(4th Feb) 3.in(summer) 4.on
+//    (15th Sept) 5.from/to(3rd/7th Nov) 6.at/at(nine thirty/night) 7.
+//    from/to(eight fifteen/eleven o'clock) 8.in(April) 9.at/at(noon/
+//    midnight -- student wrote something else for both, corrected to
+//    "at" per the Let's Learn box, NOT "from").
+//  "Super Kids Christmas Party" poster (12 blanks): ①on(25th Dec) ②from
+//    ③in④to⑤in(nine thirty/the morning/seven thirty/the evening) ⑥at⑦in
+//    (ten fifteen, standalone/the morning) ⑧from⑨to⑩in(two thirty/four
+//    o'clock/the afternoon -- ⑩ corrected from student's wrong "at" to
+//    "in") ⑪at(five o'clock, standalone) ⑫in(the evening, corrected
+//    from student's wrong answer to "In").
+//
+// Rule (confirmed against all 34 real blanks above, no exceptions
+// found): classify what immediately follows the blank -- a DATE (day-
+// ordinal + month) or a bare CLOCK TIME on its own -> on / at
+// respectively, UNLESS it is the first or second of a same-type pair
+// within the same sentence (a "from ... to ..." range), in which case
+// the pair wins instead. A WEEKDAY+daypart ("Sunday mornings") -> on.
+// A bare DAYPART/SEASON/MONTH-alone -> in. NIGHT/NOON/MIDNIGHT are
+// fixed exceptions -> at, regardless of pairing.
+//
+// NOT YET VERIFIED against a real OCR dispatch call (would cost real
+// money and needs a fresh go-ahead per the real-money hard rule) --
+// this assumes printedQuestion preserves reasonably full local-sentence
+// context around each blank (the convention every other handler in
+// this file has shown so far), which matters here because resolving
+// from/to needs to see a same-type sibling blank in the same sentence.
+// If OCR instead truncates each item to a minimal 2-3 word snippet,
+// the from/to cases will under-resolve to their standalone default
+// (on/at) instead -- the on/in/at-only cases (the majority: 24 of 34
+// real blanks) are unaffected either way, since those never depend on
+// pairing. Declines (null) rather than guesses whenever the following
+// text doesn't classify at all.
+function classifyPrepTimeExpr(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  if (/^(noon|midnight)\b/i.test(t)) return "NOON_MIDNIGHT";
+  if (/^night\b/i.test(t)) return "NIGHT";
+  const WEEKDAY = "(sunday|monday|tuesday|wednesday|thursday|friday|saturday)";
+  const DAYPART = "(morning|afternoon|evening)s?";
+  if (new RegExp(`^${WEEKDAY}\\s+${DAYPART}\\b`, "i").test(t)) return "WEEKDAY_DAYPART";
+  if (new RegExp(`^(the\\s+)?${DAYPART}\\b`, "i").test(t)) return "DAYPART";
+  if (/^(the\s+)?\d{1,2}(st|nd|rd|th)\s+(of\s+)?[A-Za-z]+/i.test(t)) return "DATE";
+  if (/^(spring|summer|autumn|fall|winter)\b/i.test(t)) return "SEASON";
+  if (/^(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(t)) return "MONTH";
+  if (/^\d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)\b/i.test(t)) return "CLOCK_TIME";
+  if (/^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+\S+/i.test(t)) return "CLOCK_TIME";
+  return null;
+}
+
+function isPrepositionOfTimeQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  if (!/_{2,}/.test(printed)) return false;
+  const answer = String(item.studentAnswer || "").trim().toLowerCase();
+  if (!["on", "in", "at", "from", "to"].includes(answer)) return false;
+  const blanks = [...printed.matchAll(/_{2,}/g)];
+  return blanks.some((b) => classifyPrepTimeExpr(printed.slice(b.index + b[0].length)) !== null);
+}
+
+function verifyPrepositionOfTime(item) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim().toLowerCase();
+  if (!["on", "in", "at", "from", "to"].includes(answer)) return { correct: null, correctAnswer: "" };
+
+  const blankPositions = [...printed.matchAll(/_{2,}/g)];
+  if (blankPositions.length === 0) return { correct: null, correctAnswer: "" };
+
+  // This item's own target blank is, by default, the FIRST blank in its
+  // printed context, matching this file's established its/it's
+  // convention (see verifyGrammarCloze's its/it's branch). That default
+  // is only wrong for the SECOND half of a from/to pair when the full
+  // shared sentence (both blanks) is what OCR hands this item -- for
+  // that case, upstream dispatch can set item.targetBlankIndex (0-based)
+  // to say which blank is this item's own. Not yet confirmed whether
+  // real OCR extraction actually provides that index (unverified real-
+  // dispatch risk, disclosed above); defaults to 0 when absent, which
+  // is already correct for the majority of real cases (every standalone
+  // on/in/at blank, and the "from" half of every pair).
+  const myIndex = Number.isInteger(item.targetBlankIndex) && item.targetBlankIndex >= 0 && item.targetBlankIndex < blankPositions.length
+    ? item.targetBlankIndex
+    : 0;
+  const classifications = blankPositions.map((b) => classifyPrepTimeExpr(printed.slice(b.index + b[0].length)));
+  const myType = classifications[myIndex];
+  if (myType === null) return { correct: null, correctAnswer: "" };
+
+  let expected;
+  if (myType === "NOON_MIDNIGHT" || myType === "NIGHT") {
+    expected = "at";
+  } else if (myType === "WEEKDAY_DAYPART") {
+    expected = "on";
+  } else if (myType === "DAYPART" || myType === "SEASON" || myType === "MONTH") {
+    expected = "in";
+  } else if (myType === "DATE" || myType === "CLOCK_TIME") {
+    const standaloneDefault = myType === "DATE" ? "on" : "at";
+    const periodBefore = printed.lastIndexOf(".", blankPositions[myIndex].index);
+    const sentenceStart = periodBefore === -1 ? 0 : periodBefore + 1;
+    const periodAfter = printed.indexOf(".", blankPositions[myIndex].index);
+    const sentenceEnd = periodAfter === -1 ? printed.length : periodAfter;
+    const sameTypeIdx = [];
+    blankPositions.forEach((b, i) => {
+      if (b.index >= sentenceStart && b.index < sentenceEnd && classifications[i] === myType) sameTypeIdx.push(i);
+    });
+    if (sameTypeIdx.length >= 2 && sameTypeIdx[0] === myIndex) {
+      expected = "from";
+    } else if (sameTypeIdx.length >= 2 && sameTypeIdx[1] === myIndex) {
+      expected = "to";
+    } else {
+      expected = standaloneDefault;
+    }
+  } else {
+    return { correct: null, correctAnswer: "" };
+  }
+
+  const correct = answer === expected;
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
 // Picture-match short answer from a small closed set of exact template
 // phrasings (real example: `backfill/batch3_missing_english_modals.jpg`
 // -- "Can you play football?" answered "Yes, I can." / "Can you play
@@ -11227,6 +11357,16 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyVerbFormFill(item),
   },
   {
+    // Ticket 222 "Prepositions of time" (2026-10-01). Registered after
+    // verb_form_fill/grammar_cloze so a blank that's actually a verb or
+    // be-form fill (which also matches the generic "_{2,}" shape) never
+    // gets mis-claimed here -- this only fires when the text following
+    // the blank itself classifies as a real time expression.
+    name: "preposition_of_time",
+    detect: (item) => isPrepositionOfTimeQuestion(item),
+    verify: (item) => verifyPrepositionOfTime(item),
+  },
+  {
     // Ticket 53 (2026-09-27): verifyLiteralKeywordMC was written and
     // tested 2026-09-25, never registered -- needed a printed reading
     // passage the OCR step didn't extract separately until now (see
@@ -13421,6 +13561,9 @@ export {
   conjugatePast,
   isVerbFormFillQuestion,
   verifyVerbFormFill,
+  classifyPrepTimeExpr,
+  isPrepositionOfTimeQuestion,
+  verifyPrepositionOfTime,
   verifyPictureMatchFormat,
   verifyWordBankOnceEach,
   verifyLiteralKeywordMC,
