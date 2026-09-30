@@ -2912,6 +2912,41 @@ function mentionsWeekdayOrdinal(pendingItems) {
   });
 }
 
+// Ticket 222 "reading comprehension marking criteria" (2026-09-30, user
+// request: real research into how HK PRIMARY school teachers actually
+// mark "answer in COMPLETE sentences" reading-comprehension questions,
+// real citation: Junius Publications "Practice in Reading 3"). User
+// explicitly rejected blending in the more lenient DSE/HKEAA-level
+// leniency principle ("小學唔可以跟dse") -- this block follows ONLY the
+// stricter primary-level standard: a HK-parenting-media summary of real
+// primary-level tutor experience, the 6 real common deduction reasons
+// (format correctness matters, not just whether the meaning comes
+// across) -- see the memory note this cites; no EDB-published marking
+// rubric for this exact worksheet format exists, this is the closest
+// real sourced primary-specific practice found.
+const COMPLETE_SENTENCE_READING_REFERENCE = `參考資料——香港小學英文「用完整句子回答」閱讀理解題嘅評分準則（嚟源：家長教育媒體訪問補習老師嘅小學層面實戰經驗總結，唔係官方文件，但係專門講小學程度、比DSE嗰套寬鬆原則更嚴格，供你判斷時參考）：
+- 淨係照抄原文句子唔識轉format，都算錯——要識得將原文轉做真正回應緊條問題嘅句子（轉時式、轉人稱代名詞），唔可以淨係抄段落原句交差。
+- 一定要係「完整句子」（要有主詞+動詞），淨係答一個詞/短語唔算啱。
+- 動詞時式要同段落原文一致（段落用過去式，答案都要跟住用過去式），時式錯咗就算錯。
+- 代名詞（佢/佢哋）所指嘅人要啱，單複數要跟返段落（例如段落講"they"係多於一個人，學生答案淨係講一個人就係錯）。
+- 唔可以答非所問（例如將"How"同"How old"呢類相似問詞搞混）。
+- 意思啱、格式（完整句子+時式+人稱）都啱先算啱——唔可以淨係意思接近就當啱，小學評分比DSE程度嚴格好多，格式本身都要跟足。`;
+
+function mentionsCompleteSentenceReadingQuestion(pendingItems) {
+  return pendingItems.some((it) => {
+    const printed = String(it.printedQuestion || "").trim();
+    // English WH-question expecting a written sentence answer (not a
+    // short fill-blank/MC) -- heuristic signal for the "answer in
+    // complete sentences" reading-comprehension format this reference
+    // block is written for. Deliberately narrow (English WH-question +
+    // a multi-word answer), not a general "any open-ended question"
+    // trigger, to avoid adding irrelevant token cost to every call.
+    if (!/^(What|Why|How|Who|When|Where|Which)\b.*\?\s*$/i.test(printed)) return false;
+    const answer = String(it.studentAnswer || "").trim();
+    return answer.split(/\s+/).filter(Boolean).length >= 3;
+  });
+}
+
 // Ticket 60 (2026-09-27): "做法B" from the Tier-V-prompt plan -- unlike
 // Tickets 57/59's REFERENCE DATA (facts to look up), this is concrete
 // step-by-step MEASUREMENT GUIDANCE for question types that need the AI
@@ -3013,6 +3048,7 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsMonthLength(pendingItems) ? DAYS_PER_MONTH_REFERENCE : null,
     mentionsQuantityWordOrClockMechanics(pendingItems) ? QUANTITY_AND_CLOCK_REFERENCE : null,
     mentionsWeekdayOrdinal(pendingItems) ? WEEKDAY_CONVENTION_REFERENCE : null,
+    mentionsCompleteSentenceReadingQuestion(pendingItems) ? COMPLETE_SENTENCE_READING_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -12893,6 +12929,7 @@ export {
   mentionsMonthLength,
   mentionsQuantityWordOrClockMechanics,
   mentionsWeekdayOrdinal,
+  mentionsCompleteSentenceReadingQuestion,
   buildTierVGuidance,
   extractPictogramData,
   verifyPictogramQuery,
