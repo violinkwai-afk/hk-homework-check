@@ -4430,6 +4430,124 @@ function verifyGrammarCloze(printedQuestion, studentAnswer) {
   return { correct: null, correctAnswer: "" };
 }
 
+// Ticket 222 "verb conjugation" (2026-10-01, real citations: two P2/P3
+// real exam photos -- "My classmate, Sam is a good boy. He ___(get) up
+// early..." and "I want to ___(join) the Cookery Club..."/"Last week, I
+// ___(go) on a school picnic..."): "fill in the blank with the correct
+// form of the verb given in brackets" -- broader than grammar_cloze's
+// be-verb-only scope, but still a CLOSED, rule-based grammar problem
+// (subject-verb agreement + a small number of syntactic base-form
+// triggers + a common-irregular-verb lookup table for past tense), not
+// open-ended semantic judgment -- matches this file's one real
+// principle for code-solvable English: derivable from already-known
+// rules/content, never "does this sentence make sense."
+//
+// Deliberately SCOPED, not a general grammar engine: only fires when
+// the surrounding text gives an unambiguous signal (a base-form
+// trigger word immediately before the blank, OR a clear subject
+// pronoun/noun immediately before it combined with an explicit
+// tense-marking phrase elsewhere in the sentence). Declines (null)
+// for anything ambiguous rather than guess -- this genuinely cannot
+// cover every possible sentence shape, and a wrong guess here would
+// violate the accuracy-floor rule harder than just not answering.
+const IRREGULAR_PRESENT_3S = { go: "goes", do: "does", have: "has", be: "is" };
+const IRREGULAR_PAST = {
+  go: "went", do: "did", have: "had", be: null, // be handled separately (was/were by number)
+  take: "took", make: "made", get: "got", eat: "ate", come: "came", see: "saw",
+  write: "wrote", give: "gave", find: "found", think: "thought", buy: "bought",
+  bring: "brought", teach: "taught", catch: "caught", run: "ran", swim: "swam",
+  sing: "sang", drink: "drank", begin: "began", ring: "rang", sit: "sat",
+  read: "read", say: "said", tell: "told", feel: "felt", keep: "kept",
+  sleep: "slept", leave: "left", meet: "met", pay: "paid", sell: "sold",
+  send: "sent", spend: "spent", build: "built", hold: "held", win: "won",
+  know: "knew", grow: "grew", throw: "threw", fly: "flew", draw: "drew",
+  wear: "wore", break: "broke", speak: "spoke", choose: "chose", ride: "rode",
+  drive: "drove", stand: "stood", understand: "understood", fall: "fell",
+};
+
+function conjugatePresent3S(base) {
+  const b = base.toLowerCase();
+  if (IRREGULAR_PRESENT_3S[b]) return IRREGULAR_PRESENT_3S[b];
+  if (/(s|x|z|ch|sh)$/.test(b)) return b + "es";
+  if (/[^aeiou]y$/.test(b)) return b.slice(0, -1) + "ies";
+  return b + "s";
+}
+
+function conjugatePast(base) {
+  const b = base.toLowerCase();
+  if (b === "be") return null; // ambiguous (was/were) -- caller resolves by subject number
+  if (IRREGULAR_PAST[b]) return IRREGULAR_PAST[b];
+  if (/e$/.test(b)) return b + "d";
+  if (/[^aeiou]y$/.test(b)) return b.slice(0, -1) + "ied";
+  if (/^[^aeiou]*[aeiou][^aeiouwxy]$/.test(b)) return b + b.slice(-1) + "ed"; // short CVC -> double final consonant (stop->stopped)
+  return b + "ed";
+}
+
+function isVerbFormFillQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /_{2,}\s*\([a-zA-Z' ]+\)/.test(printed) || /\([a-zA-Z' ]+\)\s*$/.test(printed) && /_{2,}/.test(printed);
+}
+
+function verifyVerbFormFill(item) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim().toLowerCase();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/_{2,}\s*\(([a-zA-Z' ]+)\)/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  let verbPhrase = m[1].trim().toLowerCase();
+  const isNegated = /^not\s+/.test(verbPhrase);
+  const base = isNegated ? verbPhrase.replace(/^not\s+/, "") : verbPhrase;
+  // Real OCR convention: a shared multi-blank paragraph often prefixes
+  // each blank with its own bare sub-item number right before the
+  // underscores (e.g. "He 1 ____ (get) up early", "he 2 ____ (go)...")
+  // -- strip a trailing lone number so subject-detection below isn't
+  // thrown off by it.
+  const before = printed.slice(0, m.index).trim().replace(/\s+\d+$/, "");
+
+  // Base-form-required syntactic triggers -- high confidence, no tense
+  // reasoning needed at all.
+  // "did" triggers base form even when a subject sits between it and
+  // the blank (question inversion: "did you ___?", "Where did you
+  // ___?") -- checked anywhere in `before`, not just immediately
+  // adjacent, unlike the other triggers which must be the last word.
+  const baseFormTrigger = /\bdid\b/i.test(before) || /\b(please|want to|wants to|like to|likes to|love to|loves to|let me|let him|let her|let us|can|could|will|would|should|must|may|might)$/i.test(before);
+  if (baseFormTrigger) {
+    const expected = isNegated ? `not ${base}` : base;
+    const correct = answer === expected || (isNegated && answer === `doesn't ${base}`) || (isNegated && answer === `don't ${base}`);
+    return { correct, correctAnswer: correct ? "" : expected };
+  }
+
+  // Past-tense signal anywhere in the FULL printed sentence (not just
+  // the text before the blank -- e.g. "when you were young" often comes
+  // AFTER the blank in a question like "how ___(be) your school life
+  // when you were young?").
+  const hasPastSignal = /\b(last\s+\w+|yesterday|ago|when you were young|were young)\b/i.test(printed);
+
+  // Subject immediately before the blank -- determines number/person.
+  const subjectMatch = before.match(/\b(I|you|we|they|he|she|it|[A-Z][a-z]+(?:'s)?|his\s+\w+|her\s+\w+|\w+\s+and\s+(?:his|her|their)\s+\w+)\s*$/i);
+  if (!subjectMatch) return { correct: null, correctAnswer: "" };
+  const subjectText = subjectMatch[1].toLowerCase();
+  const isPlural = /\b(you|we|they)\b/i.test(subjectText) || /\band\b/i.test(subjectText);
+  const is1stPerson = /^i$/i.test(subjectText);
+
+  let expected;
+  if (hasPastSignal) {
+    if (base === "be") expected = isPlural ? "were" : "was";
+    else expected = conjugatePast(base);
+    if (isNegated) expected = `did not ${base}`;
+  } else if (isPlural || is1stPerson) {
+    expected = isNegated ? `do not ${base}` : base;
+  } else {
+    // 3rd person singular present simple
+    expected = isNegated ? `does not ${base}` : conjugatePresent3S(base);
+  }
+  if (!expected) return { correct: null, correctAnswer: "" };
+
+  const normAnswer = answer.replace(/doesn't/, "does not").replace(/don't/, "do not").replace(/didn't/, "did not");
+  const correct = normAnswer === expected;
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
 // Picture-match short answer from a small closed set of exact template
 // phrasings (real example: `backfill/batch3_missing_english_modals.jpg`
 // -- "Can you play football?" answered "Yes, I can." / "Can you play
@@ -11024,6 +11142,16 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyGrammarCloze(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 222 "verb conjugation" (2026-10-01): broader "fill in the
+    // correct form of the verb" rule-based conjugation. Registered
+    // AFTER grammar_cloze so grammar_cloze keeps first claim on its own
+    // narrower be-verb/its-it's shape -- this one only ever sees what
+    // that handler didn't already resolve.
+    name: "verb_form_fill",
+    detect: (item) => isVerbFormFillQuestion(item),
+    verify: (item) => verifyVerbFormFill(item),
+  },
+  {
     // Ticket 53 (2026-09-27): verifyLiteralKeywordMC was written and
     // tested 2026-09-25, never registered -- needed a printed reading
     // passage the OCR step didn't extract separately until now (see
@@ -13202,6 +13330,10 @@ export {
   verifySudoku4x4,
   verifySelectFromPassage,
   verifyGrammarCloze,
+  conjugatePresent3S,
+  conjugatePast,
+  isVerbFormFillQuestion,
+  verifyVerbFormFill,
   verifyPictureMatchFormat,
   verifyWordBankOnceEach,
   verifyLiteralKeywordMC,
