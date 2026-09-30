@@ -1879,6 +1879,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果幅圖係一個棒形圖(bar chart)，有一條印刷咗數字刻度嘅軸(例如"0,2,4,6,8,10,12"，刻度數字之間相隔固定)，同埋幾條唔同長度嘅棒代表唔同類別**，喺回覆最開始加一行「BAR_CHART: 方向=<垂直/水平>;刻度最小值=<軸上面最細嗰個印刷數字>;刻度最大值=<軸上面最大嗰個印刷數字>;刻度間距=<相鄰兩個刻度數字相差幾多>;類別=<第一條棒代表嘅類別文字>,<第二條>,...」(方向：棒係垂直向上企定係水平向右伸,由圖嘅實際畫法判斷,唔好靠估；類別要跟返啲棒實際印刷/排列嘅先後次序，由圖入面軸邊嘅文字標籤讀，例如月份/名稱)。呢一行只需要讀返軸嘅刻度同類別文字，唔使自己目測估計每條棒嘅數值。如果冇呢類棒形圖就完全唔使加呢行。
 
+**如果一幅圖印咗幾個用英文字母標住嘅圖形(例如A、B、C...)，下面跟住幾條問題，每條都要求學生填返幾個代表啱答案嘅英文字母(例如「等邊三角形：___」「直角梯形：___」)**：呢種格式好容易漏抄字母，或者將字母錯放咗去隔籬條題度——抄嗰陣一定要逐個字母咁數清楚，唔好掃一眼就報。留意：(1)字母之間可能用逗號/頓號/空格分隔，唔好漏漏聽任何一個；(2)學生可能分開兩種顏色筆/兩次落筆寫（例如先用黑筆寫咗幾個，之後又用另一種顏色追加多一個），兩次寫嘅字母都要抄埋，唔好淨係抄第一次嗰批；(3)大楷細楷都算同一個字母（c同C一樣）。抄完成頁之後，快速覆核一次：逐條題目自己讀返一次幅圖度嗰個字母對唔對應嗰題嘅形狀特徵，唔好將啱啱抄漏咗嘅字母之後又亂咁塞落第二條題度濫竽充數。
+
 唔好加任何其他文字、判斷、JSON。`;
 
 // Ticket 52 (2026-09-27): extracts an optional printed price table (see
@@ -9704,6 +9706,163 @@ function verifyShapeClassificationGrid(item, crop) {
   }
 }
 
+// Ticket 222 (2026-09-30, real citation: 小學數學新思維 3下A 作業,
+// footer p.18/p.20/p.25 -- "觀察以下各[平面圖形/三角形]，把所有代表答
+// 案的英文字母填在橫線上。③等邊三角形：___ ④等腰直角三角形：___ ⑤不
+// 等邊三角形：___" etc, real shapes labelled A-G): classify each printed
+// TRIANGLE's own sub-type (等邊/等腰/直角/等腰直角/不等邊) from its
+// actual polygon geometry, same real-edge-measurement approach as
+// Ticket 204's classifyTrapezoidType (reuses readShapeClassificationFromPixels's
+// additive `.points` field) and Ticket 212's pegboard classifyTriangleType
+// -- deliberately a SEPARATE, self-contained geometry function rather
+// than calling either of those two (Ticket 212 is still uncommitted/
+// unstable at the time this was written; duplicating ~10 lines of
+// tolerance-based side/angle comparison is cheaper than coupling to
+// code that might still change shape).
+// Real finding (2026-09-30, this citation): readShapeClassificationFromPixels's
+// plateau vertex-count scan sometimes settles on 4 vertices for a shape
+// that is actually a real printed triangle, when contour noise (a
+// slightly bowed edge, or an anti-aliasing artifact) produces one extra
+// near-collinear point along an otherwise-straight edge -- confirmed on
+// 2 real shapes on this exact page (interior angles 169.2° and 177.9°,
+// i.e. barely a corner at all, vs the other 3 angles all under 113°).
+// Rather than touching the shared plateau-scan tolerance (real risk to
+// every other already-shipped caller of that function), recover locally:
+// if a 4-vertex polygon has exactly one interior angle within 15° of
+// straight, drop that vertex and treat the remaining 3 as the real
+// triangle. A genuine quadrilateral (e.g. this book's own trapezoids)
+// essentially never has a near-180° interior angle, so this is a safe,
+// narrow correction, not a general "treat every quad as a triangle" hack.
+function collapseNearCollinearQuadToTriangle(points) {
+  if (!points || points.length !== 4) return null;
+  const n = points.length;
+  const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  const angleAt = (i) => {
+    const p0 = points[(i - 1 + n) % n], p1 = points[i], p2 = points[(i + 1) % n];
+    const v1x = p0.x - p1.x, v1y = p0.y - p1.y;
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y;
+    const dot = v1x * v2x + v1y * v2y;
+    const mag = dist(p0, p1) * dist(p1, p2);
+    if (mag === 0) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, dot / mag))) * (180 / Math.PI);
+  };
+  const angles = points.map((_, i) => angleAt(i));
+  const nearStraightIdx = angles.map((a, i) => (a > 165 ? i : -1)).filter((i) => i >= 0);
+  if (nearStraightIdx.length !== 1) return null; // 0 -> genuine quad; 2+ -> too degenerate to trust
+  return points.filter((_, i) => i !== nearStraightIdx[0]);
+}
+
+function computeTriangleSubtypeProperties(points) {
+  if (!points || points.length !== 3) return null;
+  const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  const [a, b, c] = points;
+  const ab = dist(a, b), bc = dist(b, c), ca = dist(c, a);
+  const maxSide = Math.max(ab, bc, ca);
+  if (maxSide <= 0) return null;
+  const TOL = maxSide * 0.08;
+  const eq = (x, y) => Math.abs(x - y) < TOL;
+  const isEquilateral = eq(ab, bc) && eq(bc, ca);
+  const isIsosceles = !isEquilateral && (eq(ab, bc) || eq(bc, ca) || eq(ca, ab));
+  const dot = (p, q, r) => (q.x - p.x) * (r.x - p.x) + (q.y - p.y) * (r.y - p.y);
+  const angleCos = (p, q, r) => dot(p, q, r) / (dist(p, q) * dist(p, r));
+  const RIGHT_TOL = Math.cos(((90 - 8) * Math.PI) / 180);
+  const isRight = Math.abs(angleCos(a, b, c)) < RIGHT_TOL || Math.abs(angleCos(b, a, c)) < RIGHT_TOL || Math.abs(angleCos(c, a, b)) < RIGHT_TOL;
+  return { isEquilateral, isIsosceles, isRight };
+}
+
+// Longer/more specific category names must be checked before their
+// shorter substrings (等腰直角三角形 contains both 等腰三角形's and
+// 直角三角形's own name as a substring) -- order here IS the match
+// priority, checked in classifyPrintedTriangleSubtypeTarget below.
+const TRIANGLE_SUBTYPE_MATCHERS = [
+  ["等腰直角三角形", (p) => p.isIsosceles && p.isRight],
+  ["不等邊三角形", (p) => !p.isEquilateral && !p.isIsosceles],
+  ["等邊三角形", (p) => p.isEquilateral],
+  // 等腰三角形 counts equilateral/isosceles-right as special cases of
+  // isosceles too -- matches this book's own stated rule (真citation
+  // p.21 Q7: "所有等邊三角形皆是等腰三角形" -> true) and the real
+  // verified answer on p.20 (Q4's answer includes the equilateral
+  // shape E, confirmed by the user after an initial omission).
+  ["等腰三角形", (p) => p.isEquilateral || p.isIsosceles],
+  // 直角三角形 counts isosceles-right as a right triangle too.
+  ["直角三角形", (p) => p.isRight],
+];
+
+function classifyPrintedTriangleSubtypeTarget(printedQuestion) {
+  const text = String(printedQuestion || "").replace(/\s+/g, "");
+  // Anchored at the start, immediately followed by a colon -- this is
+  // the real "答案格" fill-in-letters citation shape ("等邊三角形：___").
+  // A plain substring match (no anchor) would also fire on unrelated
+  // full-sentence questions that merely MENTION a category name, e.g.
+  // triangle_fact_true_false's "所有等邊三角形皆是等腰三角形。" contains
+  // "等腰三角形" too -- a real collision caught by the existing test
+  // suite (triangle_fact_true_false's own dispatch-priority test) when
+  // this was first written without the anchor.
+  for (const [name] of TRIANGLE_SUBTYPE_MATCHERS) {
+    if (new RegExp(`^${name}[:：]`).test(text)) return name;
+  }
+  return null;
+}
+
+function isTriangleSubtypeLetterQuestion(item) {
+  return classifyPrintedTriangleSubtypeTarget(item.printedQuestion) !== null;
+}
+
+function verifyTriangleSubtypeLetterQuestion(item, crop) {
+  const target = classifyPrintedTriangleSubtypeTarget(item.printedQuestion);
+  const answer = String(item.studentAnswer || "").trim();
+  if (!target || !answer) return { correct: null, correctAnswer: "" };
+  const matcher = TRIANGLE_SUBTYPE_MATCHERS.find(([name]) => name === target)[1];
+  let photonImg;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    // Real finding (2026-09-30, this citation): this page's shapes each
+    // have their OWN letter label (A, B, C...) printed INSIDE the
+    // filled outline, close enough that its glyph ink forms its own
+    // small blob alongside the real shape blob. readShapeClassificationFromPixels
+    // has no size floor beyond the fixed minBlobSize(80) -- nowhere near
+    // enough to exclude a letter glyph (measured ~100-1600px here) next
+    // to a real shape (measured ~11000-20000px, roughly 10x+ larger) --
+    // so raw output is dominated by ~30 spurious tiny blobs that would
+    // scramble the reading-order letter mapping if not filtered out
+    // here. Relative-size filter (kept LOCAL to this function rather
+    // than changing the shared readShapeClassificationFromPixels, to
+    // avoid any risk to the already-shipped shape_classification_grid/
+    // trapezoid_type_letter callers, which have not been shown to hit
+    // this same failure mode and are out of scope for this ticket).
+    const rawShapes = readShapeClassificationFromPixels(pixels, w, h);
+    const maxArea = rawShapes.reduce((m, s) => Math.max(m, s.area), 0);
+    const shapes = rawShapes.filter((s) => s.area >= maxArea * 0.1);
+    if (shapes.length < 4) return { correct: null, correctAnswer: "" }; // too few blobs to trust the reading-order letter mapping
+
+    const letterFor = (idx) => String.fromCharCode(65 + idx);
+    const maxLetterIdx = shapes.length - 1;
+    const studentLetters = answer.split(/[,，、;；\s]+/).map((x) => x.trim().toUpperCase()).filter(Boolean);
+    if (!studentLetters.length) return { correct: null, correctAnswer: "" };
+    if (studentLetters.some((L) => L.length !== 1 || L.charCodeAt(0) < 65 || L.charCodeAt(0) - 65 > maxLetterIdx)) return { correct: null, correctAnswer: "" };
+
+    const expectedLetters = [];
+    shapes.forEach((s, i) => {
+      let trianglePoints = s.shape === "triangle" ? s.points : null;
+      if (!trianglePoints && s.shape === "quadrilateral") trianglePoints = collapseNearCollinearQuadToTriangle(s.points);
+      if (!trianglePoints) return;
+      const props = computeTriangleSubtypeProperties(trianglePoints);
+      if (props && matcher(props)) expectedLetters.push(letterFor(i));
+    });
+    if (!expectedLetters.length) return { correct: null, correctAnswer: "" };
+
+    const correct = studentLetters.slice().sort().join(",") === expectedLetters.slice().sort().join(",");
+    return { correct, correctAnswer: correct ? "" : expectedLetters.join(",") };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 const QUESTION_TYPE_HANDLERS = [
   {
     name: "multi_blank_math",
@@ -10752,6 +10911,13 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyShapeClassificationGrid(item, crop),
   },
   {
+    // Ticket 222 (2026-09-30): triangle sub-type (等邊/等腰/直角/等腰直
+    // 角/不等邊) classification from a printed shapes-lettered-A-G grid.
+    name: "triangle_subtype_letter",
+    detect: (item) => isTriangleSubtypeLetterQuestion(item),
+    verifyVisual: (item, crop) => verifyTriangleSubtypeLetterQuestion(item, crop),
+  },
+  {
     // Ticket 198 (2026-09-30): see readAbacusColumnsFromPixels's own long
     // comment. isAbacusReadingQuestion shared with handleMark's bbox
     // fallback (findAbacusBbox's call site).
@@ -11639,6 +11805,13 @@ async function handleMark(request, env) {
       // unmatched item, to avoid accidentally cropping the wrong region
       // for something this anchor strategy was never validated against.
       if (isShapeClassificationGridQuestion(item)) {
+        return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      if (isTriangleSubtypeLetterQuestion(item)) {
+        // Same fully-Chinese-question anchor gap as shape_classification_grid
+        // just above -- reuses the exact same lettered-shapes-grid bbox
+        // strategy, since both question shapes crop the same kind of
+        // "several shapes labelled A, B, C..." diagram.
         return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
       }
       if (isAbacusReadingQuestion(item)) {
@@ -12612,6 +12785,11 @@ export {
   isShapeClassificationGridQuestion,
   parseLabelledParts,
   verifyShapeClassificationGrid,
+  computeTriangleSubtypeProperties,
+  collapseNearCollinearQuadToTriangle,
+  classifyPrintedTriangleSubtypeTarget,
+  isTriangleSubtypeLetterQuestion,
+  verifyTriangleSubtypeLetterQuestion,
   findLetterGridBbox,
   readAbacusColumnsFromPixels,
   isAbacusReadingQuestion,
