@@ -9863,6 +9863,120 @@ function verifyTriangleSubtypeLetterQuestion(item, crop) {
   }
 }
 
+// Ticket 222 continued (2026-09-30, "Pattern 7" -- fold/cut-then-classify
+// triangle questions, real citation: 小學數學新思維 3下A 作業, footer
+// p.23, Q⑦: "沿着虛線把左圖的長方形剪開後，可得出2個（直角/等腰/等邊）
+// 三角形。(把答案圈起來)" -- real answer 直角, confirmed against the
+// actual worksheet. Provable closed-form fact, no pixel measurement
+// needed: cutting ANY rectangle along its diagonal always produces 2
+// congruent RIGHT triangles -- the right angle is inherited directly
+// from the rectangle's own 90° corner, true regardless of the
+// rectangle's exact drawn aspect ratio. Deliberately narrow: only
+// matches this specific "長方形...剪開...(直角/等腰/等邊)" MC phrasing.
+function isRectangleDiagonalCutQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  if (!/長方形/.test(text) || !/剪開/.test(text)) return false;
+  return /直角[\/／]等腰[\/／]等邊/.test(text);
+}
+
+function verifyRectangleDiagonalCut(item) {
+  if (!isRectangleDiagonalCutQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const correct = /直角/.test(answer) && !/等腰|等邊/.test(answer);
+  return { correct, correctAnswer: correct ? "" : "直角" };
+}
+
+// Same page, Q⑨: "詠恩把正方形紙依以下的方法摺和剪...打開後，把正方形
+// 紙沿摺痕剪開，可得出8個____三角形。" -- real answer 等腰 (confirmed).
+// This specific fold sequence (fold the square in half, fold in half
+// again, cut along the resulting small square's diagonal) always
+// produces 8 congruent isosceles triangles by symmetry -- provable
+// closed-form fact, no per-photo measurement needed. Deliberately
+// narrow: only matches this exact "正方形...摺...剪...得出8個___三角
+// 形" phrasing, not every square-folding question.
+function isSquareFoldCutEightQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  return /正方形/.test(text) && /摺/.test(text) && /剪/.test(text) && /8個.{0,4}三角形/.test(text);
+}
+
+function verifySquareFoldCutEight(item) {
+  if (!isSquareFoldCutEightQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const correct = /等腰/.test(answer);
+  return { correct, correctAnswer: correct ? "" : "等腰" };
+}
+
+// Same page, Q⑧: "下面的六邊形每條邊的長度都相等。[hexagon cut into
+// A/B/C/D, drawn separately, same shape as the letter-grid above] 圖A
+// 是（直角/等腰/等邊）三角形。(把答案圈起來)" -- unlike Q7/Q9 above, the
+// resulting pieces ARE drawn separately and individually labelled (same
+// visual shape as this ticket's own triangle_subtype_letter pattern
+// above), so this reuses the SAME real polygon-geometry measurement
+// (computeTriangleSubtypeProperties) -- the hexagon's cut pattern isn't
+// symmetric enough to derive piece A's type as a closed-form fact
+// without looking at the actual drawn shape.
+function isHexagonCutPieceTypeQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  // Real finding (2026-09-30, real OCR test on this exact citation):
+  // the shared "下面的六邊形每條邊的長度都相等...剪開" stem sentence is
+  // NOT repeated in the split-out "圖A是..." sub-item's own
+  // printedQuestion -- same shared-context-lost-on-split gap already
+  // seen elsewhere in this project. Originally required "六邊形"+"剪開"
+  // too, which meant this handler could never fire on the real OCR
+  // output; dropped that requirement -- "圖[A-Z]是（直角/等腰/等邊）" on
+  // its own is specific enough not to collide with anything else in
+  // this codebase (checked, no other handler matches this shape).
+  if (!/圖[A-Z]是/.test(text)) return false;
+  return /直角[\/／]等腰[\/／]等邊/.test(text);
+}
+
+function verifyHexagonCutPieceType(item, crop) {
+  if (!isHexagonCutPieceTypeQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  const m = text.match(/圖([A-Z])是/);
+  const answer = String(item.studentAnswer || "").trim();
+  if (!m || !answer) return { correct: null, correctAnswer: "" };
+  const targetIdx = m[1].charCodeAt(0) - 65;
+  let photonImg;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    // Same letters-cause-noise-blobs and quad-vs-triangle-simplification
+    // gaps as triangle_subtype_letter above -- same two local fixes.
+    const rawShapes = readShapeClassificationFromPixels(pixels, w, h);
+    const maxArea = rawShapes.reduce((mx, s) => Math.max(mx, s.area), 0);
+    const shapes = rawShapes.filter((s) => s.area >= maxArea * 0.1);
+    if (targetIdx < 0 || targetIdx >= shapes.length) return { correct: null, correctAnswer: "" };
+    const s = shapes[targetIdx];
+    let trianglePoints = s.shape === "triangle" ? s.points : (s.shape === "quadrilateral" ? collapseNearCollinearQuadToTriangle(s.points) : null);
+    if (!trianglePoints) return { correct: null, correctAnswer: "" };
+    const props = computeTriangleSubtypeProperties(trianglePoints);
+    if (!props) return { correct: null, correctAnswer: "" };
+    // The 3 MC options offered here (直角/等腰/等邊) are mutually
+    // exclusive picks for THIS question's own phrasing (unlike the
+    // letter-list format above, which allows a shape in multiple
+    // categories) -- priority: equilateral > isosceles-right > right >
+    // isosceles, matching how a real teacher would name the single most
+    // specific applicable category when forced to choose one word.
+    let correctCategory;
+    if (props.isEquilateral) correctCategory = "等邊";
+    else if (props.isRight) correctCategory = "直角";
+    else if (props.isIsosceles) correctCategory = "等腰";
+    else correctCategory = null; // scalene, none of the 3 offered options apply -- decline
+    if (!correctCategory) return { correct: null, correctAnswer: "" };
+    const correct = answer.includes(correctCategory);
+    return { correct, correctAnswer: correct ? "" : correctCategory };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
+}
+
 const QUESTION_TYPE_HANDLERS = [
   {
     name: "multi_blank_math",
@@ -10918,6 +11032,28 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyTriangleSubtypeLetterQuestion(item, crop),
   },
   {
+    // Ticket 222 ("Pattern 7"): rectangle-cut-along-diagonal always
+    // produces 2 right triangles -- closed-form fact, no image needed.
+    name: "rectangle_diagonal_cut",
+    detect: (item) => isRectangleDiagonalCutQuestion(item),
+    verify: (item) => verifyRectangleDiagonalCut(item),
+  },
+  {
+    // Ticket 222 ("Pattern 7"): square-fold-cut-into-8 always produces
+    // isosceles triangles -- closed-form fact, no image needed.
+    name: "square_fold_cut_eight",
+    detect: (item) => isSquareFoldCutEightQuestion(item),
+    verify: (item) => verifySquareFoldCutEight(item),
+  },
+  {
+    // Ticket 222 ("Pattern 7"): hexagon-cut piece type -- reuses the
+    // same real polygon-geometry measurement as triangle_subtype_letter
+    // above, applied to a single named piece instead of a letter list.
+    name: "hexagon_cut_piece_type",
+    detect: (item) => isHexagonCutPieceTypeQuestion(item),
+    verifyVisual: (item, crop) => verifyHexagonCutPieceType(item, crop),
+  },
+  {
     // Ticket 198 (2026-09-30): see readAbacusColumnsFromPixels's own long
     // comment. isAbacusReadingQuestion shared with handleMark's bbox
     // fallback (findAbacusBbox's call site).
@@ -11812,6 +11948,12 @@ async function handleMark(request, env) {
         // just above -- reuses the exact same lettered-shapes-grid bbox
         // strategy, since both question shapes crop the same kind of
         // "several shapes labelled A, B, C..." diagram.
+        return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      if (isHexagonCutPieceTypeQuestion(item)) {
+        // Same reasoning as triangle_subtype_letter just above -- the
+        // cut-apart lettered pieces (A, B, C, D) are the same kind of
+        // diagram findLetterGridBbox was built for.
         return findLetterGridBbox(pr.vision.words, pr.vision.width, pr.vision.height);
       }
       if (isAbacusReadingQuestion(item)) {
@@ -12790,6 +12932,12 @@ export {
   classifyPrintedTriangleSubtypeTarget,
   isTriangleSubtypeLetterQuestion,
   verifyTriangleSubtypeLetterQuestion,
+  isRectangleDiagonalCutQuestion,
+  verifyRectangleDiagonalCut,
+  isSquareFoldCutEightQuestion,
+  verifySquareFoldCutEight,
+  isHexagonCutPieceTypeQuestion,
+  verifyHexagonCutPieceType,
   findLetterGridBbox,
   readAbacusColumnsFromPixels,
   isAbacusReadingQuestion,
