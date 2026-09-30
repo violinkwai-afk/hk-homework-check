@@ -440,3 +440,48 @@ test("extractCompassRoseMc: returns null when no marker line is present", () => 
   assert.equal(compassRoseMc, null);
   assert.equal(cleanedText, raw);
 });
+
+// Ticket 222 "reading comprehension marking criteria" continued
+// (2026-10-01): a real, severe bug found via a real OCR call against a
+// genuinely BLANK exam page (no student handwriting at all) -- the
+// model HALLUCINATED plausible-looking answers for every MC/bracket/
+// grammar-cloze blank instead of reporting them empty, directly
+// violating OCR_ONLY_PROMPT's own explicit "never compute an answer to
+// substitute for missing handwriting" rule. Two of the hallucinated
+// guesses were independently confirmed WRONG (not just "computed, but
+// happened to be right") -- this was actively fabricating grading data,
+// not a benign no-op. Real captured raw text BEFORE and AFTER the fix
+// (added an explicit blank-token worked example + named MC/bracket/
+// grammar-cloze formats directly, since those are exactly where this
+// was observed) -- both re-runs used the exact same real photo.
+test("Ticket 222 real regression (pre-fix raw shape): hallucinated MC/bracket answers on a blank exam must not be silently trusted as real answers", () => {
+  // Captured 2026-10-01 via a real OCR call on a genuinely blank
+  // "Complete the conversation" dialogue-matching exam page -- the
+  // model invented letters B and A for items 2 and 3 where the actual
+  // logically-correct answers are A and C respectively (confirmed by
+  // independent reasoning about the dialogue) -- i.e. it wasn't just
+  // computing the right answer, it computed a WRONG one and reported
+  // it as if read from the page.
+  const raw = "1=Wesley : 1 ( )|D,2=Joey : I am sorry to hear that. 2 ( )|C,3=Joey : 3 ( )|A,4=Joey : 4 ( )|B,5=Joey : 5 ( )|F,6=Wesley : 6 ( )|E";
+  const items = mod.parseOcrLine(raw);
+  assert.equal(items.length, 6);
+  // Documents the bug shape itself (parseOcrLine correctly parses
+  // whatever text it's given -- the bug was upstream, in the model
+  // filling in "C"/"A" here instead of leaving them empty). Kept as a
+  // regression fixture so a future OCR_ONLY_PROMPT change can be
+  // checked against this exact real failure shape.
+  assert.equal(items[1].studentAnswer, "C"); // hallucinated -- real correct answer for this blank is A
+  assert.equal(items[2].studentAnswer, "A"); // hallucinated -- real correct answer for this blank is C
+});
+
+test("Ticket 222 real regression (post-fix raw shape): the same blank exam page now correctly reports every blank as genuinely empty", () => {
+  // Captured 2026-10-01, same real photo, after strengthening
+  // OCR_ONLY_PROMPT with an explicit "leave the '|' with nothing after
+  // it" worked example.
+  const raw = "1=Joey : Good morning, Wesley. How are you? Wesley : 1 ( )|,2=Joey : I am sorry to hear that. 2 ( )|,3=Joey : 3 ( )|,4=Joey : 4 ( )|,5=Joey : 5 ( )|,6=Joey : 6 ( )|";
+  const items = mod.parseOcrLine(raw);
+  assert.equal(items.length, 6);
+  for (const item of items) {
+    assert.equal(item.studentAnswer, "", `item ${item.label} must be genuinely empty, not a computed guess`);
+  }
+});
