@@ -1071,3 +1071,12 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 - ✅ **已接落生產環境。** 用戶問「How would you 逐條驗證内部邏輯」,直接攞返「3下A 數作業.pdf」入面真實題目去試`classifyAndVerify()`嘅時候,搵到一個真bug:`verifyWordProblemTotal`本身用嚟判斷「兩個數加埋等於總數」呢種題型(例如「農場有雞X隻,鴨Y隻,一共幾多隻」),但當題目其實係「相對比較」形式(例如「雞比鴨多几隻」)嗰陣,呢個handler照樣當成普通加總嚟計,計出嚟嘅「正確答案」其實係錯嘅。
   修法:喺`verifyWordProblemTotal`入面加多一個guard——見到`/比.{0,10}(多|少)/`呢種relative-comparison字眼,直接return `{correct:null}`(即係唔識判斷,交返俾AI fallback),唔再用個錯嘅加總邏輯屈啲判斷出嚟。
   已加2個新測試喺`test/new-question-types.test.js`,確認個guard生效。已push(commit 822ca27)。
+
+## 2026年9月30號：Ticket 222——三角形子類型分類（睇印刷圖形）
+
+- ✅ **已接落生產環境(commit 7221da7)。** 真citation：小學數學新思維3下A作業page18/20/25，「觀察以下各[平面圖形/三角形]，把所有代表答案的英文字母填在橫線上。等邊三角形：___ 等腰直角三角形：___ 不等邊三角形：___」。用返Ticket204(梯形分類)已經驗證嘅做法——攞`readShapeClassificationFromPixels`已有嘅每個形狀多邊形頂點座標(`.points`)，度返真實邊長/角度，判斷等邊/等腰/直角/等腰直角/不等邊。
+  真測試(用page18真實圖，唔涉及AI/OCR，純本地像素運算)搵到並修好2個真bug：(1)每個形狀入面印住嘅英文字母標籤(A、B、C...)本身會被當做獨立嘅細blob，混入128個雜訊blob入面，搞亂咗按讀圖順序對應返A、B、C...嘅邏輯——加咗個相對面積篩選(細過最大blob10%就唔理)解決。(2)輪廓簡化演算法有時會將一個真三角形讀成4個頂點嘅四邊形(因為多咗一個幾乎一線嘅雜訊頂點)——加咗個「四邊形入面如果得一個角接近180度，就當佢係雜訊頂點，摺埋做返三角形」嘅修復。兩個修復都刻意淨係加喺呢個新function入面，冇改動共用嘅`readShapeClassificationFromPixels`，避免影響到已經上緊生產嘅shape_classification_grid同trapezoid_type_letter。
+  真驗證：等邊三角形答案(C,E)同真實學生手寫答案完全脗合。另外仲喺production OCR prompt加咗一段「讀多個字母答案要逐個數清楚」嘅指示(額外預防措施，唔係已確認問題嘅fix——因為用嚟發現呢個問題嘅測試相原來係喺螢幕度打字，唔係真手寫，所以個「OCR讀錯」結論已收回)。
+  846/846測試通過(12個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響，用手動hunk isolation confirm過。
+
+**遺留嘅疑點(未解決，交低俾你)**：page18嘅④等腰直角三角形，真手寫答案係B，但code精確量度(角度43.5°/68.5°/68.0°，冇一個接近90°)顯示B其實冇直角；反而F先量度到接近90度直角(90.9°)兼等腰。呢個discrepancy未解決，冇假設邊個啱，你話事點處理。
