@@ -1918,6 +1918,81 @@ function extractPassageText(text) {
   return { passageText: m ? m[1].trim() : null, cleanedText };
 }
 
+// Ticket 222 "crossword grid-consistency" (2026-10-01, real citation:
+// 2022/2023 P2 General English First Examination, Part A -- "Complete
+// the crossword with the correct adjectives"). Real user insight: a
+// crossword answer can be PARTIALLY verified without any language
+// understanding at all -- a filled word's LENGTH must match its slot's
+// own cell count, and at every cell it shares with another already-
+// filled slot, both slots' letters at that shared cell must agree. This
+// can definitively catch a WRONG answer (length mismatch or letter
+// conflict) with zero semantic judgment -- pure grid geometry -- but can
+// NEVER confirm an answer is the intended one (a structurally-consistent
+// word could still be the wrong adjective for the clue, e.g. a
+// different-but-equally-4-letter adjective that happens to share the
+// same crossing letters). Kept strictly as a pre-filter: catches some
+// real errors for free; anything it can't disprove still needs the real
+// AI-fallback judge as before, same "decline rather than guess"
+// discipline as every other handler in this file.
+//
+// NOT YET WIRED to a real OCR extraction or a QUESTION_TYPE_HANDLERS
+// entry -- this citation's real grid coordinates were never reliably
+// hand-measured from the photo (a chat screenshot, not a clean render),
+// and no real OCR test has confirmed a vision model can actually read a
+// crossword's cell/slot geometry accurately. This is the algorithm only,
+// proven against synthetic grid data mirroring this citation's real
+// clue COUNT and shape (6 slots, 2 real intersections per the photo's
+// own layout) -- shipping the OCR-extraction half needs its own
+// real-photo verification pass before being trusted, per this project's
+// hard rule (Tier V: verify on real questions, not just synthetic
+// cases) -- disclosed explicitly rather than silently assumed to work.
+function parseCrosswordGrid(text) {
+  const slots = {};
+  for (const entry of String(text || "").split(";")) {
+    const m = entry.trim().match(/^(\w+)=(across|down)@(\d+),(\d+):(\d+)$/);
+    if (!m) continue;
+    const [, num, dir, row, col, len] = m;
+    slots[num] = { direction: dir, row: Number(row), col: Number(col), length: Number(len) };
+  }
+  return slots;
+}
+
+function crosswordSlotCells(slot) {
+  const cells = [];
+  for (let i = 0; i < slot.length; i++) {
+    cells.push(slot.direction === "across" ? [slot.row, slot.col + i] : [slot.row + i, slot.col]);
+  }
+  return cells;
+}
+
+// fills: { slotNumber: word }. Returns an array of conflict objects
+// (empty array = structurally consistent, NOT the same as "confirmed
+// correct" -- see the long comment above).
+function checkCrosswordConsistency(slots, fills) {
+  const conflicts = [];
+  const cellLetters = new Map(); // "row,col" -> { slotNum, letter }
+  for (const [num, rawWord] of Object.entries(fills)) {
+    const slot = slots[num];
+    const word = String(rawWord || "").trim();
+    if (!slot || !word) continue;
+    if (word.length !== slot.length) {
+      conflicts.push({ slot: num, reason: "length_mismatch", expectedLength: slot.length, gotLength: word.length });
+      continue;
+    }
+    crosswordSlotCells(slot).forEach(([r, c], i) => {
+      const key = `${r},${c}`;
+      const letter = word[i].toLowerCase();
+      const existing = cellLetters.get(key);
+      if (existing && existing.letter !== letter) {
+        conflicts.push({ slot: num, reason: "letter_conflict", withSlot: existing.slotNum, cell: key, gotLetter: letter, expectedLetter: existing.letter });
+      } else if (!existing) {
+        cellLetters.set(key, { slotNum: num, letter });
+      }
+    });
+  }
+  return conflicts;
+}
+
 // Ticket 222 "Pattern 5" (2026-09-30): extracts an optional set of
 // printed stick/rod length labels (see OCR_ONLY_PROMPT's own
 // instruction below) -- real citation: 小學數學新思維 3下A 作業, footer
@@ -13075,6 +13150,9 @@ export {
   isTriangleFactTrueFalseQuestion,
   verifyTriangleFactTrueFalse,
   extractStickLengths,
+  parseCrosswordGrid,
+  crosswordSlotCells,
+  checkCrosswordConsistency,
   isTriangleFormableFromSticksQuestion,
   verifyTriangleFormableFromSticks,
   isMaxObtuseAngleInTriangleQuestion,
