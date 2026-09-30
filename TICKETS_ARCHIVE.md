@@ -1180,3 +1180,10 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   **你再問咗一個好關鍵嘅validate問題**：「4個blank同一句,每次淨係問Jev一個岩唔岩,得唔得？」——搵到呢個做法本身仲有個漏洞：砌返嘅完整句子有4個一模一樣嘅"____"，Jev/AI-fallback冇辦法知道邊一個先係而家問緊嗰個。新增`displayPrintedQuestionForJudge`——淨係俾Jev/AI-fallback睇嗰陣，將真正問緊嗰個blank標出嚟，其他blank維持正常"____"；code自己判斷用嘅printedQuestion唔受影響。
   **跟住你提出一個仲好嘅做法**：唔好淨係留返"____"喺其他blank度，不如將其他blank都填返學生自己嗰題嘅真答案(反正已經有齊料，零額外成本)，得返而家問緊嗰個用方括號括住——咁樣Jev/AI-fallback睇到嘅係一句完整、讀得通嘅英文句子("The party is【from】nine thirty in the morning to seven thirty in the evening.")，唔係得返一堆斷斷續續嘅blank。已經改咗做呢個版本。
   940/940測試通過(11個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：修好Jev喺「字砌句」題目度嘅真錯判
+
+- ✅ **已接落生產環境(commit ddc22fa)。** 你問「點解Jev啲『字砌問句』題咁唔準」，跟查落去搵到真原因：嗰版worksheet「Rearrange the words to form questions. Follow the example.」自己個印刷版面本身有印「Q: ... A: ...」呢啲字，OCR照抄晒落嚟——結果學生嘅成句答案喺printedQuestion入面同studentAnswer入面各出現一次，仲夾埋一句冇關嘅「A: 俾定嘅答案」，搞到Jev睇到好似「矛盾」噉，將一條相入面明明有✓嘅真啱答案("When is New Year?")判做錯(noul=0.04)。
+  修法分兩步：(1)`stripWorkedExampleEcho`——當印刷題目入面嘅「Q:」部分同學生答案幾乎一樣先至剝走個「Q:/A:」尾巴,淨返俾學生嘅亂序詞語；(2)`buildWordRearrangementHint`——就算剝完，淨係得返亂序詞語都仲會誤導Jev以為係「填空題」，所以加多句解釋話俾Jev知呢題係「將呢堆詞砌返成一句」，唔係問緊嘢嘅句子。
+  另一張唔同嘅相(modals_canCant嘅word-order題)本身冇呢個「Q:/A:」印刷噪音,confirm咗呢個修法唔會影響冇呢個問題嘅相。
+  949/949測試通過(9個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
