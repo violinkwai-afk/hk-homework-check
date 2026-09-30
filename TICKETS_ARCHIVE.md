@@ -1158,3 +1158,9 @@ TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
   - 「My uncle watches TV__midnight.」/「bo」：Jev noul=0.12(差0.02就到confident-wrong門檻)——呢條code handler自己嘅detect/verify都會拒收(因為「bo」根本唔喺on/in/at/from/to呢個名單入面)，所以新起咗`buildPrepositionTimeHint`專門補呢種情況：唔理學生答案係乜，淨係靠blank後面跟住嘅字判斷「呢度應該係咩類型嘅介詞」，包裝成「僅供參考,你要自己核實」嘅提示句，加落Jev prompt度。
   將原本喺verifyPrepositionOfTime入面嘅分類邏輯抽出成`classifyPrepositionOfTimeExpected`，畀verify()同新hint function共用，冇重複邏輯。
   928/928測試通過(5個新)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
+
+## 2026年10月1號：修好真accuracy bug——conjunction_fill「兩個否定句」嘅"or"估錯咗
+
+- ✅ **已接落生產環境(commit 220e6d5)，優先級高(真accuracy問題)。** 起源：影相編排返9張英文功課相諗住做全pipeline測試嗰陣，先睇晒9張相內容，搵到一個同一頁入面嘅矛盾example——之前確立「兩個子句都否定→or」條rule嘅citation嗰2張相入面，其中一張("Linking word (2)"呢個單元嘅letter-completion page)嘅**另一個練習**(頁頂「Rewrite the sentences using and/but/or」)入面：「I don't like dolls. I don't like teddy bears.」真老師批改嘅啱答案係「I don't like dolls **and** teddy bears.」——兩個子句都係否定，但真啱答案係「and」唔係「or」，直接同之前個rule矛盾。
+  由於`verifyConjunctionFill`得返(clauseA, clauseB, studentAnswer)呢啲資訊，分唔出邊種練習形式，所以安全做法係：兩個都否定嘅情況而家改做decline(null)，唔再confident噉答"or"。兩個都肯定→and、一肯一否→but呢兩種冇搵到反例，維持confident。
+  929/929測試通過(改咗5個舊test反映新行為)，已push。Ticket212(pegboard)嘅獨立未commit工作全程無受影響。
