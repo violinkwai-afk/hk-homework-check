@@ -5968,6 +5968,69 @@ function verifyEquationTruthMC(printedQuestion, studentAnswer) {
   return { correct, correctAnswer: correct ? "" : expectedLetter };
 }
 
+// Ticket 222 "Pattern 1: estimation MC" (2026-10-01, real citations,
+// re-verified 2026-10-01 against the actual real pages after the
+// original archive citations turned out wrong: 小學數學新思維 3下A 作業,
+// footer p.2 Q10 ("表哥原有4105元，他做兼職賺得1070元後，用2899元買了
+// 一部遊戲機。以下哪道算式最適合用來估算他還餘多少元？" -> D.
+// 4000+1000-3000) and footer p.10 Q7 ("以下哪道算式最適合用來估算
+// (205+497)×3的結果？" -> B. (200+500)×3). Closed rule, no judgment:
+// round EACH number in the original printed expression to its own
+// leading-digit place value (a 4-digit number -> nearest thousand, a
+// 3-digit number -> nearest hundred, matching both real citations'
+// rounding precision exactly), keep every operator/paren unchanged,
+// and the MC option whose numbers match that rounded sequence (same
+// structure, same order) is the answer -- a pure token-level transform
+// + string comparison, never "which option feels like a good estimate."
+function roundToLeadingDigit(n) {
+  const s = String(Math.abs(Math.trunc(n)));
+  const place = Math.pow(10, s.length - 1);
+  return Math.round(n / place) * place;
+}
+
+function tokenizeArithmeticExpr(expr) {
+  const tokens = [];
+  const re = /\d+|[+\-×x*÷/()]/g;
+  let m;
+  while ((m = re.exec(String(expr)))) {
+    if (/^\d+$/.test(m[0])) tokens.push({ type: "num", value: Number(m[0]) });
+    else tokens.push({ type: "op", value: (m[0] === "x" || m[0] === "*") ? "×" : (m[0] === "/" ? "÷" : m[0]) });
+  }
+  return tokens;
+}
+
+function exprTokensToKey(tokens) {
+  return tokens.map((t) => (t.type === "num" ? String(t.value) : t.value)).join("");
+}
+
+function isEstimationMcQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  if (!/估算/.test(printed)) return false;
+  return parseMcOptions(printed).length >= 2;
+}
+
+function verifyEstimationMc(item) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim().toUpperCase();
+  if (!answer || !isEstimationMcQuestion(item)) return { correct: null, correctAnswer: "" };
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  // The original expression to estimate sits between "估算" and either
+  // "的結果" or a "?"/"？" -- both real citations match this shape.
+  const m = printed.match(/估算\s*([\d+\-×x*÷/()\s]+?)\s*(?:的結果)?\s*[?？]/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const originalTokens = tokenizeArithmeticExpr(m[1]);
+  if (!originalTokens.some((t) => t.type === "num")) return { correct: null, correctAnswer: "" };
+  const roundedTokens = originalTokens.map((t) => (t.type === "num" ? { type: "num", value: roundToLeadingDigit(t.value) } : t));
+  const expectedKey = exprTokensToKey(roundedTokens);
+
+  const matches = options.filter((o) => exprTokensToKey(tokenizeArithmeticExpr(o.text)) === expectedKey);
+  if (matches.length !== 1) return { correct: null, correctAnswer: "" }; // ambiguous or no option matches -- decline rather than guess
+  const expectedLetter = matches[0].letter;
+  const correct = answer === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 // Ticket 216 (2026-09-30, real citation: 小學數學新思維 3下A 作業 p.21
 // (rendered PDF page math3xa_pdf/p22.png), instruction "以下句子是正確
 // 的，在圈內加✓；不正確的加✗。":
@@ -11448,6 +11511,13 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyEquationTruthMC(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Ticket 222 "Pattern 1: estimation MC" (2026-10-01): which
+    // rounded-number expression best estimates the original expression.
+    name: "estimation_mc",
+    detect: (item) => isEstimationMcQuestion(item),
+    verify: (item) => verifyEstimationMc(item),
+  },
+  {
     // Ticket 216 (2026-09-30): triangle-hierarchy true/false fact table.
     name: "triangle_fact_true_false",
     detect: (item) => isTriangleFactTrueFalseQuestion(item),
@@ -13273,6 +13343,11 @@ export {
   verifyCompoundMultiplierWordProblem,
   verifyMinFromTwoCapacityConstraints,
   verifyEquationTruthMC,
+  roundToLeadingDigit,
+  tokenizeArithmeticExpr,
+  exprTokensToKey,
+  isEstimationMcQuestion,
+  verifyEstimationMc,
   classifyTriangleFactStatement,
   normalizeCheckMark,
   isTriangleFactTrueFalseQuestion,
