@@ -1632,3 +1632,25 @@ P3-P4、P5-P6三段都有直接Read)。搵到幾個之前grep漏咗嘅新知識,
 
 全部5項都加咗`test/mark.test.js`/`test/shape-classification.test.js`
 regression test。全repo1103→1108條test,全部pass。
+
+## 2026-10-03(續18)— 圓形「邊條線係直徑」MC題:結論係code解唔到,唔啱起contract
+
+跟進之前擱置嗰個候選項目(「邊條線先係直徑」)。搜索咗全部37份提到
+「直徑」嘅TSA 6年級MC paper,搵到真實重複pattern:「下圖中，O是圓心，
+X、Y、Z是圓周上的點...下列哪條直線是直徑？A. AB B. OB C. BC D. CA」
+(TSA2016_6MC4 Q24(c)、TSA2015_6MC1/6MC2「A.PY B.XY C.YZ D.ZO」、
+TSA2018_6MC1/6MC2、2012_TSA_6MC3/6MC4等多份都有類似版本)。
+
+**結論：呢個title唔啱起code contract。** 同之前3個零圖像圓形事實
+(isTwoRadiiTriangleType/diameterIsTwiceRadius/centreSegmentIsRadius)
+唔同——嗰3個淨係靠文字(「O是圓心」+某線段名)就可以100%判斷答案,唔
+需要睇真實圖像座標。但「邊條線先係直徑」呢題嘅答案取決於圖中每個
+標籤點(X、Y、Z、O)嘅實際像素位置——即邊兩點加埋圓心係一條直線,邊
+兩點淨係喺圓周上(弦)——呢個資訊喺平面PDF文字抽取完全冇保留(OCR
+marker contract都幫唔到,因為「判斷邊條線過咗圓心」本身就係要睇圖
+嗰個視覺幾何判斷,同PIE_CHART嗰種「淨係讀印刷數字」性質唔同——起
+marker contract只係將判斷轉嫁俾vision model自己讀圖個步驟,冇實際
+減低風險或者增加準繩度)。即係話,呢題應該直接留俾AI fallback(佢本身
+已經睇到真實相片),起code冇額外價值。已經confirm現有138個handler
+入面冇一個會誤判(detect)中呢個真實citation,正確fall through去AI
+fallback，null dispatch。
