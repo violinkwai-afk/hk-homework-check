@@ -997,3 +997,70 @@ test("isCentreSegmentIsRadiusQuestion: does not fire on an unrelated blank with 
   const unrelated = "下圖中，O 點是圓心。 (a)  XY 是圓的 ________________。";
   assert.equal(worker.isCentreSegmentIsRadiusQuestion({ printedQuestion: unrelated }), false);
 });
+
+// English-coverage audit (2026-10-03): the user explicitly asked whether
+// written code was verified against real English-medium papers too.
+// Resolved the earlier blocker -- TSA's "6ME" series is the official
+// English translation of the matching "6MC" Chinese paper, confirmed by
+// reading `tsa/2024/p6_paper_TSA2024_6ME1.pdf`'s own cover page. These 3
+// English citations are the exact translated equivalents of the 3
+// Chinese ones above: `tsa/2016/TSA2016_6ME1.pdf` Q28, `6ME2.pdf` Q31,
+// and `tsa/2013/TSA2013_6ME2.pdf` Q33 -- empirically confirmed (before
+// this fix) that all 3 Chinese-only detect()s silently fell through to
+// AI fallback on these, despite citing the exact same real exam question.
+const RADII_ISOSCELES_Q_EN = "A teacher drew a triangle and a circle. O is the centre of the circle. (a) The teacher drew * a right-angled / an isosceles / an equilateral triangle. (*Circle the answer)";
+const RADII_EQUILATERAL_Q_EN = "A teacher drew a triangle and a circle. O is the centre of the circle. OA and AB are equal in length. (a) The teacher drew * a right-angled / an isosceles / an equilateral triangle.";
+
+test("verifyTwoRadiiTriangleType: English citation (tsa/2016/TSA2016_6ME1.pdf Q28), correct answer is isosceles", () => {
+  const r = worker.verifyTwoRadiiTriangleType({ printedQuestion: RADII_ISOSCELES_Q_EN, studentAnswer: "isosceles" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyTwoRadiiTriangleType: English citation, wrong answer 'equilateral' declined as incorrect", () => {
+  const r = worker.verifyTwoRadiiTriangleType({ printedQuestion: RADII_ISOSCELES_Q_EN, studentAnswer: "equilateral" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "isosceles");
+});
+
+test("verifyTwoRadiiTriangleType: English citation with 'OA and AB are equal in length' -> correct answer is equilateral", () => {
+  const r = worker.verifyTwoRadiiTriangleType({ printedQuestion: RADII_EQUILATERAL_Q_EN, studentAnswer: "equilateral" });
+  assert.equal(r.correct, true);
+});
+
+test("two_radii_triangle_type handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: RADII_ISOSCELES_Q_EN, studentAnswer: "isosceles" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "two_radii_triangle_type");
+});
+
+const DIAMETER_TWICE_Q_EN = "A teacher drew a triangle and a circle. O is the centre of the circle. OA and AB are equal in length. (b) The diameter of the circle is ___________ times the length of OA.";
+
+test("verifyDiameterIsTwiceRadius: English citation (tsa/2016/TSA2016_6ME2.pdf Q31b), correct answer", () => {
+  const r = worker.verifyDiameterIsTwiceRadius({ printedQuestion: DIAMETER_TWICE_Q_EN, studentAnswer: "2" });
+  assert.equal(r.correct, true);
+});
+
+test("diameter_is_twice_radius handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: DIAMETER_TWICE_Q_EN, studentAnswer: "2" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "diameter_is_twice_radius");
+});
+
+const CENTRE_SEGMENT_Q_EN = "In the figure below, O is the centre. (a) OY is the ________________ of the circle.";
+
+test("verifyCentreSegmentIsRadius: English citation (tsa/2013/TSA2013_6ME2.pdf Q33a), correct answer", () => {
+  const r = worker.verifyCentreSegmentIsRadius({ printedQuestion: CENTRE_SEGMENT_Q_EN, studentAnswer: "radius" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyCentreSegmentIsRadius: English citation, wrong answer (diameter)", () => {
+  const r = worker.verifyCentreSegmentIsRadius({ printedQuestion: CENTRE_SEGMENT_Q_EN, studentAnswer: "diameter" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "radius");
+});
+
+test("centre_segment_is_radius handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CENTRE_SEGMENT_Q_EN, studentAnswer: "radius" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "centre_segment_is_radius");
+});

@@ -1654,3 +1654,27 @@ marker contract只係將判斷轉嫁俾vision model自己讀圖個步驟,冇實�
 已經睇到真實相片),起code冇額外價值。已經confirm現有138個handler
 入面冇一個會誤判(detect)中呢個真實citation,正確fall through去AI
 fallback，null dispatch。
+
+## 2026-10-03(續19)— 解決「英文版覆蓋」methodology blocker + 修正3個今日新handler
+
+之前擱置嗰個task(覆核~130條舊中文verify function嘅英文覆蓋率)一直
+卡住,因為唔知點樣搵到每條中文題嘅真實英文對應版本。今日解決咗:確認
+咗TSA嘅「6ME」系列就係對應「6MC」中文卷嘅**官方英文翻譯版**(同一次
+考試,同一條題號,一對一翻譯)——直接讀`tsa/2024/p6_paper_TSA2024_6ME1.pdf`
+封面確認("6ME1...Mathematics")。
+
+即刻攞自己今日(續16)先頭寫嗰3個圓形幾何handler做試驗,搵返官方真實
+英文對應citation(`tsa/2016/TSA2016_6ME1.pdf`Q28、`6ME2.pdf`Q31、
+`tsa/2013/TSA2013_6ME2.pdf`Q33——分別係之前3個中文citation嘅官方
+翻譯)，直接試dispatch——**證實全部3個都係淨中文,完全冇反應,靜雞雞
+fall through去AI fallback**,即係話英文版學生做緊一樣嘅題,卻享受唔
+到code嗰層驗證(準繩度/成本都較低)。
+
+已經即刻修正呢3個handler,detect()加埋英文pattern,2個verify()(答案
+字串本身要分語言嘅)加埋英文判斷分支(第3個`verifyDiameterIsTwiceRadius`
+唔使改,因為答案係純數字,語言中立)。6條新英文regression test全部
+過。全repo1108→1117條test,全部pass。
+
+呢個methodology依家已經unblock,其餘~127條舊中文verify function嘅
+英文覆蓋率audit仍然未做,屬於一個大型、重複性嘅工作,之後可以用同一
+個「搵6ME對應citation試dispatch」方法逐批繼續。

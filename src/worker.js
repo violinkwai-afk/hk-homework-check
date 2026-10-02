@@ -12180,15 +12180,40 @@ function verifySquareFoldCutEight(item) {
 // become equal -- real citation `tsa/2016/TSA2016_6MC2.txt` Q31(a) "OA
 // 和AB的長度相等。(a)老師畫了一個*直角/等腰/等邊*三角形。" -> official
 // answer "等邊" (`2016/TSA2016_6MC2_MS.pdf`).
+// English coverage audit (2026-10-03, prompted by the user's own direct
+// question about whether written code was verified against the real
+// English-medium equivalent papers -- previously paused on a methodology
+// question that's now resolved: TSA's "6ME" series IS the real official
+// English translation of the matching "6MC" Chinese paper, same exam,
+// same question numbers, 1:1 -- found by directly reading
+// `tsa/2024/p6_paper_TSA2024_6ME1.pdf`'s own cover page ("6ME1 ...
+// Mathematics"). Confirmed empirically that all 3 of these new
+// zero-image circle-geometry handlers were Chinese-only and silently
+// fell through to AI fallback on the real English equivalents (verified
+// against `tsa/2016/TSA2016_6ME1.pdf` Q28, `6ME2.pdf` Q31, and
+// `tsa/2013/TSA2013_6ME2.pdf` Q33 -- the exact English-translated
+// versions of the 3 Chinese citations these functions already cite).
+// Widened all 3 detect()s and the 2 verify()s whose expected-answer
+// string itself is language-dependent (TwoRadiiTriangleType and
+// CentreSegmentIsRadius -- DiameterIsTwiceRadius needs no change since
+// its answer is a bare number, language-independent once detected).
 function isTwoRadiiTriangleTypeQuestion(item) {
   const text = String(item.printedQuestion || "").replace(/\s+/g, "");
-  return /O(?:是|點是)圓心/.test(text) && /直角[\/／]等腰[\/／]等邊/.test(text) && /三角形/.test(text);
+  const zh = /O(?:是|點是)圓心/.test(text) && /直角[\/／]等腰[\/／]等邊/.test(text) && /三角形/.test(text);
+  const en = /Oisthecentre/i.test(text) && /right-angled/i.test(text) && /isosceles/i.test(text) && /equilateral/i.test(text) && /triangle/i.test(text);
+  return zh || en;
 }
 function verifyTwoRadiiTriangleType(item) {
   if (!isTwoRadiiTriangleTypeQuestion(item)) return { correct: null, correctAnswer: "" };
   const text = String(item.printedQuestion || "").replace(/\s+/g, "");
   const answer = String(item.studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/[一-鿿]/.test(text)) {
+    const expected = /equalinlength/i.test(text) ? "equilateral" : "isosceles";
+    const lower = answer.toLowerCase();
+    const correct = lower.includes(expected) && !(expected === "isosceles" && lower.includes("equilateral"));
+    return { correct, correctAnswer: correct ? "" : expected };
+  }
   const expected = /長度相等/.test(text) ? "等邊" : "等腰";
   const correct = answer.includes(expected) && !(expected === "等腰" && /等邊/.test(answer));
   return { correct, correctAnswer: correct ? "" : expected };
@@ -12201,7 +12226,9 @@ function verifyTwoRadiiTriangleType(item) {
 // answer "2" (`2016/TSA2016_6MC2_MS.pdf`).
 function isDiameterIsTwiceRadiusQuestion(item) {
   const text = String(item.printedQuestion || "");
-  return /O\s*(?:是|點是)\s*圓心/.test(text) && /圓的直徑是[\s\S]{0,10}長度的\s*(?:_{2,}|＿{2,})?\s*倍/.test(text);
+  const zh = /O\s*(?:是|點是)\s*圓心/.test(text) && /圓的直徑是[\s\S]{0,10}長度的\s*(?:_{2,}|＿{2,})?\s*倍/.test(text);
+  const en = /O\s*is\s*the\s*centre/i.test(text) && /diameter\s*of\s*the\s*circle\s*is[\s\S]{0,25}times\s*the\s*length\s*of/i.test(text);
+  return zh || en;
 }
 function verifyDiameterIsTwiceRadius(item) {
   if (!isDiameterIsTwiceRadiusQuestion(item)) return { correct: null, correctAnswer: "" };
@@ -12221,15 +12248,27 @@ function verifyDiameterIsTwiceRadius(item) {
 // blank that happens to ask about some other line.
 function isCentreSegmentIsRadiusQuestion(item) {
   const text = String(item.printedQuestion || "");
-  const centreMatch = text.match(/([A-Z])\s*(?:是|點是)\s*圓心/);
-  if (!centreMatch) return false;
-  const re = new RegExp(`\\b${centreMatch[1]}[A-Z]\\s*是圓的\\s*(?:_{2,}|＿{2,})`);
-  return re.test(text);
+  const centreMatchZh = text.match(/([A-Z])\s*(?:是|點是)\s*圓心/);
+  if (centreMatchZh) {
+    const re = new RegExp(`\\b${centreMatchZh[1]}[A-Z]\\s*是圓的\\s*(?:_{2,}|＿{2,})`);
+    if (re.test(text)) return true;
+  }
+  const centreMatchEn = text.match(/([A-Z])\s*is\s*the\s*centre/i);
+  if (centreMatchEn) {
+    const re = new RegExp(`\\b${centreMatchEn[1]}[A-Z]\\s*is\\s*the\\s*(?:_{2,}|＿{2,})\\s*of\\s*the\\s*circle`, "i");
+    if (re.test(text)) return true;
+  }
+  return false;
 }
 function verifyCentreSegmentIsRadius(item) {
   if (!isCentreSegmentIsRadiusQuestion(item)) return { correct: null, correctAnswer: "" };
   const answer = String(item.studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/[一-鿿]/.test(String(item.printedQuestion || ""))) {
+    const lower = answer.toLowerCase();
+    const correct = lower.includes("radius") && !/diameter|circumference/.test(lower);
+    return { correct, correctAnswer: correct ? "" : "radius" };
+  }
   const correct = answer.includes("半徑") && !/直徑|圓周/.test(answer);
   return { correct, correctAnswer: correct ? "" : "半徑" };
 }
