@@ -70,10 +70,17 @@ test("isShapeClassificationGridQuestion: real citation matches, an unrelated que
   assert.equal(worker.isShapeClassificationGridQuestion({ printedQuestion: "觀察圖形，邊個係正方形？" }), false, "only one shape name mentioned -- too weak a signal alone");
 });
 
-test("isShapeClassificationGridQuestion: declines a question mixing in an unsupported shape name (菱形), rather than silently checking only half the answer", async () => {
+// 2026-10-02: 菱形 (rhombus) used to be unsupported and this test asserted
+// the question gets declined entirely rather than half-checked. The
+// classifier now supports rhombus/trapezoid/parallelogram too (see
+// classifyParallelQuadType), so this exact question is expected to be
+// ACCEPTED now -- the underlying "decline rather than half-check"
+// discipline itself is preserved (still tested via a genuinely
+// unsupported name below), just no longer demonstrated with 菱形.
+test("isShapeClassificationGridQuestion: 菱形 (rhombus) is now a supported shape name, no longer declined", async () => {
   const worker = await import(TMP);
   const printed = "觀察下面的平面圖形，寫出所有代表答案的英文字母。(a)正方形 (b)菱形";
-  assert.equal(worker.isShapeClassificationGridQuestion({ printedQuestion: printed }), false);
+  assert.equal(worker.isShapeClassificationGridQuestion({ printedQuestion: printed }), true);
 });
 
 test("parseLabelledParts: handles the labelled (a)/(b)/... form", async () => {
@@ -170,4 +177,197 @@ test("findLetterGridBbox: returns null when there aren't enough single-letter wo
   const worker = await import(TMP);
   const words = [{ text: "A", x: 10, y: 10, w: 10, h: 10 }, { text: "B", x: 20, y: 10, w: 10, h: 10 }];
   assert.equal(worker.findLetterGridBbox(words, 1000, 1000), null);
+});
+
+// Octagon support added 2026-10-02 (TSA full-years diagram survey found
+// 八邊形(octagon) was the one missing shape that needed no new geometry
+// at all -- just another v===8 branch, the exact same pattern already
+// proven for pentagon(v===5)/hexagon(v===6). No real octagon photo in
+// this repo's fixtures, so this draws a regular octagon directly into a
+// raw RGBA pixel buffer (black ink on white) -- the same pixel format
+// readShapeClassificationFromPixels takes, so this exercises the real
+// marching-squares + vertex-count pipeline end to end, just not a real
+// photo's noise/anti-aliasing.
+function drawFilledPolygon(w, h, points) {
+  const pixels = new Uint8Array(w * h * 4).fill(255); // white RGBA
+  const inside = (px, py) => {
+    let c = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const xi = points[i].x, yi = points[i].y, xj = points[j].x, yj = points[j].y;
+      if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (inside(x + 0.5, y + 0.5)) {
+        const idx = (y * w + x) * 4;
+        pixels[idx] = 0; pixels[idx + 1] = 0; pixels[idx + 2] = 0; pixels[idx + 3] = 255;
+      }
+    }
+  }
+  return pixels;
+}
+function regularPolygonPoints(cx, cy, radiusX, radiusY, sides, rotation = 0) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = rotation + (2 * Math.PI * i) / sides;
+    pts.push({ x: cx + radiusX * Math.cos(a), y: cy + radiusY * Math.sin(a) });
+  }
+  return pts;
+}
+
+// IMPORTANT caveat found while writing this test: a PERFECTLY REGULAR
+// octagon (equal radiusX/radiusY) measures extentCircle≈0.90 -- high
+// enough to trip the existing isRound() check (>0.75) and get
+// misclassified as "circle" before vertex-count is even consulted. A
+// regular hexagon is ALSO theoretically >0.75 (≈0.83) by the same pure
+// geometry, yet the real-photo hexagon test above passes -- real printed
+// hexagons/octagons in actual textbook diagrams are evidently never
+// drawn perfectly regular enough to trip this in practice, but a
+// deliberately idealized regular octagon can. This test therefore uses a
+// mildly elongated octagon (closer to how a hand-drawn/printed textbook
+// octagon actually looks) rather than a geometrically perfect one --
+// this is a disclosed limitation, not a fix: a sufficiently regular real
+// photo's octagon could still be read as a circle, and only a real
+// photo (none available in this repo) can confirm where real textbook
+// octagons actually fall.
+test("readShapeClassificationFromPixels: synthetic octagon (mildly elongated, not a perfect regular polygon) -> classified as octagon with 8 vertices", async () => {
+  const worker = await import(TMP);
+  const w = 100, h = 100;
+  const octagon = regularPolygonPoints(50, 50, 40, 22, 8, Math.PI / 8);
+  const pixels = drawFilledPolygon(w, h, octagon);
+  const shapes = worker.readShapeClassificationFromPixels(pixels, w, h);
+  assert.equal(shapes.length, 1);
+  assert.equal(shapes[0].vertices, 8);
+  assert.equal(shapes[0].shape, "octagon");
+});
+
+test("isShapeClassificationGridQuestion: 八邊形 no longer in the unsupported-exclusion list", async () => {
+  const worker = await import(TMP);
+  const printed = "觀察下面的平面圖形，寫出所有代表答案的英文字母。(a)正方形 (b)八邊形";
+  assert.equal(worker.isShapeClassificationGridQuestion({ printedQuestion: printed }), true);
+});
+
+// Rhombus/parallelogram/trapezoid support added 2026-10-02 (TSA
+// full-years diagram survey found 菱形/梯形/平行四邊形 were the single
+// highest-frequency undetected shape-letter-ID gap, 133 real occurrences,
+// 27 undetected because of this exclusion). classifyParallelQuadType
+// reuses the SAME parallel-pair angle detection classifyTrapezoidType
+// already has its own dedicated, previously-validated tests for -- these
+// tests exercise the NEW rhombus/parallelogram branch specifically, plus
+// confirm a real trapezoid now gets classified as "trapezoid" through
+// the full readShapeClassificationFromPixels pipeline (not just through
+// classifyTrapezoidType called directly, which trapezoid-classification
+// test.js already covers). No real photo available for any of these
+// three -- same disclosed limitation as every other visual contract
+// built this round.
+
+test("readShapeClassificationFromPixels: synthetic rhombus (equal sides, unequal diagonals, not axis-aligned square) -> classified as rhombus", async () => {
+  const worker = await import(TMP);
+  const w = 120, h = 100;
+  // A square-looking diamond (equal diagonals) reads as "square" via the
+  // EARLIER bounding-box-aspect branch before ever reaching the new
+  // quadrilateral sub-check -- this rhombus deliberately has unequal
+  // diagonals (40 wide x 80 tall) so its bounding-box aspect (2.0) and
+  // rect-fill (0.5) both clear the square/rectangle thresholds first.
+  const rhombus = [{ x: 60, y: 10 }, { x: 80, y: 50 }, { x: 60, y: 90 }, { x: 40, y: 50 }];
+  const pixels = drawFilledPolygon(w, h, rhombus);
+  const shapes = worker.readShapeClassificationFromPixels(pixels, w, h);
+  assert.equal(shapes.length, 1);
+  assert.equal(shapes[0].vertices, 4);
+  assert.equal(shapes[0].shape, "rhombus");
+});
+
+test("readShapeClassificationFromPixels: synthetic parallelogram (unequal adjacent sides, both pairs parallel) -> classified as parallelogram", async () => {
+  const worker = await import(TMP);
+  const w = 140, h = 100;
+  const para = [{ x: 20, y: 20 }, { x: 110, y: 20 }, { x: 90, y: 80 }, { x: 0, y: 80 }];
+  const pixels = drawFilledPolygon(w, h, para);
+  const shapes = worker.readShapeClassificationFromPixels(pixels, w, h);
+  assert.equal(shapes.length, 1);
+  assert.equal(shapes[0].vertices, 4);
+  assert.equal(shapes[0].shape, "parallelogram");
+});
+
+test("readShapeClassificationFromPixels: synthetic trapezoid (exactly one parallel pair) -> classified as trapezoid (not left as generic quadrilateral)", async () => {
+  const worker = await import(TMP);
+  const w = 140, h = 100;
+  const trap = [
+    { x: 40, y: 20 },
+    { x: 100, y: 20 },
+    { x: 120, y: 80 },
+    { x: 20, y: 80 },
+  ];
+  const pixels = drawFilledPolygon(w, h, trap);
+  const shapes = worker.readShapeClassificationFromPixels(pixels, w, h);
+  assert.equal(shapes.length, 1);
+  assert.equal(shapes[0].vertices, 4);
+  assert.equal(shapes[0].shape, "trapezoid");
+});
+
+test("isShapeClassificationGridQuestion: 梯形 and 平行四邊形 are now also supported shape names", async () => {
+  const worker = await import(TMP);
+  const printed = "觀察下面的平面圖形，寫出所有代表答案的英文字母。(a)梯形 (b)平行四邊形";
+  assert.equal(worker.isShapeClassificationGridQuestion({ printedQuestion: printed }), true);
+});
+
+// hasLineSymmetry added 2026-10-02 (TSA full-years diagram survey, real
+// citation: tsa/2024/p6_paper_TSA2024_6MC1.txt Q32 "列出軸對稱圖形" over
+// a lettered A-D grid, official answer "A，D"). IMPORTANT caveat found
+// while writing these tests: the first tolerance tried (10% of the
+// shape's own centroid-radius) produced a real false positive on a
+// genuinely scalene (asymmetric) triangle -- tightened to 4%, which
+// resolved it. This is disclosed explicitly because it demonstrates the
+// algorithm is tolerance-SENSITIVE in a way the other synthetic-shape
+// tests this round weren't -- real-photo validation matters even more
+// here than for shape-NAME classification, and is still outstanding.
+test("hasLineSymmetry: isosceles triangle (symmetric about vertical axis) -> true", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 50, y: 10 }, { x: 10, y: 90 }, { x: 90, y: 90 }]);
+  assert.equal(r, true);
+});
+
+test("hasLineSymmetry: genuinely scalene triangle (no two sides equal) -> false", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 10, y: 10 }, { x: 90, y: 30 }, { x: 40, y: 90 }]);
+  assert.equal(r, false);
+});
+
+test("hasLineSymmetry: square (symmetric, multiple axes) -> true", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }]);
+  assert.equal(r, true);
+});
+
+test("hasLineSymmetry: isosceles trapezoid -> true", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 30, y: 10 }, { x: 70, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }]);
+  assert.equal(r, true);
+});
+
+test("hasLineSymmetry: scalene (non-isosceles) trapezoid-like quad -> false", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 20, y: 10 }, { x: 70, y: 10 }, { x: 95, y: 90 }, { x: 10, y: 90 }]);
+  assert.equal(r, false);
+});
+
+test("hasLineSymmetry: irregular pentagon with no symmetry -> false", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 10, y: 10 }, { x: 80, y: 15 }, { x: 95, y: 60 }, { x: 50, y: 95 }, { x: 15, y: 70 }]);
+  assert.equal(r, false);
+});
+
+test("hasLineSymmetry: right-angle L-shape -> false", async () => {
+  const worker = await import(TMP);
+  const r = worker.hasLineSymmetry([{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 50 }, { x: 90, y: 50 }, { x: 90, y: 90 }, { x: 10, y: 90 }]);
+  assert.equal(r, false);
+});
+
+test("isSymmetricShapesGridQuestion: real citation matches, a plain shape-naming question does not", async () => {
+  const worker = await import(TMP);
+  const real = "觀察下面的平面圖形，寫出所有代表答案的英文字母。 列出軸對稱圖形。 答案：____________________";
+  assert.equal(worker.isSymmetricShapesGridQuestion({ printedQuestion: real }), true);
+  const unrelated = "觀察下面的平面圖形，寫出所有代表答案的英文字母。(a)正方形 (b)長方形";
+  assert.equal(worker.isSymmetricShapesGridQuestion({ printedQuestion: unrelated }), false);
 });

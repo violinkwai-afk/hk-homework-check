@@ -1848,6 +1848,33 @@ test("mentionsWeekdayOrdinal / WEEKDAY_CONVENTION_REFERENCE: fires on ordinal-da
   assert.doesNotMatch(unrelated, /一星期嘅第一天係星期日/);
 });
 
+// Found 2026-10-02 (TSA full-years diagram survey): same reference-block
+// pattern, covering the 3 circle-geometry facts the new two_radii_
+// triangle_type/diameter_is_twice_radius/centre_segment_is_radius code
+// handlers already check narrowly -- this gives the AI fallback the same
+// knowledge for any phrasing variant those handlers don't match.
+test("mentionsCircleGeometry / CIRCLE_GEOMETRY_REFERENCE: fires on circle/radius/diameter wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "O是圓心，OY是圓的___。", studentAnswer: "半徑" },
+  ]);
+  assert.match(prompt, /O到任何一個圓周上的點嘅線段，定義上一定係「半徑」/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /O到任何一個圓周上的點嘅線段/);
+});
+
+// Found 2026-10-02 (EDB「小學數學科學習內容」pmc2017_tc.pdf, a consistent
+// repeated pattern of "學生不須使用「X」一詞" across many learning units).
+test("mentionsHkTerminologyLeniency / HK_TERMINOLOGY_LENIENCY_REFERENCE: fires on formal-term wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "哪一種性質叫交換性質?", studentAnswer: "加數掉轉都一樣" },
+  ]);
+  assert.match(prompt, /小學階段唔要求學生識用呢啲正式名詞/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /小學階段唔要求學生識用呢啲正式名詞/);
+});
+
 // Ticket 108 (2026-09-28, real citations from a P2 3-D shapes unit
 // test's own answer key): reverse shape lookup from stated face
 // properties -- pure text reasoning, reuses the SHAPE_REFERENCE facts

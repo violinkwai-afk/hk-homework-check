@@ -1839,7 +1839,11 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個完整月份嘅日曆表格(有日一二三四五六做欄標題,逐個格仔填住日子數字)**，喺回覆最開始加一行「CALENDAR_GRID: 月份=<幾月>;首日星期=<日/一/二/三/四/五/六,即係呢個月1號係星期幾>;日數=<呢個月總共幾多日>」。如果冇呢類完整日曆表格就完全唔使加呢行。
 
+**如果呢頁係一張「傳單/通告」(leaflet/notice)，列出幾個項目(例如興趣班/活動)，每個項目各自印刷咗幾項資料(例如上堂日子、年齡範圍、費用、導師名)**，喺回覆最開始加一行「LEAFLET_TABLE: 項目1名=日子,年齡範圍,費用,導師;項目2名=...」(年齡範圍用"數字-數字"格式例如"5-10"；費用照抄原文數字，連埋貨幣符號都可以；如果某一項資料冇印刷出嚈，嗰個位置留空但保留"," 分隔)。四項資料(日子、年齡範圍、費用、導師)缺少任何一項都照寫"LEAFLET_TABLE:"呢行,淨係嗰個位置留空。如果冇呢類傳單/通告,或者項目冇列出呢4種資料,就完全唔使加呢行。
+
 **如果呢頁印刷咗一個「星期時間表」(逐日星期配對一樣嘢，可以係活動/科目，都可以係甜品/食物/其他規律配對，例如「星期日=英文班,星期一=游泳班...」或者「星期日=蛋卷,星期一=紙杯蛋糕...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果表下面嘅問題入面又見到同一組圖示（例如問題度話「如果今天的甜品是[圖示]」而個圖示同上面個表其中一格一樣），要將個圖示換做同上面表入面完全一樣嘅文字寫入printedQuestion（例如寫做「如果今天的甜品是蛋卷」），唔好淨係寫「圖示」兩個字。如果冇呢類時間表就完全唔使加呢行。
+
+**如果呢頁有一個「圓形圖/圓餅圖」(一個圓俾唔同扇形分開,每個扇形代表一個類別,扇形上面或者側邊印刷咗一個角度數字例如"60°"或者一個百分比例如"25%")**，喺回覆最開始加一行「PIE_CHART: 類別1=數值1;類別2=數值2;...」(數值要照抄印刷嘅原文,包括個"°"或者"%"符號；類別文字跟返圖入面實際標籤嘅先後次序；如果淨係部分扇形有印刷數字,得返嗰幾個類別都要照實記低,唔使估冇印刷嗰啲)。呢一行只需要讀返印刷咗嘅角度/百分比數字,唔使自己目測估計每個扇形嘅大小。如果冇呢類圓形圖,或者啲扇形冇任何印刷數字,就完全唔使加呢行。
 
 **如果呢頁有一幅「地點方位圖」(幾個地點/建築物用線連接住,擺成一個格仔陣，仲有一個指北針話明邊個方向係「北」)**，喺回覆最開始加一行「LOCATION_GRID: 北方向=<上/下/左/右/右上/右下/左下/左上,即係個指北針實際指緊邊個畫面方向——如果個箭嘴唔係啱啱指住正上/正下/正左/正右,而係指住斜角(例如45度左下),就要老實揀返最貼近嘅斜角選項,唔好將佢當成最近嘅正方向>;地點1=<行>,<列>;地點2=<行>,<列>;...」（每個地點嘅行、列數字由0開始,跟返個格仔陣實際嘅排位,唔使個陣係完整長方形,得返部分格仔有地點都要照實記低）。如果冇呢類地點方位圖就完全唔使加呢行。
 
@@ -2012,6 +2016,120 @@ function extractStickLengths(text) {
   return { stickLengths: lengths.length ? lengths : null, cleanedText };
 }
 
+// Found 2026-10-02 (TSA full-years diagram survey, real citation:
+// `tsa/2023/p6_paper_TSA2023_6MC.txt` Q38 "超級市場的貨架上有60瓶飲品，
+// 店員統計了貨架上各種飲品的數量，並製作了以下的圓形圖。(a)數量最多的
+// 飲品是___，有___瓶。(b)茶的數量是果汁的幾分之幾？" with 汽水/果汁/
+// 鮮奶/咖啡/茶 category labels and a printed "60°" angle on at least one
+// slice). Same "OCR transcribes only printed numbers, never eyeballs a
+// diagram" discipline as extractBarChart -- the vision model reads
+// whatever angle/percentage is literally printed next to each slice;
+// pie-chart questions that print NO numbers at all on any slice still
+// correctly get no PIE_CHART line and fall through to AI/Tier V, same as
+// every other OCR-marker contract in this file. Values are normalised to
+// a percentage-of-360 fraction internally regardless of whether the
+// source used "°" or "%", so verifyPieChart never needs to care which.
+function extractPieChart(text) {
+  const m = /^PIE_CHART:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^PIE_CHART:.*$/gm, "");
+  if (!m) return { pieChart: null, cleanedText };
+  const slices = {};
+  for (const part of m[1].split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const category = part.slice(0, eqIdx).trim();
+    const rawValue = part.slice(eqIdx + 1).trim();
+    const num = Number((rawValue.match(/\d+(?:\.\d+)?/) || [])[0]);
+    if (!category || !Number.isFinite(num)) continue;
+    const fraction = rawValue.includes("°") ? num / 360 : num / 100;
+    slices[category] = fraction;
+  }
+  return { pieChart: Object.keys(slices).length ? slices : null, cleanedText };
+}
+
+// Three real sub-shapes found across the archive (real citation for all
+// three: `tsa/2023/p6_marking_TSA2023_6MC2_MS.pdf` Q38 -- "昨天有120輛
+// 汽車停泊在陽光停車場...圓形圖" with 貨車=20%,的士=10%,小型巴士=25%,
+// 私家車=15%,客貨車=30%; official answers (a) 的士,12 (b) 40):
+// (a) "數量最多/最少的___是___，有___[單位]" -- find the max/min slice,
+//     multiply its fraction by the stated total (的士 min=10%×120=12 ✓).
+// (b) "X及Y佔全部___的___%" -- SUM of two or more NAMED slices'
+//     percentages directly (小型巴士25%+私家車15%=40% ✓) -- no total
+//     needed at all, the chart already gives percentages.
+// (c) "X的數量是Y的幾分之幾？" -- ratio between two named slices'
+//     fractions, reduced to lowest terms (verified separately against
+//     `tsa/2024/p6_marking_TSA2024_6MC3_MS.pdf` Q38(b) = 1/4).
+// NOTE on citation reliability: this PDF-text-only survey confirmed the
+// (a)/(b) pairing above is trustworthy because the real PDF interleaves
+// each category immediately next to its own percentage in reading order
+// for this specific citation -- but at least one OTHER real pie-chart
+// citation surveyed (the 60-bottle one) turned out to have its category
+// labels and angle values in a DIFFERENT, non-matching text order when
+// dumped as flat PDF text (confirmed by cross-checking against its own
+// official answer), so positional guessing is NOT safe in general. The
+// real production OCR extracts from the actual image via a vision model
+// that can see which label sits next to which value, so this limitation
+// is specific to offline PDF-text surveying, not a flaw in this
+// contract -- but it does mean this contract remains UNVALIDATED against
+// a real photo end-to-end, same caveat as every other visual contract
+// surveyed this round.
+function verifyPieChart(pieChart, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !pieChart) return { correct: null, correctAnswer: "" };
+  // Two real phrasings found for this sub-shape -- "茶的數量是果汁的
+  // 幾分之幾" (plain) and "最喜愛拼圖遊戲的顧客人數是最喜愛體育遊戲的
+  // 幾分之幾" (wrapped in 最喜愛.../遊戲/顧客人數) -- both stripped down
+  // to the bare category name via the optional non-capturing groups.
+  const ratioMatch = printed.match(/(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的(?:數量|顧客人數)是(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的\s*幾分之幾/);
+  if (ratioMatch) {
+    const [, nameA, nameB] = ratioMatch;
+    const fracA = pieChart[nameA], fracB = pieChart[nameB];
+    if (!Number.isFinite(fracA) || !Number.isFinite(fracB) || !fracB) return { correct: null, correctAnswer: "" };
+    // Both slices came from the SAME chart, so their absolute counts are
+    // in direct proportion to their fractions -- the total cancels out.
+    const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+    let num = Math.round(fracA * 3600), den = Math.round(fracB * 3600); // common denominator removes rounding noise from °/360 or %/100
+    const g = gcd(num, den) || 1;
+    num /= g; den /= g;
+    const expected = `${num}/${den}`;
+    // Hardened 2026-10-02 (real handwriting-noise check): the original
+    // ^...$ anchors required the WHOLE trimmed answer to be exactly the
+    // fraction -- a student plausibly writing "答案:1/4" or "1/4。" would
+    // have been wrongly marked wrong. Now finds the fraction anywhere in
+    // the answer instead of anchoring the whole string.
+    const m = answer.match(/(\d+)\s*\/\s*(\d+)/);
+    const correct = !!m && Number(m[1]) === num && Number(m[2]) === den;
+    return { correct, correctAnswer: correct ? "" : expected };
+  }
+  const sumMatch = printed.match(/([一-鿿]+)及([一-鿿]+?)佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/);
+  if (sumMatch) {
+    const [, nameA, nameB] = sumMatch;
+    const fracA = pieChart[nameA], fracB = pieChart[nameB];
+    if (!Number.isFinite(fracA) || !Number.isFinite(fracB)) return { correct: null, correctAnswer: "" };
+    const expectedPct = Math.round((fracA + fracB) * 100);
+    const studentNum = parseSignedStudentNumber(answer.replace(/%$/, ""));
+    const correct = !Number.isNaN(studentNum) && studentNum === expectedPct;
+    return { correct, correctAnswer: correct ? "" : String(expectedPct) };
+  }
+  const extremeMatch = printed.match(/(最多|最少)的[一-鿿]*是[\s\S]{0,30}有\s*(\d+)\s*[一-鿿]/) || printed.match(/(最多|最少)的[一-鿿]*是/);
+  if (extremeMatch) {
+    const wantMax = extremeMatch[1] === "最多";
+    const totalMatch = printed.match(/有\s*(\d+)\s*[一-鿿]+[，,。][\s\S]{0,30}統計/);
+    if (!totalMatch) return { correct: null, correctAnswer: "" };
+    const total = Number(totalMatch[1]);
+    const entries = Object.entries(pieChart);
+    if (!entries.length) return { correct: null, correctAnswer: "" };
+    const [bestName, bestFrac] = entries.reduce((best, cur) => (wantMax === cur[1] > best[1] ? cur : best));
+    const expectedCount = Math.round(total * bestFrac);
+    const nums = (answer.match(/\d+/g) || []).map(Number);
+    const studentCount = nums[nums.length - 1];
+    const correct = answer.includes(bestName) && studentCount === expectedCount;
+    return { correct, correctAnswer: correct ? "" : `${bestName}，${expectedCount}` };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
 // Ticket 54 (2026-09-27): extracts an optional printed word bank (see
 // OCR_ONLY_PROMPT's own instruction above). Unlike price table/passage,
 // this is NOT wired through a QUESTION_TYPE_HANDLERS entry -- the
@@ -2122,6 +2240,115 @@ function extractScheduleTable(text) {
     if (day && activity) table[day] = activity;
   }
   return { scheduleTable: Object.keys(table).length ? table : null, cleanedText };
+}
+
+// Found 2026-10-02 (English/Chinese TSA-subject survey, real citation:
+// `tsa/2024/p3_paper_TSA2024_3ERW1.txt` Part 1 -- a leaflet for "Happy
+// Music School" with Piano Class=Mondays,age5-10,$500,Miss Lee; Drum
+// Class=Thursdays,age12-16,$600,Mr Wong; Singing Class=Fridays,age8-12,
+// $300,Miss Lee; Violin Class=Wednesdays,age7-15,$250,Mr Chan). Unlike
+// scheduleTable above (single day->activity attribute), a leaflet/
+// notice row typically carries MULTIPLE attributes per named item (day,
+// age range, fee, teacher) -- this is the multi-attribute sibling
+// contract flagged in this round's English-subject survey as the one
+// genuine code-solvable sub-pattern in otherwise-uncodeable reading-
+// comprehension passages (the comprehension itself still needs AI; only
+// the "look up a stated attribute" sub-questions reduce to a lookup).
+function extractLeafletTable(text) {
+  const m = /^LEAFLET_TABLE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^LEAFLET_TABLE:.*$/gm, "");
+  if (!m) return { leafletTable: null, cleanedText };
+  const table = {};
+  for (const row of m[1].split(";")) {
+    const eqIdx = row.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = row.slice(0, eqIdx).trim();
+    const fields = row.slice(eqIdx + 1).split(",").map((s) => s.trim());
+    if (!name || fields.length < 4) continue;
+    const [day, ageRange, fee, teacher] = fields;
+    const ageMatch = ageRange.match(/(\d+)\s*-\s*(\d+)/);
+    table[name] = {
+      day,
+      ageMin: ageMatch ? Number(ageMatch[1]) : null,
+      ageMax: ageMatch ? Number(ageMatch[2]) : null,
+      fee: Number((fee.match(/\d+(?:\.\d+)?/) || [])[0]),
+      teacher,
+    };
+  }
+  return { leafletTable: Object.keys(table).length ? table : null, cleanedText };
+}
+
+// Four real sub-shapes found, all MC (answer is a single A-D letter):
+// (a) age-range lookup: "[Name] is [N] years old. [Pronoun] can join
+//     the ___ Class." -> the ONE class whose age range contains N.
+// (b) fee lookup: "[Name] joins the [ClassName] Class. [Pronoun] pays
+//     ___." -> that class's fee.
+// (c) day lookup: "The [ClassName] Class is on ___." -> that class's day.
+// (d) "Who teaches two classes?" -> the ONE teacher appearing on
+//     exactly two rows.
+// All four resolve to one MC option's TEXT, which must then be matched
+// against the student's chosen letter via the same parseMcOptions this
+// codebase already uses for every other printed-MC-options shape.
+function verifyLeafletTableQuery(leafletTable, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const rawAnswer = String(studentAnswer || "").trim().toUpperCase();
+  if (!rawAnswer || !leafletTable) return { correct: null, correctAnswer: "" };
+  // Hardened 2026-10-02 (real handwriting-noise check): MC answers are
+  // plausibly written as "A.", "(A)", "A)" etc, not always a bare
+  // letter -- extract just the first A-D letter rather than exact-string
+  // comparing the whole trimmed answer.
+  const letterMatch = rawAnswer.match(/[A-D]/);
+  const answer = letterMatch ? letterMatch[0] : rawAnswer;
+  const options = parseMcOptions(printed);
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const findOptionByValue = (predicate) => options.find((o) => predicate(o.text));
+
+  const ageMatch = printed.match(/is\s+(\d+)\s+years?\s+old[\s\S]{0,60}\bjoin\s+the\b/i);
+  if (ageMatch) {
+    const age = Number(ageMatch[1]);
+    const entries = Object.entries(leafletTable).filter(([, v]) => age >= v.ageMin && age <= v.ageMax);
+    if (entries.length !== 1) return { correct: null, correctAnswer: "" };
+    const [className] = entries[0];
+    const opt = findOptionByValue((t) => t.includes(className) || className.includes(t));
+    if (!opt) return { correct: null, correctAnswer: "" };
+    const correct = answer === opt.letter;
+    return { correct, correctAnswer: correct ? "" : opt.letter };
+  }
+
+  const feeMatch = printed.match(/joins?\s+the\s+([\s\S]{0,40}?)\s+Class[\s\S]{0,30}\bpays?\b/i);
+  if (feeMatch) {
+    const className = Object.keys(leafletTable).find((n) => feeMatch[1].includes(n) || n.includes(feeMatch[1].trim()));
+    if (!className) return { correct: null, correctAnswer: "" };
+    const fee = leafletTable[className].fee;
+    const opt = findOptionByValue((t) => t.includes(String(fee)));
+    if (!opt) return { correct: null, correctAnswer: "" };
+    const correct = answer === opt.letter;
+    return { correct, correctAnswer: correct ? "" : opt.letter };
+  }
+
+  const dayMatch = printed.match(/The\s+([\s\S]{0,40}?)\s+Class\s+is\s+on\b/i);
+  if (dayMatch) {
+    const className = Object.keys(leafletTable).find((n) => dayMatch[1].includes(n) || n.includes(dayMatch[1].trim()));
+    if (!className) return { correct: null, correctAnswer: "" };
+    const day = leafletTable[className].day;
+    const opt = findOptionByValue((t) => t.includes(day));
+    if (!opt) return { correct: null, correctAnswer: "" };
+    const correct = answer === opt.letter;
+    return { correct, correctAnswer: correct ? "" : opt.letter };
+  }
+
+  if (/who\s+teaches\s+two\s+classes/i.test(printed)) {
+    const counts = {};
+    for (const v of Object.values(leafletTable)) counts[v.teacher] = (counts[v.teacher] || 0) + 1;
+    const twoTeachers = Object.entries(counts).filter(([, c]) => c === 2).map(([t]) => t);
+    if (twoTeachers.length !== 1) return { correct: null, correctAnswer: "" };
+    const opt = findOptionByValue((t) => t.includes(twoTeachers[0]));
+    if (!opt) return { correct: null, correctAnswer: "" };
+    const correct = answer === opt.letter;
+    return { correct, correctAnswer: correct ? "" : opt.letter };
+  }
+
+  return { correct: null, correctAnswer: "" };
 }
 
 // Location-grid direction reasoning (found 2026-09-28 while working
@@ -2854,7 +3081,9 @@ async function callQwenOcrText(images, openrouterKey) {
   const { distanceValues, cleanedText: cleanedText22 } = extractDistanceValues(cleanedText21);
   const { objectHeights, cleanedText: cleanedText23 } = extractObjectHeights(cleanedText22);
   const { barChart, cleanedText: cleanedText24 } = extractBarChart(cleanedText23);
-  const { stickLengths, cleanedText } = extractStickLengths(cleanedText24);
+  const { stickLengths, cleanedText: cleanedText25 } = extractStickLengths(cleanedText24);
+  const { pieChart, cleanedText: cleanedText26 } = extractPieChart(cleanedText25);
+  const { leafletTable, cleanedText } = extractLeafletTable(cleanedText26);
   const items = stripWorkedExampleEcho(reconstructSplitSentenceItems(parseOcrLine(cleanedText)));
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -2862,7 +3091,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths, pieChart, leafletTable };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -2978,7 +3207,50 @@ function mentionsQuantityWordOrClockMechanics(pendingItems) {
 // actually Thursday under this convention). An AI answering from general
 // knowledge alone would very plausibly get this wrong.
 const WEEKDAY_CONVENTION_REFERENCE = `參考資料——呢個課程嘅一星期慣例（幫你答日曆/星期題,唔好靠估）：
-呢個課程慣例：一星期嘅第一天係星期日(Sunday)，第二天係星期一，...，第七天係星期六(Saturday)——唔係國際慣例嘅星期一開始計。`;
+呢個課程慣例：一星期嘅第一天係星期日(Sunday)，第二天係星期一，...，第七天係星期六(Saturday)——唔好國際慣例嘅星期一開始計。`;
+
+// Found 2026-10-02 (TSA full-years diagram survey): 3 real圓形(circle)
+// geometry facts confirmed against official marking schemes (see
+// verifyTwoRadiiTriangleType/verifyDiameterIsTwiceRadius/
+// verifyCentreSegmentIsRadius's own code comments for the exact
+// citations) -- these are ALWAYS true by definition, but an AI reading
+// just the photo (without being told the general rule) could plausibly
+// try to "measure" an answer from the drawing instead of reasoning from
+// the definition, or miss that "O是圓心" implies every O-to-circumference
+// segment is automatically a radius. Narrow dedicated code handlers
+// already catch the exact phrasings seen in the real archive; this
+// block is the same knowledge for whatever phrasing variant those
+// handlers don't match.
+const CIRCLE_GEOMETRY_REFERENCE = `參考資料——圓形嘅幾何定律（幫你答圓形題,呢啲係定義,唔使靠睇圖度度）：
+如果O係圓心，O到任何一個圓周上的點嘅線段，定義上一定係「半徑」。
+用圓心O加兩個圓周上的點組成嘅三角形，必然係等腰三角形（因為當中兩條邊都係半徑，長度一定相等），除非題目另外講明第三條邊同半徑一樣長（咁就係等邊三角形）。
+圓嘅直徑永遠係半徑長度嘅2倍（直徑=2×半徑），呢個係定義，唔受個圓實際大小影響。`;
+
+function mentionsCircleGeometry(pendingItems) {
+  const re = /圓心|radius|diameter|半徑|直徑|圓周/i;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Found 2026-10-02 (EDB「小學數學科學習內容」pmc2017_tc.pdf, 96-page
+// official learning-content document, NOT the earlier pedagogy-example
+// guide): a consistent, repeated pattern across many learning units --
+// specific formal terms the HK curriculum explicitly says students are
+// NOT required to know/use at primary level. Real risk this addresses:
+// an AI fallback judge grading a student's own (correct but informal)
+// phrasing against an unstated expectation of formal terminology, or
+// penalizing a student for NOT naming a "property"/"relationship" by
+// its formal name. Also includes 2 real naming/notation equivalences
+// found in the same document (等腰直角三角形/直角等腰三角形 are the
+// SAME thing; 升/毫升 can be written in lowercase l/ml).
+const HK_TERMINOLOGY_LENIENCY_REFERENCE = `參考資料——呢個課程小學階段唔要求學生識嘅正式用詞（幫你判斷學生答案,唔好因為學生冇用返正式名詞就話佢錯）：
+小學階段唔要求學生識用呢啲正式名詞：「交換性質」、「結合性質」、「分配性質」、「正比例」、「序數」同「基數」二詞、「幾何圖形」、「端點」、「包含關係」、「凸四邊形」、「均勻截面」——學生淨係用返自己嘅講法解釋都算啱,唔使佢講出呢啲正式名詞先算啱。
+「等腰直角三角形」同「直角等腰三角形」係同一樣嘢，兩種講法都啱。
+「升(L)」和「毫升(mL)」嘅符號都可以用小寫字母表示（l、ml），兩種寫法都啱。`;
+
+function mentionsHkTerminologyLeniency(pendingItems) {
+  const re = /交換性質|結合性質|分配性質|正比例|序數|基數|幾何圖形|端點|包含關係|凸四邊形|均勻截面|等腰直角三角形|直角等腰三角形/;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
 
 function mentionsWeekdayOrdinal(pendingItems) {
   return pendingItems.some((it) => {
@@ -3124,6 +3396,8 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsQuantityWordOrClockMechanics(pendingItems) ? QUANTITY_AND_CLOCK_REFERENCE : null,
     mentionsWeekdayOrdinal(pendingItems) ? WEEKDAY_CONVENTION_REFERENCE : null,
     mentionsCompleteSentenceReadingQuestion(pendingItems) ? COMPLETE_SENTENCE_READING_REFERENCE : null,
+    mentionsCircleGeometry(pendingItems) ? CIRCLE_GEOMETRY_REFERENCE : null,
+    mentionsHkTerminologyLeniency(pendingItems) ? HK_TERMINOLOGY_LENIENCY_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -5191,7 +5465,11 @@ function verifyWordProblemRateMultiplication(printedQuestion, studentAnswer) {
     const correct = studentNum === expected;
     return { correct, correctAnswer: correct ? "" : String(expected) };
   }
-  if (!answer || !/每/.test(printed) || !/(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
+  // Hardened 2026-10-02 (user asked whether triggers check keyword order,
+  // not just presence): 每 and 共/總共/一共/合共 were independent checks
+  // with no order requirement. Both real citations put 每 before 共
+  // ("小克每天儲蓄30元，他五天共儲蓄多少元？"), so now require that order.
+  if (!answer || !/每[\s\S]{0,60}(共|總共|一共|合共)/.test(printed)) return { correct: null, correctAnswer: "" };
 
   const rateMatch = printed.match(/(?<!第)\d+(?:又\d+\/\d+)?/);
   if (!rateMatch) return { correct: null, correctAnswer: "" };
@@ -5906,6 +6184,30 @@ function verifyChangeFromTwoItemPurchase(printedQuestion, studentAnswer) {
   const paidMatch = printed.match(/spends?\s*(\d+)\s*dollars?/i);
   if (priceMatches.length !== 2 || !paidMatch) return { correct: null, correctAnswer: "" };
   const expected = Number(paidMatch[1]) - priceMatches.reduce((a, b) => a + b, 0);
+  if (expected < 0) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (TSA full-years survey, real citation:
+// `tsa/2021/2021_3MC1.txt` Q11 "每枝鮮花售7元，富榮買4枝鮮花，付款100元。
+// 店員應找回多少元？" -> 100-7×4=72; verified against the real official
+// marking scheme `2021_3MC1_MS.pdf`, which shows the exact same working
+// "100 – 7 × 4 = 72"). Sibling of verifyChangeFromTwoItemPurchase above
+// (same "change from a payment" shape) but Chinese, single rate×count
+// item instead of two named item prices.
+function verifyChangeFromRateMultiplication(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/每[^\d]{0,6}售\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,20}買\s*(\d+)\s*[^\d，,。]{0,4}[\s\S]{0,10}付款\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,20}找回/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const rate = Number(m[1]);
+  const count = Number(m[2]);
+  const paid = Number(m[3]);
+  if (!rate || !count || !paid) return { correct: null, correctAnswer: "" };
+  const expected = paid - rate * count;
   if (expected < 0) return { correct: null, correctAnswer: "" };
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
@@ -6771,9 +7073,33 @@ function verifyWordProblemMoreThan(printedQuestion, studentAnswer) {
   // real word problem asking "...是多少?" would false-positive as
   // "fewer" too. Bounded to the SAME clause (stops at the next comma/
   // full-width punctuation) so a later "多少" can never leak in.
-  const isMore = /比[^，,。？?！!]{0,10}多/.test(printed) || /\bmore\b.{0,20}\bthan\b/i.test(printed);
-  const isFewer = /比[^，,。？?！!]{0,10}少/.test(printed) || /\b(fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+  // Widened 2026-10-02 (TSA full-years survey, real citation:
+  // `tsa/2018/TSA2018_3MC3.txt` Q9 / `.../3MC4.txt` Q9 "惠芳身高152厘米，
+  // 浩恩比她矮38厘米。浩恩身高___厘米。" -> 152-38=114): the same
+  // base±diff math applies to any comparative-adjective pair (高/矮,
+  // 長/短, 重/輕, 大/小), not just 多/少 -- 矮 (shorter) means exactly
+  // the same "fewer" relationship as 少 for this shape's arithmetic.
+  const isMore = /比[^，,。？?！!]{0,10}(多|高|長|重|大)/.test(printed) || /\bmore\b.{0,20}\bthan\b/i.test(printed);
+  const isFewer = /比[^，,。？?！!]{0,10}(少|矮|短|輕|小)/.test(printed) || /\b(fewer|less)\b.{0,20}\bthan\b/i.test(printed);
   if (isMore === isFewer) return { correct: null, correctAnswer: "" }; // neither, or both (ambiguous OCR) -- decline
+  // Found 2026-10-02 (TSA 2023 P6 maths archive, real citation: "一包
+  // 普通裝奶粉重800克，一包增量裝奶粉的重量比普通裝的多20%，增量裝
+  // 奶粉重多少克?" -> correct answer 800×1.2=960). Real bug this
+  // citation exposed: this function's own math (base+diff as flat
+  // quantities) was silently misfiring on this exact shape, confidently
+  // computing 800+20=820 -- wrong, because the "多/少" amount here is a
+  // PERCENTAGE of the base, not an absolute quantity. Decline whenever
+  // a "%" sign follows shortly after the 多/少 (or more/fewer/less) --
+  // this is percentageMoreLessThanBase's shape, handled separately
+  // below with the correct multiplicative formula.
+  // Guard widened alongside isMore/isFewer above, same defensive reason:
+  // no real citation yet combines the adjective family with a percentage,
+  // but declining here is the SAFE direction (same lesson as the 800g
+  // milk-powder bug this guard was originally built from) -- better to
+  // decline an unseen shape than risk the same flat-addition mistake.
+  if (/[多少高矮長短重輕大小][^，,。？?！!]{0,10}\d+(?:\.\d+)?\s*%/.test(printed) || /\b(?:more|fewer|less)\b[^.?!]{0,15}%/i.test(printed)) {
+    return { correct: null, correctAnswer: "" };
+  }
   const nums = (printed.match(/\d+/g) || []).map(Number);
   if (nums.length !== 2) return { correct: null, correctAnswer: "" };
   // The base total is always the LARGER of the two real-world quantities
@@ -6785,6 +7111,222 @@ function verifyWordProblemMoreThan(printedQuestion, studentAnswer) {
   if (a === b) return { correct: null, correctAnswer: "" };
   const base = Math.max(a, b), diff = Math.min(a, b);
   const expected = isMore ? base + diff : base - diff;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Word problem: "X比Y的多/少N%" -- a PERCENTAGE more/less-than base,
+// multiplicative not additive (real citation: TSA 2023 P6 maths,
+// `tsa/2023/p6_paper_TSA2023_6MC.txt` (6MC1) Q19 -- "一包普通裝奶粉重
+// 800克，一包增量裝奶粉的重量比普通裝的多20%，增量裝奶粉重多少
+// 克?" -> 800×1.2=960). Found while surveying: verifyWordProblemMoreThan
+// above was silently computing 800+20=820 for this exact real item
+// (confidently WRONG) because it treats every 比...多/少 amount as a
+// flat additive quantity -- that function now declines whenever a "%"
+// follows 多/少 (see its own updated guard), and this dedicated handler
+// takes over for that shape with the correct multiplicative formula.
+// Narrow trigger: requires exactly 2 numbers, the second (by this one
+// real citation's left-to-right order) being the percentage.
+// English version added 2026-10-02, real citation: TSA 2023 P6 maths
+// (`tsa/2023/p6_paper_TSA2023_6ME.txt` Q19) -- "A regular pack of milk
+// powder weighs 800 grams. The weight of a value pack of milk powder is
+// 20% more than that of a regular pack. How many grams does a value pack
+// of milk powder weigh?" -> 800×1.2=960, same item as the Chinese 6MC1
+// citation this function was originally built from.
+const PERCENTAGE_MORE_LESS_EN_RE = /\bis\s+(\d+(?:\.\d+)?)\s*%\s*(more|less)\s+than\b/i;
+function verifyPercentageMoreLessThanBase(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const mZh = printed.match(/比[^，,。？?！!0-9]{0,10}(多|少)\s*(\d+(?:\.\d+)?)\s*%/);
+  const mEn = PERCENTAGE_MORE_LESS_EN_RE.test(printed) ? printed.match(PERCENTAGE_MORE_LESS_EN_RE) : null;
+  if (!mZh && !mEn) return { correct: null, correctAnswer: "" };
+  const isMore = mZh ? mZh[1] === "多" : mEn[2].toLowerCase() === "more";
+  const pct = Number(mZh ? mZh[2] : mEn[1]);
+  const nums = (printed.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const base = nums[1] === pct ? nums[0] : nums[1];
+  const expected = isMore ? base * (1 + pct / 100) : base * (1 - pct / 100);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Word problem: base + (base × N multiplier) = combined total (real
+// citations: TSA 2023 P6 maths, `tsa/2023/p6_paper_TSA2023_6MC.txt`
+// (6MC2) Q15 -- "紅絲帶長117cm，綠絲帶的長度是紅絲帶的3倍，兩條絲帶共長
+// ___cm。" -> 117×(1+3)=468; and TSA 2024 P3 maths,
+// `tsa/2024/p3_paper_TSA2024_3MC2.txt` Q13 -- "明輝吃了4粒荔枝，珮詩吃了
+// 荔枝的數量是明輝的3倍，兩人共吃了荔枝多少粒？" -> 4×(1+3)=16).
+// Distinct from every "倍數"(multiples-of-N number theory) handler
+// elsewhere in this file -- this is a ratio word problem ("Y is N times
+// as much as X"), not a divisibility fact. Narrow trigger: "的N倍" plus
+// any of the same 共/總共/一共/合共 total-asking keywords
+// word_problem_total itself uses (originally over-narrowed to just
+// "共長/共重/共有" after the first citation -- the second citation's
+// "共吃了" exposed that this needed the same breadth as the sibling
+// handler it runs ahead of), with exactly 2 numbers.
+// English version added 2026-10-02, real citations: the SAME two TSA
+// items' own official English-medium papers -- `tsa/2023/p6_paper_
+// TSA2023_6ME.txt` Q15: "A red ribbon is 117 cm long. The length of a
+// green ribbon is 3 times that of the red ribbon. The total length of
+// the two ribbons is ___ cm." and `tsa/2024/p3_paper_TSA2024_3ME2.txt`
+// Q13: "Michael eats 4 lychees. Christy eats 3 times as many lychees as
+// Michael. How many lychees do they eat altogether?" Two real phrasings
+// for the same "N times that of"/"N times as many...as" relationship,
+// so both are matched; "total"/"altogether" plays the same role as the
+// Chinese 共/總共/一共/合共 keyword set.
+const BASE_PLUS_MULTIPLE_EN_RE = /(\d+(?:\.\d+)?)\s*times\s+(?:that\s+of|as\s+many[\s\S]{0,20}as)\b/i;
+// Hardened 2026-10-02: the "total" keyword check was originally an
+// INDEPENDENT .test() against the whole string, with no requirement that
+// it actually come AFTER the "N倍"/"N times" phrase -- a real risk flagged
+// by the user (an unrelated earlier "共"/"total" elsewhere in a longer
+// passage could combine with a distant multiplier phrase to misfire).
+// Measured the real gap in both languages (ZH: 的N倍→共, 3-5 chars; EN:
+// times that of/as many...as→total/altogether, 21-31 chars) and now
+// require the total-keyword to appear strictly AFTER the multiplier
+// match's own position, within a bounded gap.
+function basePlusMultipleTotalMatch(printed) {
+  const multMatch = printed.match(/的\s*(\d+(?:\.\d+)?)\s*倍/) || printed.match(BASE_PLUS_MULTIPLE_EN_RE);
+  if (!multMatch) return null;
+  const isEn = !/的\s*(\d+(?:\.\d+)?)\s*倍/.test(printed);
+  const afterMult = printed.slice(multMatch.index + multMatch[0].length, multMatch.index + multMatch[0].length + 80);
+  const hasTotalAfter = isEn ? /\btotal\b|\baltogether\b/i.test(afterMult) : /共|總共|一共|合共/.test(afterMult);
+  return hasTotalAfter ? multMatch : null;
+}
+function verifyBasePlusMultipleOfBaseTotal(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const multMatch = basePlusMultipleTotalMatch(printed);
+  if (!multMatch) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const multiplier = Number(multMatch[1]);
+  const base = nums.find((n) => n !== multiplier) ?? nums[0];
+  const expected = base * (1 + multiplier);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Word problem: needed-total-vs-owned shortfall (real citation: TSA
+// 2022 P3 maths, `tsa/2022/p3_paper_2022_3MC2.txt` Q10 and
+// `.../3MC3.txt` Q8 -- "做一個薄餅需用330克麪粉。做一個蛋糕需用250克
+// 麪粉。爸爸有425克麪粉，他要做一個薄餅和一個蛋糕，還欠___克麪粉。" ->
+// (330+250)-425=155). Distinct from verifyWordProblemDifference (that
+// one takes TWO STATED totals and finds their difference) -- this shape
+// derives a total from TWO "需(用|要)" statements first, then subtracts
+// a THIRD, separately-stated "有" (owned) amount. Narrow trigger: the
+// "還欠/仍欠/仲欠" keyword AND exactly 2 "需用/需要" matches AND exactly
+// one "有" match AND exactly 3 numbers total in the text (same
+// exact-count discipline as every other word-problem verifier here --
+// a 4th stray number anywhere would make the pairing ambiguous, decline
+// rather than guess).
+//
+// English version added 2026-10-02, real citation: the SAME TSA item's
+// own official English-medium paper (`.../3ME2.txt` Q10) -- "It takes
+// 330 grams of flour to make a pizza and 250 grams of flour to make a
+// cake. Father has 425 grams of flour. ... He needs ___ grams more of
+// flour." Unlike the Chinese phrasing, the English text states both
+// "need" amounts in ONE sentence ("takes N1 ... and N2 ...") rather than
+// two separate "需用" clauses, so there is no reliable "exactly 2 need-
+// matches" structure to require in English -- instead this falls back
+// to the same positional convention used elsewhere in this file
+// (verifyWordProblemDifference etc.): exactly 3 numbers, in the real
+// citation's own left-to-right order (need1, need2, have).
+const SHORTFALL_EN_RE = /\bneeds?\b[^.?!]{0,30}\bmore of\b/i;
+function verifyShortfallFromNeededTotal(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const isZh = /(還欠|仍欠|仲欠)/.test(printed);
+  const isEn = SHORTFALL_EN_RE.test(printed);
+  if (!isZh && !isEn) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 3) return { correct: null, correctAnswer: "" };
+  let expected;
+  if (isZh) {
+    const needMatches = [...printed.matchAll(/需(?:用|要)\s*(\d+)/g)].map((m) => Number(m[1]));
+    const haveMatches = [...printed.matchAll(/有\s*(\d+)/g)].map((m) => Number(m[1]));
+    if (needMatches.length !== 2 || haveMatches.length !== 1) return { correct: null, correctAnswer: "" };
+    expected = needMatches[0] + needMatches[1] - haveMatches[0];
+  } else {
+    expected = nums[0] + nums[1] - nums[2];
+  }
+  if (expected < 0) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Word problem: weekly total with one exception day (real citation: TSA
+// 2022 P3 maths, `tsa/2022/p3_paper_2022_3MC2.txt` Q12 -- "家明上興趣
+// 班，星期一至六每天上2小時，星期日上4小時。他這星期上興趣班共多少
+// 小時？" -> 2×6+4=16). Narrowly matches exactly this "星期一至六" (Mon-
+// Sat, 6 days) + "星期日" (Sunday exception) shape, same discipline as
+// verifyCompoundMultiplierWordProblem's hardcoded "back and forth"/
+// "twice" shape elsewhere in this file -- not generalized to arbitrary
+// day ranges since only this one real citation has been seen.
+//
+// English version added 2026-10-02, real citation: same item's official
+// English paper (`.../3ME2.txt` Q12) -- "Ken goes to interest classes.
+// He attends 2 hours a day from Monday to Saturday and 4 hours on
+// Sunday. How many hours does Ken go to interest classes this week?"
+const WEEKLY_RATE_EXCEPTION_EN_RE = /(\d+)\s*hours\s+a\s+day\s+from\s+monday\s+to\s+saturday[\s\S]{0,60}?(\d+)\s*hours\s+on\s+sunday/i;
+function verifyWeeklyRateWithExceptionDay(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const zhMatch = printed.match(/星期一至六每天.{0,6}?(\d+)\s*小時[\s\S]{0,30}?星期日.{0,6}?(\d+)\s*小時/);
+  const enMatch = printed.match(WEEKLY_RATE_EXCEPTION_EN_RE);
+  const m = zhMatch || enMatch;
+  if (!m) return { correct: null, correctAnswer: "" };
+  if (zhMatch && !/共.{0,6}小時/.test(printed)) return { correct: null, correctAnswer: "" };
+  if (enMatch && !/\bhow many hours\b/i.test(printed)) return { correct: null, correctAnswer: "" };
+  const expected = Number(m[1]) * 6 + Number(m[2]);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Price-table sum MINUS a flat discount (real citation: TSA 2022 P3
+// maths, `tsa/2022/p3_paper_2022_3MC2.txt` Q12, `.../3MC3.txt` Q10,
+// `.../3MC4.txt` Q12 -- "外套462元，褲子236元。百貨公司進行大減價，買
+// 兩件貨品可減50元。美芬買了一件外套和一條褲子，她應付多少元？" ->
+// (462+236)-50=648). Reuses the same item.priceTable structure as
+// verifyPriceTableLookup (two named items, each with a price) -- the
+// genuinely new part is the THIRD step, subtracting a flat discount
+// stated in the question text itself ("減N元"), which
+// verifyPriceTableLookup's own isSum branch does not do. Narrow trigger:
+// requires a "減\d+元" discount AND exactly 2 matching table names in
+// the text (same 2-names discipline as verifyPriceTableLookup).
+//
+// English version added 2026-10-02, real citation: same item's official
+// English paper (`.../3ME3.txt` Q10) -- "The department store is having
+// a sale. If you buy 2 items you can get 50 dollars off. Mandy buys a
+// jacket and a pair of pants." -- priceTable names would be "Jacket"/
+// "Pants" in this English version.
+const PRICE_DISCOUNT_EN_RE = /\bget\s+(\d+)\s*dollars?\s+off\b/i;
+function verifyPriceTableSumWithDiscount(priceTable, printedQuestion, studentAnswer) {
+  const table = priceTable || {};
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const discountMatch = printed.match(/減\s*(\d+)\s*元/) || printed.match(PRICE_DISCOUNT_EN_RE);
+  if (!discountMatch) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(table).filter((n) => printed.includes(n));
+  if (names.length !== 2) return { correct: null, correctAnswer: "" };
+  const [nameA, nameB] = names;
+  const priceA = Number(table[nameA]);
+  const priceB = Number(table[nameB]);
+  if (!Number.isFinite(priceA) || !Number.isFinite(priceB)) return { correct: null, correctAnswer: "" };
+  const discount = Number(discountMatch[1]);
+  const expected = priceA + priceB - discount;
+  if (expected < 0) return { correct: null, correctAnswer: "" };
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
@@ -6873,6 +7415,113 @@ function verifyWordProblemCeilingDivision(printedQuestion, studentAnswer) {
   const studentNum = parseSignedStudentNumber(answer);
   if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
   return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (TSA full-years survey, real citation:
+// `tsa/2012/2012_TSA_6MC2.txt` Q17 "每本相簿有15頁，每頁放相片4張。要放
+// 相片300張，需用相簿多少本？" -> ceil(300/(15×4))=5). Distinct from
+// verifyWordProblemCeilingDivision above -- that one has a SINGLE stated
+// per-unit rate (每N); this one needs the per-container capacity built
+// from TWO separate per-unit rates multiplied together (15 頁/本 ×
+// 4 張/頁 = 60 張/本) before the ceiling division, a genuinely different
+// shape, not just a regex variant.
+function verifyTwoFactorCeilingDivision(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/每本[^\d]{0,6}有\s*(\d+)\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}(\d+)\s*張[\s\S]{0,20}要放[^\d]{0,6}(\d+)\s*張/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const perBook = Number(m[1]);
+  const perPage = Number(m[2]);
+  const target = Number(m[3]);
+  if (!perBook || !perPage || !target) return { correct: null, correctAnswer: "" };
+  const expected = Math.ceil(target / (perBook * perPage));
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (TSA full-years survey, real citation:
+// `tsa/2013/TSA2013_6MC4.txt` Q14 "哥哥收集了540枚郵票。他把郵票放在3本
+// 集郵簿內，每本集郵簿有12頁。平均每頁有多少枚郵票？" -> 540/(3×12)=15).
+// A TRUE average (total ÷ two multiplied divisors), not a ceiling
+// division -- the sibling shape of verifyTwoFactorCeilingDivision above
+// (same "two stated per-container/per-page rates" structure) but this
+// one divides EVENLY and asks for the plain average, not "how many
+// containers needed".
+function verifyTwoStepAverageDivision(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/平均每.{0,6}有多少/.test(printed)) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}(\d+)\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*(\d+)\s*[頁個張]/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const total = Number(m[1]);
+  const containers = Number(m[2]);
+  const perContainer = Number(m[3]);
+  if (!total || !containers || !perContainer) return { correct: null, correctAnswer: "" };
+  const expected = total / (containers * perContainer);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (TSA full-years survey, real citation:
+// `tsa/2012/2012_TSA_6MC4.txt` Q14 "一疊50張卡紙的厚度是6.8cm，平均每張
+// 卡紙的厚度是___cm。(答案取至小數點後兩個位)" -> 6.8÷50=0.136,
+// rounded to 2dp -> 0.14). Simple single-step average (total÷count),
+// with an explicit printed rounding instruction this handler must
+// respect rather than comparing the raw unrounded quotient.
+function verifySimpleAverageDivision(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*張[\s\S]{0,10}厚度是\s*(\d+(?:\.\d+)?)[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const count = Number(m[1]);
+  const total = Number(m[2]);
+  if (!count || !total) return { correct: null, correctAnswer: "" };
+  // "兩" (not "二") is the real citation's own word for "two" here --
+  // chineseNumeralToArabicSmall doesn't map it (it's a measure-word
+  // variant, out of that function's scope), so this uses its own small
+  // local map instead of silently passing NaN/null into toFixed().
+  const ROUND_PLACES_CN = { 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const roundMatch = printed.match(/小數點後\s*([一二兩三四五六七八九]|\d+)\s*個位/);
+  let expected = total / count;
+  if (roundMatch) {
+    const places = /^\d+$/.test(roundMatch[1]) ? Number(roundMatch[1]) : ROUND_PLACES_CN[roundMatch[1]];
+    if (Number.isFinite(places)) expected = Number(expected.toFixed(places));
+  }
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (TSA full-years survey, real citation:
+// `tsa/2013/TSA2013_3MC2.txt` Q15 (image caption) "乘車優惠 4人同行共須
+// 42元" + "子恩和三位朋友一起乘車，平均每人須付___元___角。" ->
+// 42÷4=10.5元=10元5角). Same "dollars;cents"-style dual-blank answer
+// convention as verifyPriceDecimalSplit (2 numbers in the student
+// answer, compared against expected [yuan, jiao] pair) -- jiao is simply
+// the first decimal digit of the per-person amount (HK currency has no
+// finer division in this context).
+function verifyMultiPersonFareSplit(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*人同行共須\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,40}平均每人須付/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const people = Number(m[1]);
+  const total = Number(m[2]);
+  if (!people || !total) return { correct: null, correctAnswer: "" };
+  const perPerson = total / people;
+  const yuan = Math.floor(perPerson + 1e-9);
+  const jiao = Math.round((perPerson - yuan) * 10);
+  const nums = (answer.match(/\d+/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const correct = nums[0] === yuan && nums[1] === jiao;
+  return { correct, correctAnswer: correct ? "" : `${yuan};${jiao}` };
 }
 
 // Ticket 117 (2026-09-28, real citation: "When a cartoon programme
@@ -7179,6 +7828,92 @@ function verifyFirstNMultiples(printedQuestion, studentAnswer) {
   const studentNums = (answer.match(/\d+/g) || []).map(Number);
   const correct = studentNums.length === expected.length && studentNums.every((v, i) => v === expected[i]);
   return { correct, correctAnswer: correct ? "" : expected.join(", ") };
+}
+
+// Found 2026-10-02 (TSA 2022 P6 maths archive, `tsa/2022/p6_paper_2022_6MC3.txt`
+// Q3 "列出4和6的最初三個公倍數" and TSA 2023 P6 maths,
+// `tsa/2023/p6_paper_TSA2023_6MC.txt` (6MC3/6MC4) Q4 "列出6和8的最初
+// 三個公倍數" -> 24,48,72). Distinct from verifyFirstNMultiples above:
+// COMMON multiples of TWO numbers (公倍數), not multiples of one (倍數)
+// -- "和" between the two numbers and "公倍數" instead of "倍數" is a
+// different real shape, not just a regex variant of the existing one.
+// English version added 2026-10-02, real citation: TSA 2022 P6 maths
+// (`tsa/2022/p6_paper_2022_6ME3.txt` Q3) -- "List the first three
+// common multiples of 4 and 6." Same item as the Chinese 6MC3 citation
+// above; only one real English example found across the archive, so the
+// word-count only covers the number word actually seen ("three") plus
+// the usual small-count range, mirroring the Chinese word-numeral list.
+const FIRST_N_COMMON_MULTIPLES_EN_RE = /first\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+common\s+multiples\s+of\s+(\d+)\s+and\s+(\d+)/i;
+const EN_SMALL_NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+function verifyFirstNCommonMultiples(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const mZh = printed.match(/列出(\d+)和(\d+)的最初(\d+|[一二三四五六七八九十]+)個公倍數/);
+  const mEn = printed.match(FIRST_N_COMMON_MULTIPLES_EN_RE);
+  const m = mZh || mEn;
+  if (!m) return { correct: null, correctAnswer: "" };
+  const a = Number(mZh ? m[1] : m[2]);
+  const b = Number(mZh ? m[2] : m[3]);
+  const countRaw = mZh ? m[3] : m[1];
+  const count = /^\d+$/.test(countRaw) ? Number(countRaw) : (mZh ? chineseNumeralToArabicSmall(countRaw) : EN_SMALL_NUMBER_WORDS[countRaw.toLowerCase()]);
+  if (!count || !a || !b) return { correct: null, correctAnswer: "" };
+  const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+  const lcm = (a * b) / gcd(a, b);
+  const expected = Array.from({ length: count }, (_, i) => lcm * (i + 1));
+  const studentNums = (answer.match(/\d+/g) || []).map(Number);
+  const correct = studentNums.length === expected.length && studentNums.every((v, i) => v === expected[i]);
+  return { correct, correctAnswer: correct ? "" : expected.join(", ") };
+}
+
+// Found 2026-10-02 (TSA archive full-years survey, real citations:
+// `tsa/2013/TSA2013_6MC1.txt` Q4 "18和48的最大公因數(H.C.F.)是___" -> 6;
+// `.../2014/TSA2014_6MC3.txt` Q4 "24和36的最大公因數(H.C.F.)是___" -> 12;
+// `.../2015/TSA2015_6MC2.txt` Q4 "24和96的最大公因數(H.C.F.)是___" -> 24;
+// `.../2018/TSA2018_6MC1.txt` Q4 "16和24的最大公因數(H.C.F.)是___" -> 8;
+// 8 total real occurrences across the archive). Distinct from the
+// existing `short_division_hcf_mc` handler, which is a completely
+// different shape (MC "which short-division diagram's HCF is wrong",
+// needs item.shortDivisionMc OCR field) -- this is the far more common
+// plain direct-computation fill-blank, no diagram needed at all.
+function verifyDirectHcf(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最大公因數\s*(?:\(H\.?\s*C\.?\s*F\.?\)|（H\.?\s*C\.?\s*F\.?）)?\s*是/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (!a || !b) return { correct: null, correctAnswer: "" };
+  const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+  const expected = gcd(a, b);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
+}
+
+// Found 2026-10-02 (same survey, real citations: `tsa/2014/
+// TSA2014_6MC1.txt` Q4 "15和24的最小公倍數(L.C.M.)是___" -> 120;
+// `.../2014/TSA2014_6MC2.txt` Q4 same item -> 120;
+// `.../2015/TSA2015_6MC2.txt` Q3 "4和46的最小公倍數(L.C.M.)是___" -> 92).
+// Sibling of verifyDirectHcf above -- same plain direct-computation shape,
+// LCM instead of HCF. Distinct from `first_n_common_multiples` (that one
+// asks for the first N shared multiples as a LIST, this asks for the
+// single smallest one).
+function verifyDirectLcm(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最小公倍數\s*(?:\(L\.?\s*C\.?\s*M\.?\)|（L\.?\s*C\.?\s*M\.?）)?\s*是/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (!a || !b) return { correct: null, correctAnswer: "" };
+  const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+  const expected = (a * b) / gcd(a, b);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
 // Ticket 145 (2026-09-28, real citation: "某數的第8個和第10個倍數相差
@@ -8003,12 +8738,94 @@ function parseChineseLargeNumber(str) {
   return total;
 }
 
+// Found 2026-10-02 (TSA archive full-years survey, real citations:
+// `tsa/2014/TSA2014_3MC4.txt` Q2 "用中國數字寫出「13 849」這個數。" ->
+// 一萬三千八百四十九; `.../2015/TSA2015_3MC3.txt` Q2 "用中國數字寫出
+// 「56 509」這個數。" -> 五萬六千五百零九). The exact REVERSE direction
+// of verifyChineseLargeNumeralToArabic above ("用中國數字寫出" = write in
+// Chinese numerals, vs "以阿拉伯數字寫出" = write in Arabic numerals) --
+// needed a new Arabic-to-Chinese writer, since parseChineseLargeNumber
+// only ever goes the other way. Scoped to 0-99999999 (covers every real
+// citation's 5-digit range with headroom); handles the 零-insertion rule
+// for internal AND cross-萬-boundary gaps (e.g. 52008 -> 五萬零八, not
+// 五萬八) -- verified against both real citations plus a boundary case.
+const CN_DIGIT_WRITE_WORDS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const CN_SMALL_UNIT_WRITE_WORDS = ["", "十", "百", "千"];
+function fourDigitGroupToChinese(n) {
+  if (n === 0) return "";
+  const digits = String(n).padStart(4, "0").split("").map(Number);
+  let out = "";
+  let pendingZero = false;
+  for (let i = 0; i < 4; i++) {
+    const d = digits[i];
+    if (d === 0) {
+      if (out.length > 0) pendingZero = true;
+      continue;
+    }
+    if (pendingZero) { out += "零"; pendingZero = false; }
+    out += CN_DIGIT_WRITE_WORDS[d] + CN_SMALL_UNIT_WRITE_WORDS[3 - i];
+  }
+  return out;
+}
+function arabicToChineseLargeNumber(n) {
+  if (!Number.isInteger(n) || n < 0 || n > 99999999) return null;
+  if (n === 0) return "零";
+  const wan = Math.floor(n / 10000);
+  const rest = n % 10000;
+  const parts = [];
+  if (wan > 0) parts.push(fourDigitGroupToChinese(wan) + "萬");
+  if (rest > 0) {
+    let restStr = fourDigitGroupToChinese(rest);
+    if (wan > 0 && rest < 1000) restStr = "零" + restStr;
+    parts.push(restStr);
+  }
+  return parts.join("");
+}
+// Verified against the real official marking schemes for both citations
+// (`tsa/2014/TSA2014_3MC4_MS.pdf` Q2 and `tsa/2015/TSA2015_3MC3_MS.pdf`
+// Q2) -- both explicitly note "可接受大寫，不接受錯別字" (the formal/
+// financial 大寫 numeral form -- 壹貳參肆伍陸柒捌玖拾佰仟 -- is ALSO
+// accepted, typos are not), so this checks the student's answer against
+// EITHER the standard form or the 大寫 form, not just the standard one.
+const CN_FINANCIAL_DIGIT_MAP = { 零: "零", 一: "壹", 二: "貳", 三: "參", 四: "肆", 五: "伍", 六: "陸", 七: "柒", 八: "捌", 九: "玖", 十: "拾", 百: "佰", 千: "仟" };
+function toFinancialChineseNumeral(standardForm) {
+  return standardForm.split("").map((ch) => CN_FINANCIAL_DIGIT_MAP[ch] ?? ch).join("");
+}
+function verifyArabicToChineseNumeral(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !/用中國數字寫出/.test(printed)) return { correct: null, correctAnswer: "" };
+  const m = printed.match(/「\s*([\d,，\s]+)\s*」/);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const n = Number(m[1].replace(/[,，\s]/g, ""));
+  if (!Number.isFinite(n)) return { correct: null, correctAnswer: "" };
+  const expected = arabicToChineseLargeNumber(n);
+  if (expected === null) return { correct: null, correctAnswer: "" };
+  const expectedFinancial = toFinancialChineseNumeral(expected);
+  // Hardened 2026-10-02 (real handwriting-noise check): also strip
+  // common trailing/leading punctuation a student might naturally add
+  // (full stop, comma, brackets) -- the original version only stripped
+  // whitespace, so "一萬三千八百四十九。" (a very plausible real answer,
+  // closing the sentence out of habit) would have been marked wrong.
+  const normalizedAnswer = answer.replace(/[\s。，,.、「」『』()（）]/g, "");
+  const correct = normalizedAnswer === expected || normalizedAnswer === expectedFinancial;
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
 // "以阿拉伯數字寫出「...」" -- convert a large Chinese numeral phrase
 // (quoted in Chinese corner brackets 「」) to its Arabic-numeral value.
+// Hardened 2026-10-02 (user asked whether triggers check keyword order,
+// not just presence): originally checked "阿拉伯數字" and the FIRST 「」
+// quote anywhere in the text as two independent conditions -- if a
+// question had an earlier, unrelated quoted span (e.g. a translation
+// sub-question) before the real numeral quote, this would silently grab
+// the wrong span. Now requires the quote to be the first one appearing
+// AFTER "阿拉伯數字", matching the real citation's own word order.
 function verifyChineseLargeNumeralToArabic(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
-  if (!/阿拉伯數字/.test(printed)) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/「([^」]+)」/);
+  const keywordIdx = printed.indexOf("阿拉伯數字");
+  if (keywordIdx === -1) return { correct: null, correctAnswer: "" };
+  const m = printed.slice(keywordIdx).match(/「([^」]+)」/);
   if (!m) return { correct: null, correctAnswer: "" };
   const expected = parseChineseLargeNumber(m[1]);
   if (expected === null) return { correct: null, correctAnswer: "" };
@@ -8312,6 +9129,216 @@ function verifyFactorMultipleDefinitionMC(printedQuestion, studentAnswer) {
   const expectedLetter = trueOnes[0].letter;
   const correct = answer === expectedLetter;
   return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Chinese "X折" (tenths-based) percentage discount (real citation: TSA
+// 2022 P6 maths, `tsa/2022/p6_paper_2022_6MC2.txt` Q15 -- "一條裙子的
+// 原價是160元。凱晴以七折購買這條裙子，須付___元。" -> 160×7/10=112).
+// "X折" is a HK-specific notation distinct from the flat-dollar discount
+// in verifyPriceTableSumWithDiscount above -- here the discount is a
+// FRACTION of the original price (七折 = pay 70% of the original price),
+// given as a Chinese digit word 一-九 (1-9 tenths), not an Arabic number.
+// Narrow trigger: requires both "原價" (original price) and "X折" to
+// appear, and exactly one price number in the text.
+const ZH_TENTHS_DIGIT = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+// English version added 2026-10-02, real citation: the SAME TSA item's
+// own official English-medium paper (`tsa/2022/p6_paper_2022_6ME2.txt`
+// Q15 and `.../6ME3.txt` Q17) -- "The original price of a dress is 160
+// dollars. Heidi buys the dress at 30% off. She should pay ___ dollars."
+// English has no "X折" notation; the real equivalent phrasing is a plain
+// "N% off" (30% off == 七折, since paying 70% == a 30% discount).
+const PERCENT_OFF_EN_RE = /\boriginal\s+price\b[\s\S]{0,40}?(\d+(?:\.\d+)?)\s*dollars?[\s\S]{0,40}?(\d+(?:\.\d+)?)\s*%\s*off\b/i;
+// Hardened 2026-10-02: the ZH branch originally checked "原價" and "X折"
+// as two INDEPENDENT .test()/.match() calls with no order/proximity
+// requirement -- a real risk flagged by the user. Measured the real gap
+// (原價→折, 9 chars in the citation) and now require "X折" to appear
+// strictly AFTER "原價" within a bounded gap, via one combined regex.
+const PERCENTAGE_DISCOUNT_ZHE_ZH_RE = /原價[\s\S]{0,40}?([一二三四五六七八九])折/;
+function verifyPercentageDiscountZhe(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  let originalPrice;
+  let tenths;
+  const zheMatch = printed.match(PERCENTAGE_DISCOUNT_ZHE_ZH_RE);
+  if (zheMatch) {
+    const nums = printed.match(/\d+(?:\.\d+)?/g) || [];
+    if (nums.length !== 1) return { correct: null, correctAnswer: "" };
+    originalPrice = Number(nums[0]);
+    tenths = ZH_TENTHS_DIGIT[zheMatch[1]];
+  } else {
+    const enMatch = printed.match(PERCENT_OFF_EN_RE);
+    if (!enMatch) return { correct: null, correctAnswer: "" };
+    originalPrice = Number(enMatch[1]);
+    tenths = (100 - Number(enMatch[2])) / 10;
+  }
+  const expected = (originalPrice * tenths) / 10;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Word problem: total paid MINUS one known item's price (from
+// priceTable), divided by the OTHER item's quantity, = that item's
+// unit price (real citation: TSA 2024 P6 maths,
+// `tsa/2024/p6_paper_TSA2024_6MC2.txt` Q15 -- "高先生付294元買了一個
+// 生日蛋糕和6件蛋撻，平均每件蛋撻售___元。" with the cake's price
+// ($252) given as a separate image caption -> (294-252)/6=7). Reuses
+// item.priceTable (same OCR contract as verifyPriceTableLookup/
+// verifyPriceTableSumWithDiscount) for the ONE known item's price, but
+// needs exactly 1 matching name (not 2) since the OTHER item's price is
+// precisely what's being asked for, not given. Narrow trigger: "付N元"
+// (total paid) + "平均每...售" (asking for a per-unit price) + exactly
+// one matching priceTable name + a "N件/個/支/本/盒" quantity for the
+// unknown item.
+// English version added 2026-10-02, real citation: the SAME TSA item's
+// own official English-medium paper (`tsa/2024/p6_paper_TSA2024_6ME2.txt`
+// Q15) -- "Mr Ko paid 294 dollars for a birthday cake and 6 egg tarts.
+// On average, each egg tart costs ___ dollar(s)." No Chinese measure-word
+// equivalent needed in English -- the quantity is just the other number
+// in the text (paid amount and quantity are the only two numbers printed,
+// same as the Chinese citation; the known item's price lives only in
+// item.priceTable, from the image caption, in both languages).
+// Hardened 2026-10-02: "付N元"/"paid N dollars for" and "平均每...售"/
+// "on average...costs" were originally two INDEPENDENT checks with no
+// order requirement -- a real risk flagged by the user. Measured the
+// real gap (ZH: 14 chars; EN: 34 chars) and combined each into ONE
+// ordered regex requiring the paid-amount phrase to appear BEFORE the
+// average-cost phrase. Also fixed a latent EN-only bug: the quantity was
+// previously "the first number that isn't the paid amount", which would
+// silently misidentify the quantity if a 3rd stray number ever appeared
+// in a different order -- now requires exactly 2 numbers (paid + qty),
+// matching the exact-count discipline used everywhere else in this file.
+const PAID_MINUS_KNOWN_ZH_RE = /付\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,80}平均每.{0,4}售/;
+const PAID_MINUS_KNOWN_EN_RE = /\bpaid\s+(\d+(?:\.\d+)?)\s*dollars?\s+for\b[\s\S]{0,100}\bon\s+average\b[\s\S]{0,20}\bcosts?\b/i;
+function verifyPaidMinusKnownItemDividedByQuantity(priceTable, printedQuestion, studentAnswer) {
+  const table = priceTable || {};
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const zhMatch = printed.match(PAID_MINUS_KNOWN_ZH_RE);
+  const enMatch = zhMatch ? null : printed.match(PAID_MINUS_KNOWN_EN_RE);
+  const paidMatch = zhMatch || enMatch;
+  if (!paidMatch) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(table).filter((n) => printed.includes(n));
+  if (names.length !== 1) return { correct: null, correctAnswer: "" };
+  const knownPrice = Number(table[names[0]]);
+  if (!Number.isFinite(knownPrice)) return { correct: null, correctAnswer: "" };
+  let qty;
+  if (zhMatch) {
+    const qtyMatch = printed.match(/(\d+)\s*[件個支本盒]/);
+    if (!qtyMatch) return { correct: null, correctAnswer: "" };
+    qty = Number(qtyMatch[1]);
+  } else {
+    const nums = (printed.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+    if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+    const paidAmount = Number(enMatch[1]);
+    const qtyNum = nums.find((n) => n !== paidAmount);
+    if (qtyNum === undefined) return { correct: null, correctAnswer: "" };
+    qty = qtyNum;
+  }
+  if (!qty) return { correct: null, correctAnswer: "" };
+  const expected = (Number(paidMatch[1]) - knownPrice) / qty;
+  if (expected < 0) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Word problem: two daily amounts summed, then multiplied by a week
+// (real citation: TSA 2022 P6 maths, `tsa/2022/p6_paper_2022_6MC3.txt`
+// Q15 and `.../6MC4.txt` Q15 -- "小晴每天用1.5小時看電視，又用0.75
+// 小時閱讀。她一星期共用___小時看電視和閱讀。" -> (1.5+0.75)×7=15.75).
+// Distinct from word_problem_rate_multiplication (that one has ONE rate
+// number directly followed by a count) -- this shape needs TWO daily
+// amounts added together FIRST, before multiplying by 7 ("一星期"/a
+// week). Narrow trigger: "每天" (per day) + "又" (and, joining the
+// second amount) + "一星期共" (week total), with exactly 2 numbers.
+// English version added 2026-10-02, real citation: the SAME TSA item's
+// own official English-medium paper (`tsa/2022/p6_paper_2022_6ME3.txt`
+// Q15 and `.../6ME4.txt` Q15) -- "Cindy spends 1.5 hours on watching TV
+// and 0.75 hour on reading every day. In total she spends ___ hours on
+// watching TV and reading in one week." "every day"/"in total"/"in one
+// week" plays the same role as the Chinese 每天/又/一星期共 keyword set.
+// Hardened 2026-10-02: the original trigger checked 每天/又/一星期共 (and
+// every day/in total/in one week) as three INDEPENDENT .test() calls with
+// no relative-order or proximity requirement -- a real risk flagged by the
+// user (an unrelated "又" elsewhere in a longer passage could combine with
+// a distant "每天" and "一星期共" to misfire). Measured the real gap
+// between each keyword pair across both citations (ZH: 10/11 chars; EN:
+// 2/49 chars) and replaced with ONE ordered regex per language requiring
+// the keywords to appear in the real citations' own left-to-right order
+// within a generous bound, so it still fires on every real citation but
+// no longer ignores order/position entirely.
+const DAILY_RATE_SUM_ZH_RE = /每天[\s\S]{0,60}又[\s\S]{0,60}一星期共/;
+function dailyRateSumTimesWeekEnMatches(printed) {
+  return /\bevery\s+day\b[\s\S]{0,80}\bin\s+total\b[\s\S]{0,80}\bin\s+one\s+week\b/i.test(printed);
+}
+function verifyDailyRateSumTimesWeek(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const isZh = DAILY_RATE_SUM_ZH_RE.test(printed);
+  const isEn = dailyRateSumTimesWeekEnMatches(printed);
+  if (!isZh && !isEn) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+  const expected = (nums[0] + nums[1]) * 7;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 1e-9;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
+// Word problem: all stated amounts (however many) + remaining = original
+// total (real citations: TSA 2023 P3 maths,
+// `tsa/2023/p3_paper_TSA2023_3MC.txt` (3MC2) Q10 and the same item
+// repeated in 3MC3 Q11 -- "一個籃球售160元。浩明買了一個籃球後，還餘145
+// 元，他原有___元。" -> 160+145=305, 2 numbers; AND TSA 2024 P3 maths,
+// `tsa/2024/p3_paper_TSA2024_3MC3.txt` Q9 / `.../3MC4.txt` Q11 --
+// "糖果店有一些糖果，上午賣出130包，下午賣出258包，還餘下215包。糖果店
+// 原有糖果多少包？" -> 130+258+215=603, 3 numbers). Originally built
+// narrowed to "exactly 2 numbers" after the first citation; the second
+// citation (two SEPARATE sold amounts, not one) showed the real
+// invariant is simpler and more general: "original = sum of every
+// stated amount" holds regardless of how many spent/sold clauses
+// appear, as long as exactly one final "還餘" remaining amount closes
+// the question -- generalized to sum all numbers found, same lesson as
+// base_plus_multiple_of_base_total's own trigger-widening above. No
+// "共/總共/一共/合共" keyword needed at all for this shape (so word_
+// problem_total's own trigger never fires on it) -- "原有" (originally
+// had) plus "還餘" (still has left over) is the only signal needed.
+// English version added 2026-10-02, real citations: the SAME two TSA
+// items' own official English-medium papers -- `tsa/2023/p3_paper_
+// TSA2023_3ME.txt` (3ME2 split) -- "A basketball costs 160 dollars.
+// After buying a basketball, Jack has 145 dollars left. Jack has ___
+// dollars at first." (2 numbers); and `tsa/2024/p3_paper_TSA2024_3ME3.txt`
+// / `.../3ME4.txt` -- "The shopkeeper sells 130 packs in the morning and
+// 258 packs in the afternoon. There are 215 packs left. How many packs
+// ... are there at first?" (3 numbers). Same "left"/"at first" keyword
+// pair across both, playing the same role as the Chinese 還餘/原有 pair.
+// Hardened 2026-10-02: both were originally two INDEPENDENT .test() calls
+// with no order requirement -- a real risk since "at first" especially is
+// a common English phrase that could coincide unrelated to this shape.
+// Measured real order+gap in both languages (ZH: 還餘 always precedes
+// 原有, 6-9 chars; EN: "left" always precedes "at first", 23-38 chars)
+// and enforced that order with a bounded gap.
+const SPENT_REMAIN_ZH_RE = /還餘[\s\S]{0,60}原有/;
+const SPENT_REMAIN_EN_RE = /\bleft\b[\s\S]{0,80}\bat\s+first\b/i;
+function verifySpentPlusRemainingEqualsOriginal(printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  const isZh = SPENT_REMAIN_ZH_RE.test(printed);
+  const isEn = SPENT_REMAIN_EN_RE.test(printed);
+  if (!answer || (!isZh && !isEn)) return { correct: null, correctAnswer: "" };
+  const nums = (printed.match(/\d+/g) || []).map(Number);
+  if (nums.length < 2) return { correct: null, correctAnswer: "" };
+  const expected = nums.reduce((a, b) => a + b, 0);
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === expected, correctAnswer: studentNum === expected ? "" : String(expected) };
 }
 
 // Ticket 174 (2026-09-28, real citation: "$3.80 → 3 dollars and 80
@@ -8742,14 +9769,28 @@ function readFractionShadingFromPixels(pixels, w, h) {
   return { total: regions.length, shaded };
 }
 
+// Widened 2026-10-02 (TSA archive diagram-question survey): the real
+// HKEAA TSA papers use "陰影部分佔全圖的幾分之幾/百分之幾" (very frequent
+// -- appears in nearly every P3/P6 maths paper, e.g. `tsa/2022/
+// p6_paper_2022_6MC1.txt` Q5 "下圖中的陰影部分佔全圖的幾分之幾？" and
+// `.../6MC2.txt` Q17 "下圖陰影部分佔全圖的百分之幾？"), not "有色部分"
+// (the original citation's own wording) -- a different real worksheet's
+// phrasing for the exact same picture-shaded-fraction shape. Both now
+// trigger; the 百分之幾 (percentage) variant needs the same pixel-read
+// region count, just expressed as shaded/total*100 instead of a fraction.
 function isFractionShadingQuestion(item) {
   const printed = String(item.printedQuestion || "");
-  return /有色部分佔全圖的幾分之幾/.test(printed);
+  return /有色部分佔全圖的幾分之幾|陰影部分佔全圖的幾分之幾/.test(printed);
+}
+function isPercentageShadingQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /陰影部分佔全圖的百分之幾|有色部分佔全圖的百分之幾/.test(printed);
 }
 
 function verifyFractionShading(item, crop) {
   const answer = String(item.studentAnswer || "").trim();
-  if (!answer || !isFractionShadingQuestion(item)) return { correct: null, correctAnswer: "" };
+  const isPct = isPercentageShadingQuestion(item);
+  if (!answer || (!isFractionShadingQuestion(item) && !isPct)) return { correct: null, correctAnswer: "" };
   let photonImg;
   let result;
   try {
@@ -8762,6 +9803,12 @@ function verifyFractionShading(item, crop) {
   finally { if (photonImg) photonImg.free(); }
   if (!result) return { correct: null, correctAnswer: "" };
   const { total, shaded } = result;
+  if (isPct) {
+    const expectedPct = (shaded / total) * 100;
+    const studentNum = parseSignedStudentNumber(answer.replace(/%$/, ""));
+    const correct = !Number.isNaN(studentNum) && Math.abs(studentNum - expectedPct) < 1e-9;
+    return { correct, correctAnswer: correct ? "" : String(expectedPct) };
+  }
   const expectedFraction = `${shaded}/${total}`;
   const m = answer.match(/^(\d+)\s*\/\s*(\d+)$/);
   let correct;
@@ -9066,6 +10113,97 @@ function classifyTrapezoidType(points) {
   return "scalene";
 }
 
+// Found 2026-10-02 (TSA full-years diagram survey): sibling of
+// classifyTrapezoidType above, covering the OTHER two real "quadrilateral"
+// shapes that family of citations also asks about -- 菱形(rhombus) and
+// 平行四邊形(parallelogram), both previously only ever read as a generic
+// "quadrilateral" (which then declines the whole question via
+// isShapeClassificationGridQuestion's own exclusion list). Reuses the
+// SAME parallel-pair detection as classifyTrapezoidType (both pairs
+// parallel, where that function returns null), then distinguishes by
+// side length: all 4 equal -> rhombus, otherwise -> parallelogram. No
+// real photo available to validate the exact angle/length tolerances
+// against (same disclosed limitation as every visual contract this
+// survey built), so this reuses classifyTrapezoidType's own
+// already-validated 8-degree angle tolerance and adds a 12% side-length
+// tolerance (same magnitude as that function's own legsEqual check).
+function classifyParallelQuadType(points) {
+  if (!points || points.length !== 4) return null;
+  const edges = [];
+  for (let i = 0; i < 4; i++) {
+    const p1 = points[i], p2 = points[(i + 1) % 4];
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    edges.push({ dx, dy, len: Math.hypot(dx, dy) });
+  }
+  const angle = (e) => Math.atan2(e.dy, e.dx);
+  const angleDiff = (a, b) => { const d = Math.abs(a - b) % Math.PI; return Math.min(d, Math.PI - d); };
+  const TOL = (8 * Math.PI) / 180;
+  const pair02 = angleDiff(angle(edges[0]), angle(edges[2])) < TOL;
+  const pair13 = angleDiff(angle(edges[1]), angle(edges[3])) < TOL;
+  if (!pair02 || !pair13) return null; // need BOTH pairs parallel -- a trapezoid (exactly one pair) or irregular quad is not this shape
+  const lens = edges.map((e) => e.len);
+  const maxLen = Math.max(...lens), minLen = Math.min(...lens);
+  const allEqual = (maxLen - minLen) < maxLen * 0.12;
+  return allEqual ? "rhombus" : "parallelogram";
+}
+
+// Found 2026-10-02 (TSA full-years diagram survey, real citation:
+// `tsa/2024/p6_paper_TSA2024_6MC1.txt` Q32 "觀察下面的平面圖形，寫出所有
+//代表答案的英文字母。列出軸對稱圖形。" over a lettered A-D grid ->
+// official answer "A，D" per `2024/p6_marking_TSA2024_6MC1_MS.pdf`;
+// confirmed recurring 4 times across the archive). Generic line-of-
+// reflection-symmetry test on a traced polygon's own points -- works for
+// ANY shape (not just a fixed enum), reusing the same `.points` field
+// classifyTrapezoidType/classifyParallelQuadType already consume. No
+// real photo available to validate against (same disclosed limitation
+// as every visual contract this round) -- only synthetic symmetric/
+// asymmetric test shapes confirm the ALGORITHM itself is sound.
+function hasLineSymmetry(points) {
+  if (!points || points.length < 3) return null;
+  const n = points.length;
+  const cx = points.reduce((s, p) => s + p.x, 0) / n;
+  const cy = points.reduce((s, p) => s + p.y, 0) / n;
+  const norm = points.map((p) => ({ x: p.x - cx, y: p.y - cy }));
+  const scale = Math.max(...norm.map((p) => Math.hypot(p.x, p.y))) || 1;
+  const TOL = scale * 0.04; // same order of magnitude as the other shape-geometry tolerances in this file
+  const pointSetsMatch = (a, b) => {
+    const used = new Array(b.length).fill(false);
+    for (const pa of a) {
+      let bestIdx = -1, bestDist = Infinity;
+      for (let i = 0; i < b.length; i++) {
+        if (used[i]) continue;
+        const d = Math.hypot(pa.x - b[i].x, pa.y - b[i].y);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      if (bestIdx === -1 || bestDist > TOL) return false;
+      used[bestIdx] = true;
+    }
+    return true;
+  };
+  // Candidate axis angles: through each vertex and each edge-midpoint
+  // (covers the two real symmetry-axis families a polygon can have),
+  // plus a coarse angular sweep as a fallback net.
+  const candidates = new Set();
+  const addAngle = (x, y) => candidates.add((((Math.atan2(y, x) % Math.PI) + Math.PI) % Math.PI).toFixed(4));
+  for (const p of norm) addAngle(p.x, p.y);
+  for (let i = 0; i < n; i++) {
+    const p1 = norm[i], p2 = norm[(i + 1) % n];
+    addAngle((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+  }
+  for (let deg = 0; deg < 180; deg += 5) candidates.add(((deg * Math.PI) / 180).toFixed(4));
+
+  for (const radStr of candidates) {
+    const rad = Number(radStr);
+    const ax = Math.cos(rad), ay = Math.sin(rad);
+    const reflected = norm.map((p) => {
+      const dot = p.x * ax + p.y * ay;
+      return { x: 2 * dot * ax - p.x, y: 2 * dot * ay - p.y };
+    });
+    if (pointSetsMatch(norm, reflected)) return true;
+  }
+  return false;
+}
+
 function isTrapezoidTypeLetterQuestion(item) {
   const printed = String(item.printedQuestion || "").replace(/\s+/g, "");
   // Matches whether OCR keeps the shared "依指示寫出所有代表答案的英文
@@ -9130,6 +10268,133 @@ function verifyTrapezoidTypeLetters(item, crop) {
   const given = answer.split(/[,，、\s]+/).filter(Boolean).map((s) => s.toUpperCase()).sort();
   const correct = given.join() === expectedLetters.join();
   return { correct, correctAnswer: correct ? "" : expectedLetters.join(",") };
+}
+
+// Ticket 212 (2026-09-30, real citation: 小學數學新思維 3下A作業
+// math3xa_pdf/p24.png Q⑩: "希兒用橡皮圈在右面的釘板上圍出一個三角形。"
+// (a) 希兒圍出哪種三角形?答案：___三角形 (b) 希兒把橡皮圈由C點移往O
+// 點,會圍出一個___三角形。 -- a pegboard (5x5 dot grid) with labelled
+// points A(top-left corner), B(bottom-left corner), C(bottom row, right
+// of B), O(interior point, unconnected). Self-measured against the real
+// grid: (a) A-B-C is right-angled at B (AB vertical, BC horizontal) AND
+// isosceles (AB=BC) -> 等腰直角三角形. (b) A-B-O has AO=BO (isosceles)
+// but no right angle -> 等腰三角形.
+//
+// Reuses Ticket 203's exact dot-detection (findGridDotPositions) and
+// Vision-word letter-binding pattern -- the one new piece is telling
+// WHICH 3 of the several labelled points form the actual drawn
+// rubber-band triangle for part (a) (this citation's pegboard also
+// labels an unconnected reference point, O, not part of any triangle)
+// -- resolved by sampling the straight line between every pair of
+// resolved points and checking what fraction of it is real ink, i.e.
+// detecting the actual drawn edges rather than assuming which letters
+// belong together. Part (b) is hypothetical (never drawn) and is
+// resolved by parsing "由X點移往Y點" as a straight substitution into
+// part (a)'s own already-found triangle.
+function classifyTriangleType(a, b, c) {
+  const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  const ab = dist(a, b), bc = dist(b, c), ca = dist(c, a);
+  const maxSide = Math.max(ab, bc, ca);
+  const TOL = maxSide * 0.06;
+  const eq = (x, y) => Math.abs(x - y) < TOL;
+  const isEquilateral = eq(ab, bc) && eq(bc, ca);
+  const isIsosceles = !isEquilateral && (eq(ab, bc) || eq(bc, ca) || eq(ca, ab));
+  const dot = (p, q, r) => (q.x - p.x) * (r.x - p.x) + (q.y - p.y) * (r.y - p.y);
+  const angleCos = (p, q, r) => dot(p, q, r) / (dist(p, q) * dist(p, r));
+  const RIGHT_TOL = Math.cos((90 - 6) * Math.PI / 180);
+  const isRight = Math.abs(angleCos(a, b, c)) < RIGHT_TOL || Math.abs(angleCos(b, a, c)) < RIGHT_TOL || Math.abs(angleCos(c, a, b)) < RIGHT_TOL;
+  if (isEquilateral) return "等邊三角形";
+  if (isIsosceles && isRight) return "等腰直角三角形";
+  if (isRight) return "直角三角形";
+  if (isIsosceles) return "等腰三角形";
+  return "不規則三角形";
+}
+
+function findConnectedTrianglePoints(pixels, w, h, resolvedPoints) {
+  const isInk = (x, y) => {
+    const i = (Math.round(y) * w + Math.round(x)) * 4;
+    return (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]) < 150;
+  };
+  const letters = Object.keys(resolvedPoints);
+  const isEdge = (p, q) => {
+    const steps = Math.max(10, Math.round(Math.hypot(q.x - p.x, q.y - p.y) / 3));
+    let inkCount = 0;
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      const x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t;
+      if (x < 0 || x >= w || y < 0 || y >= h) continue;
+      if (isInk(x, y)) inkCount++;
+    }
+    return inkCount / (steps - 1) > 0.85;
+  };
+  for (let i = 0; i < letters.length; i++) {
+    for (let j = i + 1; j < letters.length; j++) {
+      for (let k = j + 1; k < letters.length; k++) {
+        const [l1, l2, l3] = [letters[i], letters[j], letters[k]];
+        const [p1, p2, p3] = [resolvedPoints[l1], resolvedPoints[l2], resolvedPoints[l3]];
+        if (isEdge(p1, p2) && isEdge(p2, p3) && isEdge(p3, p1)) return [l1, l2, l3];
+      }
+    }
+  }
+  return null;
+}
+
+function isPegboardTriangleQuestion(item) {
+  const printed = String(item.printedQuestion || "").replace(/\s+/g, "");
+  // Matches whether OCR keeps the shared "...在右面的釘板上圍出一個三
+  // 角形" preamble on every split-out (a)/(b) sub-item or only the
+  // first -- part (b)'s own real citation line ("希兒把橡皮圈由C點移往
+  // O點，會圍出一個___三角形") doesn't repeat "釘板" at all, so the
+  // move-instruction shape alone is also accepted as sufficient.
+  if (/由[A-Z]點移往[A-Z]點/.test(printed) && /三角形/.test(printed)) return true;
+  return /橡皮圈/.test(printed) && /釘板/.test(printed) && /三角形/.test(printed);
+}
+
+function verifyPegboardTriangleType(item, crop) {
+  const printed = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer || !isPegboardTriangleQuestion(item)) return { correct: null, correctAnswer: "" };
+  if (!item.gridPointLabels || item.gridPointLabels.length < 3) return { correct: null, correctAnswer: "" };
+  if (crop.originX == null || crop.originY == null) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  let triangleLetters, resolvedPoints;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const dots = findGridDotPositions(pixels, w, h);
+    if (!dots.length) return { correct: null, correctAnswer: "" };
+    resolvedPoints = {};
+    for (const label of item.gridPointLabels) {
+      const localX = label.px - crop.originX, localY = label.py - crop.originY;
+      let best = null, bestD = Infinity;
+      for (const d of dots) {
+        const dist = Math.hypot(d.x - localX, d.y - localY);
+        if (dist < bestD) { bestD = dist; best = d; }
+      }
+      if (best && bestD < Math.max(w, h) * 0.25) resolvedPoints[label.letter] = best;
+    }
+    triangleLetters = findConnectedTrianglePoints(pixels, w, h, resolvedPoints);
+  } catch { return { correct: null, correctAnswer: "" }; }
+  finally { if (photonImg) photonImg.free(); }
+  if (!triangleLetters) return { correct: null, correctAnswer: "" };
+
+  // Shape (b): "由<X>點移往<Y>點" -- substitute Y for X in the (a)
+  // triangle's own point set, since this new triangle is never actually
+  // drawn.
+  const moveMatch = printed.match(/由([A-Z])點移往([A-Z])點/);
+  let finalLetters = triangleLetters;
+  if (moveMatch) {
+    const [, fromL, toL] = moveMatch;
+    if (!triangleLetters.includes(fromL) || !(toL in resolvedPoints)) return { correct: null, correctAnswer: "" };
+    finalLetters = triangleLetters.map((l) => (l === fromL ? toL : l));
+  }
+  const pts = finalLetters.map((l) => resolvedPoints[l]);
+  if (pts.some((p) => !p)) return { correct: null, correctAnswer: "" };
+  const expected = classifyTriangleType(pts[0], pts[1], pts[2]);
+  const correct = answer.replace(/三角形$/, "").trim() === expected.replace(/三角形$/, "");
+  return { correct, correctAnswer: correct ? "" : expected };
 }
 
 // Ticket found 2026-09-28 (躍思 workbook survey): a real Müller-Lyer
@@ -9807,12 +11072,24 @@ function readShapeClassificationFromPixels(pixels, w, h) {
     let shape;
     if (isRound) shape = aspect < 1.2 ? "circle" : "ellipse";
     else if (v === 3) shape = "triangle";
-    else if (v === 4) shape = (aspect < 1.15 && rectFill > 0.78) ? "square" : (rectFill > 0.85 ? "rectangle" : "quadrilateral");
+    else if (v === 4) {
+      shape = (aspect < 1.15 && rectFill > 0.78) ? "square" : (rectFill > 0.85 ? "rectangle" : "quadrilateral");
+      // 2026-10-02: a plain "quadrilateral" (neither square nor
+      // rectangle by bounding-box aspect) gets a second look via real
+      // edge-angle/length geometry, same family as classifyTrapezoidType
+      // -- distinguishes trapezoid/rhombus/parallelogram instead of
+      // leaving them all as an undifferentiated catch-all.
+      if (shape === "quadrilateral") {
+        if (classifyTrapezoidType(finalPoints)) shape = "trapezoid";
+        else shape = classifyParallelQuadType(finalPoints) || "quadrilateral";
+      }
+    }
     else if (v === 5) shape = "pentagon";
     else if (v === 6) shape = "hexagon";
+    else if (v === 8) shape = "octagon";
     else shape = "other";
 
-    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area, points: finalPoints };
+    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area, points: finalPoints, isSymmetric: hasLineSymmetry(finalPoints) };
   }
 
   const results = [];
@@ -10408,6 +11685,10 @@ const SHAPE_CN_TO_CANONICAL = {
   三角形: "triangle",
   五邊形: "pentagon",
   橢圓形: "ellipse",
+  八邊形: "octagon",
+  梯形: "trapezoid",
+  菱形: "rhombus",
+  平行四邊形: "parallelogram",
 };
 
 // Standalone (not a QUESTION_TYPE_HANDLERS-internal closure) so the bbox
@@ -10420,11 +11701,58 @@ function isShapeClassificationGridQuestion(item) {
   const namesFound = Object.keys(SHAPE_CN_TO_CANONICAL).filter((cn) => printed.includes(cn));
   if (namesFound.length < 2) return false;
   // Every shape name actually asked about must be one this classifier
-  // can verify -- a mix of e.g. 正方形+菱形 in the same question would
-  // otherwise silently only check half the answer, which is worse than
-  // not touching the question at all.
-  const anyUnsupported = /菱形|梯形|平行四邊形|八邊形/.test(printed);
+  // can verify -- a mix of e.g. 正方形+[an unsupported shape] in the same
+  // question would otherwise silently only check half the answer, which
+  // is worse than not touching the question at all. As of 2026-10-02,
+  // all shape names this classifier is ever asked about in the real
+  // archive (including 菱形/梯形/平行四邊形/八邊形, previously excluded)
+  // are supported -- namesFound.length < 2 above already guards the
+  // "too few names mentioned" case, so there's nothing left to exclude
+  // here. Kept as an explicit, named check (rather than deleted
+  // outright) so a FUTURE unsupported shape name can be added back here
+  // the moment one is found, without having to rediscover this
+  // "decline rather than half-check" discipline from scratch.
+  const anyUnsupported = false;
   return !anyUnsupported;
+}
+
+// Found 2026-10-02 (TSA full-years diagram survey, see hasLineSymmetry's
+// own comment for the real citation and official answer). Narrow
+// trigger: specifically "列出軸對稱圖形" (the exact literal phrase seen
+// in all 4 real occurrences), on the same "寫出所有代表答案嘅英文字母"
+// letter-grid shape this file's shape_classification_grid family already
+// recognises -- but checks `shape.isSymmetric` instead of a canonical
+// shape-NAME match, so it's a separate, standalone verify path rather
+// than a SHAPE_CN_TO_CANONICAL category.
+function isSymmetricShapesGridQuestion(item) {
+  const printed = String(item.printedQuestion || "");
+  return /英文字母|代表答案/.test(printed) && /列出軸對稱圖形/.test(printed);
+}
+
+function verifySymmetricShapesGrid(item, crop) {
+  if (!isSymmetricShapesGridQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  let photonImg;
+  try {
+    const bytes = base64ToBytes(crop.data);
+    photonImg = PhotonImage.new_from_byteslice(bytes);
+    const w = photonImg.get_width(), h = photonImg.get_height();
+    const pixels = photonImg.get_raw_pixels();
+    const shapes = readShapeClassificationFromPixels(pixels, w, h);
+    if (shapes.length < 2) return { correct: null, correctAnswer: "" };
+    const letterFor = (idx) => String.fromCharCode(65 + idx);
+    const expectedLetters = shapes.map((s, i) => (s.isSymmetric ? letterFor(i) : null)).filter(Boolean);
+    const studentLetters = answer.split(/[,，、\s]+/).map((x) => x.trim().toUpperCase()).filter(Boolean);
+    const maxLetterIdx = shapes.length - 1;
+    if (studentLetters.some((L) => L.charCodeAt(0) - 65 > maxLetterIdx || L.charCodeAt(0) - 65 < 0)) return { correct: null, correctAnswer: "" };
+    const correct = studentLetters.length === expectedLetters.length && [...studentLetters].sort().every((L, i) => L === [...expectedLetters].sort()[i]);
+    return { correct, correctAnswer: correct ? "" : expectedLetters.join(",") };
+  } catch (e) {
+    return { correct: null, correctAnswer: "" };
+  } finally {
+    if (photonImg) photonImg.free();
+  }
 }
 
 // Parses "(a)正方形 (b)長方形 ..." (question) or "(a)A,I (b)F ..." /
@@ -10698,6 +12026,77 @@ function verifySquareFoldCutEight(item) {
   return { correct, correctAnswer: correct ? "" : "等腰" };
 }
 
+// Found 2026-10-02 (TSA full-years diagram survey): three closed-form
+// circle-geometry facts, all provable from the "O是圓心" labelling alone
+// -- NO image/OCR data needed at all, unlike every other circle-diagram
+// question this survey found (those genuinely need pixel measurement or
+// a new OCR contract, see the library doc's own note on this). Each
+// verified against its own real official marking scheme:
+//
+// (1) Any triangle formed using the centre O plus two points ON the
+// circle (so two of its three sides are both radii, hence equal length)
+// is ALWAYS isosceles -- real citation `tsa/2016/TSA2016_6MC1.txt` Q28(a)
+// "老師畫了一個三角形和一個圓，O是圓心。(a)老師畫了一個*直角/等腰/等邊*
+// 三角形。" -> official answer "等腰" (`2016/TSA2016_6MC1_MS.pdf`).
+// EXCEPTION: when the question additionally states a side equals the
+// OTHER (non-radius) side too (e.g. "OA和AB的長度相等"), all three sides
+// become equal -- real citation `tsa/2016/TSA2016_6MC2.txt` Q31(a) "OA
+// 和AB的長度相等。(a)老師畫了一個*直角/等腰/等邊*三角形。" -> official
+// answer "等邊" (`2016/TSA2016_6MC2_MS.pdf`).
+function isTwoRadiiTriangleTypeQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  return /O(?:是|點是)圓心/.test(text) && /直角[\/／]等腰[\/／]等邊/.test(text) && /三角形/.test(text);
+}
+function verifyTwoRadiiTriangleType(item) {
+  if (!isTwoRadiiTriangleTypeQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const expected = /長度相等/.test(text) ? "等邊" : "等腰";
+  const correct = answer.includes(expected) && !(expected === "等腰" && /等邊/.test(answer));
+  return { correct, correctAnswer: correct ? "" : expected };
+}
+
+// (2) "圓的直徑是[某半徑線段]長度的___倍" -- the diameter is ALWAYS
+// exactly 2 times any radius, by definition, regardless of the actual
+// length -- real citation `tsa/2016/TSA2016_6MC2.txt` Q31(b) "圓的直徑
+// 是OA長度的___倍。" (OA is a radius, since O is the centre) -> official
+// answer "2" (`2016/TSA2016_6MC2_MS.pdf`).
+function isDiameterIsTwiceRadiusQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  return /O\s*(?:是|點是)\s*圓心/.test(text) && /圓的直徑是[\s\S]{0,10}長度的\s*(?:_{2,}|＿{2,})?\s*倍/.test(text);
+}
+function verifyDiameterIsTwiceRadius(item) {
+  if (!isDiameterIsTwiceRadiusQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === 2, correctAnswer: studentNum === 2 ? "" : "2" };
+}
+
+// (3) "[centre][point]是圓的___" fill-blank -- any segment from the
+// labelled centre to a point confirmed on the circle's circumference is
+// BY DEFINITION the radius -- real citation `tsa/2013/TSA2013_6MC2.txt`
+// Q33(a) "下圖中，O點是圓心。(a)OY是圓的________________。" -> official
+// answer "半徑" (`2013/TSA2013_6MC2_MS.pdf`). Narrow trigger: the named
+// segment's first letter must be the same letter used for the centre
+// ("O是圓心" ... "OY是圓的___"), so this never fires on an unrelated
+// blank that happens to ask about some other line.
+function isCentreSegmentIsRadiusQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const centreMatch = text.match(/([A-Z])\s*(?:是|點是)\s*圓心/);
+  if (!centreMatch) return false;
+  const re = new RegExp(`\\b${centreMatch[1]}[A-Z]\\s*是圓的\\s*(?:_{2,}|＿{2,})`);
+  return re.test(text);
+}
+function verifyCentreSegmentIsRadius(item) {
+  if (!isCentreSegmentIsRadiusQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const correct = answer.includes("半徑") && !/直徑|圓周/.test(answer);
+  return { correct, correctAnswer: correct ? "" : "半徑" };
+}
+
 // Same page, Q⑧: "下面的六邊形每條邊的長度都相等。[hexagon cut into
 // A/B/C/D, drawn separately, same shape as the letter-grid above] 圖A
 // 是（直角/等腰/等邊）三角形。(把答案圈起來)" -- unlike Q7/Q9 above, the
@@ -10933,9 +12332,23 @@ const QUESTION_TYPE_HANDLERS = [
     name: "chinese_large_numeral_to_arabic",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      return /阿拉伯數字/.test(printed) && /「[^」]+」/.test(printed);
+      const keywordIdx = printed.indexOf("阿拉伯數字");
+      return keywordIdx !== -1 && /「[^」]+」/.test(printed.slice(keywordIdx));
     },
     verify: (item) => verifyChineseLargeNumeralToArabic(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifyArabicToChineseNumeral's own comment for the 2 real
+    // citations). The exact reverse direction of chinese_large_numeral_
+    // to_arabic above ("用中國數字寫出" vs "以阿拉伯數字寫出") -- distinct
+    // literal keyword, no ordering risk against it.
+    name: "arabic_to_chinese_numeral",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /用中國數字寫出/.test(printed) && /「[\d,，\s]+」/.test(printed);
+    },
+    verify: (item) => verifyArabicToChineseNumeral(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 208 (2026-09-30, real collision found): must run BEFORE
@@ -10997,6 +12410,48 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyNumberWordConversion(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Found 2026-10-02 (TSA 2022 P3 maths archive, see
+    // verifyWeeklyRateWithExceptionDay's own comment for citations). A
+    // real collision found via this handler's own dispatch test: the
+    // real citation ("星期一至六每天上2小時，星期日上4小時...共多少
+    // 小時") contains BOTH "每" and "共", so word_problem_rate_
+    // multiplication's looser detect() below also claims it -- and
+    // would compute a confidently WRONG single rate×count answer
+    // (it has no concept of "N days at one rate + 1 exception day at
+    // another"). Must run BEFORE word_problem_rate_multiplication.
+    name: "weekly_rate_with_exception_day",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /星期一至六每天.{0,6}?\d+\s*小時[\s\S]{0,30}?星期日.{0,6}?\d+\s*小時/.test(printed)
+        || WEEKLY_RATE_EXCEPTION_EN_RE.test(printed);
+    },
+    verify: (item) => verifyWeeklyRateWithExceptionDay(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2022 P6 maths archive, see
+    // verifyDailyRateSumTimesWeek's own comment for citations). Same
+    // collision class as weekly_rate_with_exception_day above: the real
+    // citation contains both "每" (每天) and "共" (一星期共), so must run
+    // BEFORE word_problem_rate_multiplication.
+    name: "daily_rate_sum_times_week",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return DAILY_RATE_SUM_ZH_RE.test(printed) || dailyRateSumTimesWeekEnMatches(printed);
+    },
+    verify: (item) => verifyDailyRateSumTimesWeek(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2023 P3 maths archive, see
+    // verifySpentPlusRemainingEqualsOriginal's own comment for
+    // citations).
+    name: "spent_plus_remaining_equals_original",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return (SPENT_REMAIN_ZH_RE.test(printed) || SPENT_REMAIN_EN_RE.test(printed)) && (printed.match(/\d+/g) || []).length >= 2;
+    },
+    verify: (item) => verifySpentPlusRemainingEqualsOriginal(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // Ticket 49 (2026-09-27): written and tested 2026-09-25 (found from
     // the exact bug verifyWordProblemTotal's own "每" guard documents --
     // that function safely declines a rate-multiplication shape rather
@@ -11006,10 +12461,73 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_rate_multiplication",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      if (/每/.test(printed) && /(共|總共|一共|合共)/.test(printed)) return true;
+      if (/每[\s\S]{0,60}(共|總共|一共|合共)/.test(printed)) return true;
       return !!tryEnglishEachHasRateMultiplication(printed);
     },
     verify: (item) => verifyWordProblemRateMultiplication(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years diagram survey, see
+    // verifyPieChart's own comment for the real citations and the
+    // disclosed "unvalidated against a real photo" caveat). Needs
+    // item.pieChart (OCR PIE_CHART: marker) to have fired, so no
+    // collision risk against any text-only handler.
+    name: "pie_chart_query",
+    detect: (item) => {
+      if (!item.pieChart || typeof item.pieChart !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /的(?:數量|顧客人數)是(?:最喜愛)?[一-鿿]+?(?:遊戲)?的\s*幾分之幾/.test(printed) || /及[一-鿿]+?佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/.test(printed) || /(最多|最少)的[一-鿿]*是/.test(printed);
+    },
+    verify: (item) => verifyPieChart(item.pieChart, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (English/Chinese TSA-subject survey, see
+    // verifyLeafletTableQuery's own comment for the real citation and
+    // 4 real sub-shapes). Needs item.leafletTable (OCR LEAFLET_TABLE:
+    // marker) to have fired, so no collision risk against any text-only
+    // handler.
+    name: "leaflet_table_query",
+    detect: (item) => {
+      if (!item.leafletTable || typeof item.leafletTable !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /years?\s+old[\s\S]{0,60}\bjoin\s+the\b/i.test(printed) || /joins?\s+the\s+[\s\S]{0,40}?\s+Class[\s\S]{0,30}\bpays?\b/i.test(printed) || /The\s+[\s\S]{0,40}?\s+Class\s+is\s+on\b/i.test(printed) || /who\s+teaches\s+two\s+classes/i.test(printed);
+    },
+    verify: (item) => verifyLeafletTableQuery(item.leafletTable, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2024 P6 maths archive, see
+    // verifyPaidMinusKnownItemDividedByQuantity's own comment for
+    // citation). Different names-count (1, not 2) from both
+    // price_table_lookup and price_table_sum_with_discount below, so no
+    // real ordering risk against either, but listed first since it's
+    // the most specific of the three priceTable-based shapes.
+    name: "paid_minus_known_item_divided_by_quantity",
+    detect: (item) => {
+      if (!item.priceTable || typeof item.priceTable !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      if (!PAID_MINUS_KNOWN_ZH_RE.test(printed) && !PAID_MINUS_KNOWN_EN_RE.test(printed)) return false;
+      const names = Object.keys(item.priceTable).filter((n) => printed.includes(n));
+      return names.length === 1;
+    },
+    verify: (item) => verifyPaidMinusKnownItemDividedByQuantity(item.priceTable, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2022 P3 maths archive, see
+    // verifyPriceTableSumWithDiscount's own comment for citations).
+    // Must run BEFORE price_table_lookup: both key off the same
+    // item.priceTable + 2-matching-names shape, but this one additionally
+    // requires a "減N元" discount phrase in the question text -- the
+    // more specific match goes first so a real discount item can't be
+    // silently swallowed by the plain-sum handler below it.
+    name: "price_table_sum_with_discount",
+    detect: (item) => {
+      if (!item.priceTable || typeof item.priceTable !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      if (!/減\s*\d+\s*元/.test(printed) && !PRICE_DISCOUNT_EN_RE.test(printed)) return false;
+      const names = Object.keys(item.priceTable).filter((n) => printed.includes(n));
+      return names.length === 2;
+    },
+    verify: (item) => verifyPriceTableSumWithDiscount(item.priceTable, item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 52 (2026-09-27): verifyPriceTableLookup was written and
@@ -11279,6 +12797,28 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyCommonFactorsCount(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Found 2026-10-02 (TSA 2023 P6 maths archive, see
+    // verifyBasePlusMultipleOfBaseTotal's own comment for citation).
+    // Same collision class as common_factors_count above: the real
+    // citation's "共長" contains "共", so word_problem_total's generic
+    // trigger also matches it and would wrongly sum 117+3=120 instead
+    // of the real 117×4=468 -- must run BEFORE word_problem_total.
+    name: "base_plus_multiple_of_base_total",
+    detect: (item) => !!basePlusMultipleTotalMatch(String(item.printedQuestion || "")),
+    verify: (item) => verifyBasePlusMultipleOfBaseTotal(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifyMultiPersonFareSplit's own comment for citation). Real
+    // collision found via this handler's own dispatch test: the citation's
+    // "共須42元" also matches word_problem_total's generic 共 trigger,
+    // which would wrongly sum 4+42=46 instead of the real 42÷4=10.5 --
+    // must run BEFORE word_problem_total.
+    name: "multi_person_fare_split",
+    detect: (item) => /\d+\s*人同行共須\s*\d+(?:\.\d+)?\s*元[\s\S]{0,40}平均每人須付/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyMultiPersonFareSplit(item.printedQuestion, item.studentAnswer),
+  },
+  {
     name: "word_problem_total",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
@@ -11309,6 +12849,20 @@ const QUESTION_TYPE_HANDLERS = [
     verify: (item) => verifyWordProblemDifference(item.printedQuestion, item.studentAnswer),
   },
   {
+    // Found 2026-10-02 (TSA 2023 P6 maths archive, see
+    // verifyPercentageMoreLessThanBase's own comment -- this is the fix
+    // for the real bug found there). Must run BEFORE word_problem_more_
+    // than: both key off the same "比...多/少" phrase, but this one is
+    // the percentage (multiplicative) shape, which word_problem_more_
+    // than's own math gets wrong -- the more specific match goes first.
+    name: "percentage_more_less_than_base",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /比[^，,。？?！!]{0,10}(多|少)[^，,。？?！!]{0,10}\d+(?:\.\d+)?\s*%/.test(printed) || PERCENTAGE_MORE_LESS_EN_RE.test(printed);
+    },
+    verify: (item) => verifyPercentageMoreLessThanBase(item.printedQuestion, item.studentAnswer),
+  },
+  {
     // 2026-09-26 question-type survey: the inverse of word_problem_
     // difference above (that one has both totals, asks for the
     // difference; this one has one total + the difference, asks for the
@@ -11318,11 +12872,32 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_more_than",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      const hasMoreOrFewer = /比[^，,。？?！!]{0,10}(多|少)/.test(printed) || /\b(more|fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+      const hasMoreOrFewer = /比[^，,。？?！!]{0,10}(多|少|高|矮|長|短|重|輕|大|小)/.test(printed) || /\b(more|fewer|less)\b.{0,20}\bthan\b/i.test(printed);
       if (!hasMoreOrFewer) return false;
       return (printed.match(/\d+/g) || []).length === 2;
     },
     verify: (item) => verifyWordProblemMoreThan(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2022 P3 maths archive, see
+    // verifyShortfallFromNeededTotal's own comment for citations). Must
+    // run before word_problem_total: the real citation's "還欠" phrase
+    // does not itself contain "共/總共/一共/合共", so in practice there's
+    // no overlap risk, but placing the more specific 3-number shape
+    // first keeps this explicit.
+    name: "shortfall_from_needed_total",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      const isZh = /(還欠|仍欠|仲欠)/.test(printed);
+      const isEn = SHORTFALL_EN_RE.test(printed);
+      if (!isZh && !isEn) return false;
+      if ((printed.match(/\d+/g) || []).length !== 3) return false;
+      if (!isZh) return true;
+      const needCount = (printed.match(/需(?:用|要)\s*\d+/g) || []).length;
+      const haveCount = (printed.match(/有\s*\d+/g) || []).length;
+      return needCount === 2 && haveCount === 1;
+    },
+    verify: (item) => verifyShortfallFromNeededTotal(item.printedQuestion, item.studentAnswer),
   },
   {
     // 2026-09-26 question-type survey: "write a number between X and Y"
@@ -11350,6 +12925,43 @@ const QUESTION_TYPE_HANDLERS = [
       return (printed.match(/\d+/g) || []).length === 2;
     },
     verify: (item) => verifyWordProblemCeilingDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifyTwoFactorCeilingDivision's own comment for citation). No real
+    // ordering risk against word_problem_ceiling_division above (that one
+    // requires 至少/最少, this one doesn't -- different literal trigger).
+    name: "two_factor_ceiling_division",
+    detect: (item) => /每本[^\d]{0,6}有\s*\d+\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}\d+\s*張[\s\S]{0,20}要放[^\d]{0,6}\d+\s*張/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyTwoFactorCeilingDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifyTwoStepAverageDivision's own comment for citation).
+    name: "two_step_average_division",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      if (!/平均每.{0,6}有多少/.test(printed)) return false;
+      return /\d+\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}\d+\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*\d+\s*[頁個張]/.test(printed);
+    },
+    verify: (item) => verifyTwoStepAverageDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifySimpleAverageDivision's own comment for citation).
+    name: "simple_average_division",
+    detect: (item) => /\d+\s*張[\s\S]{0,10}厚度是\s*\d+(?:\.\d+)?[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifySimpleAverageDivision(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see
+    // verifyChangeFromRateMultiplication's own comment for citation). No
+    // real collision risk against word_problem_division below (that one
+    // requires exactly 2 numbers; this citation has 3), but listed first
+    // for clarity since both key off the same 每...售 phrase.
+    name: "change_from_rate_multiplication",
+    detect: (item) => /每[^\d]{0,6}售\s*\d+(?:\.\d+)?\s*元[\s\S]{0,20}買\s*\d+\s*[^\d，,。]{0,4}[\s\S]{0,10}付款\s*\d+(?:\.\d+)?\s*元[\s\S]{0,20}找回/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyChangeFromRateMultiplication(item.printedQuestion, item.studentAnswer),
   },
   {
     name: "word_problem_division",
@@ -11405,6 +13017,38 @@ const QUESTION_TYPE_HANDLERS = [
     name: "first_n_multiples",
     detect: (item) => /列出\d+的最初(?:\d+|[一二三四五六七八九十]+)個倍數/.test(String(item.printedQuestion || "")),
     verify: (item) => verifyFirstNMultiples(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2022/2023 P6 maths archive, see
+    // verifyFirstNCommonMultiples's own comment for citations). Must
+    // run before first_n_multiples since its narrower "和\d+" + "公倍數"
+    // pattern wouldn't collide anyway (different literal text), but
+    // listed as its own standalone entry for clarity.
+    name: "first_n_common_multiples",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return /列出\d+和\d+的最初(?:\d+|[一二三四五六七八九十]+)個公倍數/.test(printed) || FIRST_N_COMMON_MULTIPLES_EN_RE.test(printed);
+    },
+    verify: (item) => verifyFirstNCommonMultiples(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see verifyDirectHcf's own
+    // comment for the 4 real citations). Distinct literal text from
+    // short_division_hcf_mc's "最大公因數不是" trigger, so no ordering
+    // risk against it.
+    name: "direct_hcf",
+    detect: (item) => /\d+\s*和\s*\d+\s*的最大公因數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDirectHcf(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years survey, see verifyDirectLcm's own
+    // comment for the 3 real citations). Must run BEFORE
+    // first_n_common_multiples would never collide anyway (different
+    // literal text: 最小公倍數 vs 最初...個公倍數), listed as its own
+    // standalone entry for clarity.
+    name: "direct_lcm",
+    detect: (item) => /\d+\s*和\s*\d+\s*的最小公倍數/.test(String(item.printedQuestion || "")),
+    verify: (item) => verifyDirectLcm(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 145 (2026-09-28): reverse-solve base from multiple-difference.
@@ -11487,6 +13131,16 @@ const QUESTION_TYPE_HANDLERS = [
       return options.length >= 2 && options.every((o) => /\d+是\d+的(?:倍數|因數)/.test(o.text));
     },
     verify: (item) => verifyFactorMultipleDefinitionMC(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (TSA 2022 P6 maths archive, see
+    // verifyPercentageDiscountZhe's own comment for citation).
+    name: "percentage_discount_zhe",
+    detect: (item) => {
+      const printed = String(item.printedQuestion || "");
+      return PERCENTAGE_DISCOUNT_ZHE_ZH_RE.test(printed) || PERCENT_OFF_EN_RE.test(printed);
+    },
+    verify: (item) => verifyPercentageDiscountZhe(item.printedQuestion, item.studentAnswer),
   },
   {
     // Ticket 174 (2026-09-28): decimal price -> dollars+cents split.
@@ -11732,7 +13386,7 @@ const QUESTION_TYPE_HANDLERS = [
     // long comment for the real citation and the disclosed equal-area
     // scope limit.
     name: "fraction_shading",
-    detect: (item) => isFractionShadingQuestion(item),
+    detect: (item) => isFractionShadingQuestion(item) || isPercentageShadingQuestion(item),
     verifyVisual: (item, crop) => verifyFractionShading(item, crop),
   },
   {
@@ -11744,6 +13398,16 @@ const QUESTION_TYPE_HANDLERS = [
     name: "grid_point_isosceles",
     detect: (item) => isGridPointIsoscelesQuestion(item),
     verifyVisual: (item, crop) => verifyGridPointIsosceles(item, crop),
+  },
+  {
+    // Ticket 212 (2026-09-30): see classifyTriangleType/
+    // findConnectedTrianglePoints's own long comment for the real
+    // citation and the line-connectivity detection this needed.
+    // isPegboardTriangleQuestion shared with handleMark's bbox fallback
+    // (findGridPointsBbox's call site, reused directly from 203).
+    name: "pegboard_triangle_type",
+    detect: (item) => isPegboardTriangleQuestion(item),
+    verifyVisual: (item, crop) => verifyPegboardTriangleType(item, crop),
   },
   {
     // Ticket 210 (2026-09-30): see the CJK_PARALLEL_LINES_TABLE/
@@ -11824,6 +13488,18 @@ const QUESTION_TYPE_HANDLERS = [
     verifyVisual: (item, crop) => verifyBalanceScalePiles(item, crop),
   },
   {
+    // Found 2026-10-02 (TSA full-years diagram survey, see
+    // hasLineSymmetry's own comment for the real citation). Real check:
+    // isShapeClassificationGridQuestion requires >=2 of its own
+    // SHAPE_CN_TO_CANONICAL names to appear as substrings, none of which
+    // match "列出軸對稱圖形" -- confirmed no actual collision, but listed
+    // first anyway since both share the same "英文字母|代表答案" signal
+    // and this one's trigger is strictly more specific.
+    name: "symmetric_shapes_grid",
+    detect: (item) => isSymmetricShapesGridQuestion(item),
+    verifyVisual: (item, crop) => verifySymmetricShapesGrid(item, crop),
+  },
+  {
     // Ticket (2026-09-30): see readShapeClassificationFromPixels's own
     // long comment for the full real validation history (Python 6/6,
     // JS-port 5/6) and its disclosed touching-shapes limitation.
@@ -11854,6 +13530,28 @@ const QUESTION_TYPE_HANDLERS = [
     name: "square_fold_cut_eight",
     detect: (item) => isSquareFoldCutEightQuestion(item),
     verify: (item) => verifySquareFoldCutEight(item),
+  },
+  {
+    // Found 2026-10-02 (TSA full-years diagram survey, see
+    // verifyTwoRadiiTriangleType's own comment for the 2 real citations
+    // and their official answers). Narrow enough (O是圓心 + the exact
+    // MC option text) that it can't collide with rectangle_diagonal_cut
+    // or hexagon_cut_piece_type above -- different literal trigger text.
+    name: "two_radii_triangle_type",
+    detect: (item) => isTwoRadiiTriangleTypeQuestion(item),
+    verify: (item) => verifyTwoRadiiTriangleType(item),
+  },
+  {
+    // Found 2026-10-02, see verifyDiameterIsTwiceRadius's own comment.
+    name: "diameter_is_twice_radius",
+    detect: (item) => isDiameterIsTwiceRadiusQuestion(item),
+    verify: (item) => verifyDiameterIsTwiceRadius(item),
+  },
+  {
+    // Found 2026-10-02, see verifyCentreSegmentIsRadius's own comment.
+    name: "centre_segment_is_radius",
+    detect: (item) => isCentreSegmentIsRadiusQuestion(item),
+    verify: (item) => verifyCentreSegmentIsRadius(item),
   },
   {
     // Ticket 222 ("Pattern 7"): hexagon-cut piece type -- reuses the
@@ -12622,7 +14320,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths, pieChart: r.pieChart, leafletTable: r.leafletTable }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -12746,6 +14444,16 @@ async function handleMark(request, env) {
     if (qwenOutcome.barChart) {
       qwenOutcome.items.forEach((item) => { item.barChart = qwenOutcome.barChart; });
     }
+    // Found 2026-10-02: pie chart is page-level shared context, same
+    // pattern as barChart above.
+    if (qwenOutcome.pieChart) {
+      qwenOutcome.items.forEach((item) => { item.pieChart = qwenOutcome.pieChart; });
+    }
+    // Found 2026-10-02: leaflet table is page-level shared context, same
+    // pattern as scheduleTable above.
+    if (qwenOutcome.leafletTable) {
+      qwenOutcome.items.forEach((item) => { item.leafletTable = qwenOutcome.leafletTable; });
+    }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
   const pagesMs = Date.now() - tPages;
@@ -12799,6 +14507,13 @@ async function handleMark(request, env) {
         // convention already used for barChart/calendarGrid/etc, just at
         // this earlier bbox stage since only here do we have BOTH the
         // item and pr.vision.words together before verification runs.
+        item.gridPointLabels = extractLabeledGridPoints(pr.vision.words, pr.vision.width, pr.vision.height);
+        return findGridPointsBbox(pr.vision.words, pr.vision.width, pr.vision.height);
+      }
+      if (isPegboardTriangleQuestion(item)) {
+        // Ticket 212: same gridPointLabels field name as Ticket 203 --
+        // both just need "every labelled point's page pixel position",
+        // reused directly rather than inventing a parallel field.
         item.gridPointLabels = extractLabeledGridPoints(pr.vision.words, pr.vision.width, pr.vision.height);
         return findGridPointsBbox(pr.vision.words, pr.vision.width, pr.vision.height);
       }
@@ -13657,6 +15372,10 @@ export {
   verifyCalendarGridQuery,
   extractScheduleTable,
   verifyScheduleTableQuery,
+  extractPieChart,
+  verifyPieChart,
+  extractLeafletTable,
+  verifyLeafletTableQuery,
   extractLocationGrid,
   verifyLocationGridQuery,
   extractFacingDirection,
@@ -13706,9 +15425,21 @@ export {
   verifyMinAddToPrime,
   verifyFactorMultipleDefinitionMC,
   verifyPriceDecimalSplit,
+  verifyPercentageDiscountZhe,
+  verifyPaidMinusKnownItemDividedByQuantity,
+  verifyDailyRateSumTimesWeek,
+  verifySpentPlusRemainingEqualsOriginal,
   verifyPriceListMaxMinDifference,
   verifySelectTwoNumbersSumTargetFromText,
   verifyFirstNMultiples,
+  verifyFirstNCommonMultiples,
+  verifyDirectHcf,
+  verifyDirectLcm,
+  verifyTwoFactorCeilingDivision,
+  verifyTwoStepAverageDivision,
+  verifySimpleAverageDivision,
+  verifyMultiPersonFareSplit,
+  verifyChangeFromRateMultiplication,
   verifyReverseBaseFromMultipleDifference,
   verifyMissingFactorInOrderedList,
   verifyDualConstraintNumberFilter,
@@ -13740,6 +15471,7 @@ export {
   verifySecondHandClock,
   readFractionShadingFromPixels,
   isFractionShadingQuestion,
+  isPercentageShadingQuestion,
   verifyFractionShading,
   findGridDotPositions,
   clusterSingleLetterWords,
@@ -13752,13 +15484,21 @@ export {
   isLatinParallelLinesCountQuestion,
   verifyLatinParallelLinesCount,
   classifyTrapezoidType,
+  classifyParallelQuadType,
   isTrapezoidTypeLetterQuestion,
   verifyTrapezoidTypeLetters,
+  classifyTriangleType,
+  findConnectedTrianglePoints,
+  isPegboardTriangleQuestion,
+  verifyPegboardTriangleType,
   verifyObjectCounting,
   readShapeClassificationFromPixels,
   isShapeClassificationGridQuestion,
   parseLabelledParts,
   verifyShapeClassificationGrid,
+  hasLineSymmetry,
+  isSymmetricShapesGridQuestion,
+  verifySymmetricShapesGrid,
   computeTriangleSubtypeProperties,
   collapseNearCollinearQuadToTriangle,
   classifyPrintedTriangleSubtypeTarget,
@@ -13768,6 +15508,12 @@ export {
   verifyRectangleDiagonalCut,
   isSquareFoldCutEightQuestion,
   verifySquareFoldCutEight,
+  isTwoRadiiTriangleTypeQuestion,
+  verifyTwoRadiiTriangleType,
+  isDiameterIsTwiceRadiusQuestion,
+  verifyDiameterIsTwiceRadius,
+  isCentreSegmentIsRadiusQuestion,
+  verifyCentreSegmentIsRadius,
   isHexagonCutPieceTypeQuestion,
   verifyHexagonCutPieceType,
   findLetterGridBbox,
@@ -13874,6 +15620,11 @@ export {
   verifyWordProblemDivision,
   verifyWordProblemDifference,
   verifyWordProblemMoreThan,
+  verifyPercentageMoreLessThanBase,
+  verifyBasePlusMultipleOfBaseTotal,
+  verifyShortfallFromNeededTotal,
+  verifyWeeklyRateWithExceptionDay,
+  verifyPriceTableSumWithDiscount,
   verifyNumberBetween,
   verifyWordProblemCeilingDivision,
   verifyDigitCountOfNPlusOne,
@@ -13889,6 +15640,8 @@ export {
   parseChineseSmallNumber,
   parseChineseLargeNumber,
   verifyChineseLargeNumeralToArabic,
+  arabicToChineseLargeNumber,
+  verifyArabicToChineseNumeral,
   verifyRepeatedDigitPlaceValueDifference,
   verifySubstituteAndEvaluate,
   verifySortFractionsAscending,

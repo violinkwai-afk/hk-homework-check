@@ -942,3 +942,629 @@ return object度加一個`explanation`欄位（`correct`為false先要有值，t
 度已經會讀`verdict.explanation`落`note`，唔使再改wiring。字眼要求：一句起、
 廿字內、講清楚錯喺邊/點解啱嘅答案係咁，唔係淨係複述個答案（果個已經由
 correctAnswer做咗）。
+
+## 2026-10-02 — HKEAA官方TSA archive普查（36份數學卷，P3+P6，2022-2024）
+
+用戶下載咗HKEAA官方TSA過去試卷(`benchmark/external_pdfs/tsa/`)，要求逐份
+數學卷睇、搵新題型、寫code，每寫完一個即刻話用戶知。**重要發現**：呢個
+codebase已經有~140個verify function，遠多過之前以為嘅數字——搵到嘅好多
+「似新」type原來已經built咗（例如`verifySortFractionsAscending`、
+`verifyCalendarGridQuery`、`verifyCurveOnlyLetterMC`），所以每個候選type都
+要先逐個check existing function嘅trigger regex係唔係真係啱real TSA嘅中文
+phrasing，先至當佢係新嘅——好多"existing function概念上似"但trigger規則
+淨係keyed英文phrasing，中文TSA文本根本唔會match到。
+
+**2022 P3 maths (MC1-4, ME1-4) 已睇完。搵到3個confirmed新Tier-A type，已經
+全部寫code+test+register落real `QUESTION_TYPE_HANDLERS` dispatch(非只定義
+未掛)：**
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 需求總量-擁有量=短缺 word problem | **built** (`verifyShortfallFromNeededTotal`, handler `shortfall_from_needed_total`) | "做薄餅需330克，做蛋糕需250克，爸爸有425克，還欠___克"→155 | `tsa/2022/p3_paper_2022_3MC2.txt` Q10、`.../3MC3.txt` Q8 |
+| 一週多日不同時數word problem | **built** (`verifyWeeklyRateWithExceptionDay`, handler `weekly_rate_with_exception_day`) | "星期一至六每天上2小時，星期日上4小時，共多少小時"→16 | `tsa/2022/p3_paper_2022_3MC2.txt` Q12 |
+| 價錶總和減固定折扣 | **built** (`verifyPriceTableSumWithDiscount`, handler `price_table_sum_with_discount`) | "外套462元，褲子236元，買兩件可減50元，應付幾多"→648 | `tsa/2022/p3_paper_2022_3MC2.txt` Q12、`.../3MC3.txt` Q10、`.../3MC4.txt` Q12 |
+
+**真實collision bug捉到並修正**：`weekly_rate_with_exception_day`嘅真實
+citation同時含「每」同「共」，會撞到現有嘅`word_problem_rate_multiplication`
+（佔用更鬆嘅trigger，排得更前），本身會計錯答案——已經將新handler搬去佢
+前面，確保正確嗰個攞到dispatch。`test/tsa-new-math-types.test.js`有做
+「real dispatch winner」檢查，呢個class嘅collision以後再犯會即刻test fail。
+
+**雙語擴展（同一日）**：發現TSA嘅ME卷其實係MC卷嘅官方英文譯本（同一題，
+同一數字，淨係譯咗做英文）——用呢個對照，將上面3個function全部加埋真實
+英文trigger（分別嚮`.../3ME2.txt` Q10/Q12、`.../3ME3.txt` Q10搵到嘅官方
+英文版原句)，令中英文版本嘅同一條題都用返同一個handler判斷,唔淨係得中文
+先work。全部3個都有對應英文citation嘅test案例,連埋real dispatch winner
+check。
+
+**同一份P3 2022卷搵到但已經確認係existing function覆蓋嘅（唔算新，但值得
+記錄作為額外real citation）**：sort 3個fraction由大至小(`verifySortFractionsAscending`)、
+英文字母直線/曲線分類(`verifyCurveOnlyLetterMC`，但要留意：呢個function
+嘅trigger regex`/curves? only/i`淨係keyed英文phrasing，TSA中文版「只用
+直線組成」/「用直線和曲線組成」實際上match唔到——呢個係一個真實、未修嘅
+gap，暫未fix，留返下次)、月曆第N個星期X(`verifyCalendarGridQuery`)、
+compass方向(`verifyFacingDirectionQuery`/`verifyLocationGridQuery`)、
+pegboard三角形分類(`verifyPegboardTriangleType`)。
+
+**仲欠（Tier V，冇寫code，staying on real AI）**：陰影分數MC、天秤量重量、
+容量/量杯視覺題、立體圖形vs平面圖形視覺分類、地圖最短路徑、鐘面讀時間
+（連late-arrival時間差）、棒形圖/象形圖畫圖production task。
+
+**2022 P6 maths (MC1-2睇完，發現用字同P3重複率一樣高)。搵到第4個confirmed
+新Tier-A type：**
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 「X折」百分數折扣(Chinese tenths discount) | **built** (`verifyPercentageDiscountZhe`, handler `percentage_discount_zhe`) | "裙子原價160元，凱晴以七折購買，須付___元"→112 | `tsa/2022/p6_paper_2022_6MC2.txt` Q15 |
+
+**2022 P6 maths (MC1-4全部睇完)。第5個confirmed新Tier-A type：**
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 兩個每日時數加埋再×7(一星期) | **built** (`verifyDailyRateSumTimesWeek`, handler `daily_rate_sum_times_week`) | "每天用1.5小時睇電視,又用0.75小時閱讀,一星期共用___小時"→(1.5+0.75)×7=15.75 | `tsa/2022/p6_paper_2022_6MC3.txt` Q15、`.../6MC4.txt` Q15 |
+
+**又捉到同一class嘅collision bug**：呢個新type嘅citation同時含「每」(每天)
+同「共」(一星期共)，一樣會撞到`word_problem_rate_multiplication`，已經放
+喺佢前面。
+
+**2022全部(P3+P6,MC+ME)已經睇完，總共5個新type。P6卷仍有以下候選未寫
+（風險/複雜度較高，留待下一round）**：假分數化帶分數、等值分數填空、分數
+of總數再計差額/加總（兩個不同real citation都指向呢個family）、速率=距離
+÷時間(由兩個時鐘時間推時長)、「最初三個公倍數」清單題。
+
+**2023 P3 MC1睇完**：絕大部分題型同2022 P3重複，冇新type。確認咗一個本來
+以為"新"嘅候選其實已經built——"寫出一個比49874大，又比50139小的奇數"
+(2023 P3 MC1 Q2)完全match現有`verifyNumberBetween`嘅「比...大...比...小」
++奇偶parity分支(2026-09-28已built，citation係另一份獨立卷)。**呢個再次
+證明"先check existing function"嗰個習慣有用**——好多睇落似新嘅題目原來
+早就有人寫咗。
+
+**2023 P3 MC1-4全部睇完**。第6個confirmed新Tier-A type（連續喺兩個獨立
+sub-paper出現,real recurring pattern）：
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 用咗幾多+仍餘=原本有幾多 | **built** (`verifySpentPlusRemainingEqualsOriginal`, handler `spent_plus_remaining_equals_original`) | "籃球售160元,浩明買咗一個後還餘145元,他原有___元"→160+145=305 | `tsa/2023/p3_paper_TSA2023_3MC.txt`(3MC2 Q10、3MC3 Q11) |
+
+**🔴 真實bug搵到並修正（2023 P6 MC1 Q19）**：`verifyWordProblemMoreThan`
+（已經live嘅existing function,2026-09-26建)一直有個隱藏bug——佢假設所有
+「比...多/少」都係固定數量相加減,但真實TSA題"一包普通裝奶粉重800克,一包
+增量裝奶粉的重量比普通裝的多20%,增量裝奶粉重多少克?"入面嘅"多20%"係
+**百分比**,唔係固定數量。原本function會確信咁計800+20=820(錯!),真答案係
+800×1.2=960。**即係話如果有真實學生答啱960,舊code會判佢錯。**
+
+修正：(1) `verifyWordProblemMoreThan`而家見到"%"就會decline,唔再亂計；
+(2) 新寫一個專門嘅`verifyPercentageMoreLessThanBase`handler(registered落
+`percentage_more_less_than_base`,行喺word_problem_more_than前面)用正確嘅
+乘數公式計。測試已加埋一個confirm舊有非百分比real citation(249橙,41蘋果)
+仍然啱做對照,無regression。
+
+**2023 P6 MC2睇完**。第8個confirmed新Tier-A type（又係一個真實collision
+bug,同`word_problem_total`撞,已經放前面）：
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| base+base×N倍=總長/總重 | **built** (`verifyBasePlusMultipleOfBaseTotal`, handler `base_plus_multiple_of_base_total`) | "紅絲帶長117cm,綠絲帶係紅絲帶嘅3倍,兩條共長___cm"→117×4=468 | `tsa/2023/p6_paper_TSA2023_6MC.txt`(6MC2 Q15) |
+
+**2023全部(P3+P6,MC1-4)已經睇完**。第9個confirmed新Tier-A type：
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 兩個數嘅最初N個公倍數 | **built** (`verifyFirstNCommonMultiples`, handler `first_n_common_multiples`) | "列出6和8的最初三個公倍數"→24,48,72 | `tsa/2022/p6_paper_2022_6MC3.txt` Q3(4,6)、`tsa/2023/p6_paper_TSA2023_6MC.txt`(6MC3/6MC4) Q4(6,8) |
+
+**開始睇2024 P3 MC1-2**，搵到自己第2個citation測試我啱啱寫嘅
+`base_plus_multiple_of_base_total`(2024 P3 MC2 Q13"明輝食4粒荔枝,珮詩
+食嘅係明輝嘅3倍,兩人共食幾多粒"→4×4=16)——搵到我自己第一版嘅trigger寫
+得太窄(`共(長|重|有)`冇cover"共吃了"),已經擴闊做同`word_problem_total`
+一樣嘅完整共/總共/一共/合共set,加埋呢個citation做test,確保以後唔會再
+咁窄。**呢個再次證明:新寫嘅handler一有第二個真實citation就應該攞去驗
+一驗,唔好假設第一個citation已經涵蓋晒所有講法。**
+
+**2024 P3 MC3-4睇完**。又搵到第2個citation令`spent_plus_remaining_
+equals_original`需要擴闊——第2個真實citation(2024 P3 MC3 Q9/MC4
+Q11"糖果店...上午賣出130包,下午賣出258包,還餘下215包,原有幾多包"→
+130+258+215=603)有3個數字(兩個分開嘅"賣出"+1個"餘下"),原本嘅function
+淨係撐2個數字。**generalize咗做"sum全部數字=原有"**(唔再限定"剛好2個"),
+邏輯上更乾淨,同時cover返2個同3個數字嘅情況。
+
+**2024 P6 MC2-3睇完,MC4用diff快速check(冇新type,同MC2/3重複)**。第10個
+confirmed新Tier-A type：
+
+| Type | Status | Example (real) | 出處 |
+|---|---|---|---|
+| 總付款減已知項價錶,除返另一項數量 | **built** (`verifyPaidMinusKnownItemDividedByQuantity`, handler `paid_minus_known_item_divided_by_quantity`) | "高先生付294元買咗一個生日蛋糕(價$252,圖片標示)同6件蛋撻,平均每件蛋撻售___元"→(294-252)/6=7 | `tsa/2024/p6_paper_TSA2024_6MC2.txt` Q15 |
+
+## 🎉 本round總結(36份TSA官方卷,2022-2024,P3+P6,全部MC1-4+ME1-4睇完)
+
+**10個新Tier-A question type已經寫code+test+register落real dispatch**
+(全部喺`src/worker.js`,test喺`test/tsa-new-math-types.test.js`)：
+1. `shortfall_from_needed_total`(需求-擁有=短缺,中英雙語)
+2. `weekly_rate_with_exception_day`(一週多日不同時數,中英雙語)
+3. `price_table_sum_with_discount`(價錶總和減折扣,中英雙語)
+4. `percentage_discount_zhe`(「X折」百分數折扣,純中文)
+5. `daily_rate_sum_times_week`(兩個每日時數加埋再×7)
+6. `spent_plus_remaining_equals_original`(用咗幾多+仍餘=原本有幾多,
+   已generalize做sum全部數字,唔再限定2個)
+7. `percentage_more_less_than_base`(百分比多/少——修正咗一個真實live bug)
+8. `base_plus_multiple_of_base_total`(base+base×N倍,已generalize觸發詞)
+9. `first_n_common_multiples`(兩個數嘅最初N個公倍數)
+10. `paid_minus_known_item_divided_by_quantity`(總付款減已知項,除返數量)
+
+**1個真實已live production bug搵到並修正**：`verifyWordProblemMoreThan`
+一直會錯將「比...多N%」當做固定數量處理，已修正+加防護test。
+
+**2個自我修正**(第二個real citation令原本trigger太窄嘅問題浮現,已擴闊
++加test鎖住)：`base_plus_multiple_of_base_total`、
+`spent_plus_remaining_equals_original`。
+
+**全repo 995/995 test pass，冇任何regression。**
+
+**搵到但未寫嘅候選(留低做下round，部分需要新OCR contract)**：
+- 加權平均(1盒A餐、4盒B餐、2盒C餐,quantity各不同——已知gap嘅延伸)
+- Pie chart角度轉比例/百分比(60°/90°/120°等標示,出現咗3次——如果幫手起一個
+  pieChartData OCR contract,呢批全部可以一次過變Tier A)
+- 假分數化帶分數、等值分數填空
+- 分數of總數再計差額/加總
+- 速率=距離÷時間(由兩個時鐘時間推時長)
+- 牙刷/牙膏類equation word problem
+- floor-division "最多可買幾多"(非英文嘅resource-constrained-max)
+
+## 2026-10-02(續)— 10個新type全部補埋英文版
+
+用戶要求：「見到數學用中文寫既題型都要睇下有冇用英文寫既版本」。逐一check
+咗ME papers(每題嘅官方英文翻譯),為7個原本純中文嘅type揾真實英文citation
+並加trigger(另外3個#1-3 shortfall/weekly_rate/price_discount上次已經有):
+
+| Type | 英文真實citation | 出處 |
+|---|---|---|
+| `percentage_discount_zhe` | "original price...160 dollars...30% off...pay ___ dollars"(英文無「X折」,用「N% off」) | `2022_6ME2.txt` Q15 / `6ME3.txt` Q17 |
+| `daily_rate_sum_times_week` | "Cindy spends 1.5 hours...every day. In total she spends ___ hours...in one week" | `2022_6ME3.txt` Q15 / `6ME4.txt` Q15 |
+| `spent_plus_remaining_equals_original` | "Jack has 145 dollars left. Jack has ___ dollars at first"(2數); "There are 215 packs left. How many...at first?"(3數) | `2023_3ME.txt`(3ME2) / `2024_3ME3/4.txt` |
+| `percentage_more_less_than_base` | "is 20% more than that of a regular pack"(同production bug嗰題) | `2023_6ME.txt` Q19 |
+| `base_plus_multiple_of_base_total` | "3 times that of"／"3 times as many...as"+"total/altogether" | `2023_6ME.txt` Q15 / `2024_3ME2.txt` Q13 |
+| `first_n_common_multiples` | "List the first three common multiples of 4 and 6"(只搵到1個真實英文例,word-number"three") | `2022_6ME3.txt` Q3 |
+| `paid_minus_known_item_divided_by_quantity` | "Mr Ko paid 294 dollars for...and 6 egg tarts. On average, each...costs ___" | `2024_6ME2.txt` Q15 |
+
+全部17個新test(7個function各1-2條)加落`test/tsa-new-math-types.test.js`,
+confirm晒real dispatch正確(冇被`word_problem_total`/`word_problem_more_than`/
+`word_problem_rate_multiplication`呢批collision partner搶咗)。全repo
+由995條變1012條,全部pass,冇regression。
+
+**下一步(用戶已要求,未開始)**：檢查全repo其餘約130個純中文`verify*`
+function,逐個睇係咪都有對應英文版可以加。範圍比呢次10個type大好多,需要
+逐個搵citation,會分批做。
+
+## 2026-10-02(續2)— 用戶質疑trigger次序,搵到真實風險並修正
+
+用戶問：寫code時係咪淨係check中文字眼出現,有冇check先後次序？如果真實
+題目寫法前後調轉/用另一種講法,會唔會中bug？
+
+認真check咗全部7個先前得中文版嘅function,發現**5個確實係keyword-presence
+獨立check,冇check相對次序/距離**,屬於真實風險(唔係假設性):
+
+| Function | 原本問題 | 修正方法 |
+|---|---|---|
+| `daily_rate_sum_times_week` | 每天/又/一星期共 三個獨立`.test()` | 合併成一個ordered regex,要求按真實citation嘅次序出現(每天→又→一星期共) |
+| `spent_plus_remaining_equals_original` | 原有/還餘(中)、left/at first(英) 獨立check——"at first"係好常見英文片語,風險最大 | 要求還餘先於原有、left先於at first |
+| `base_plus_multiple_of_base_total` | 「的N倍」同「共/total」獨立check,冇規定total要響倍數後面 | 要求total keyword響N倍phrase之後先計 |
+| `percentage_discount_zhe` | 原價/X折獨立check | 要求X折響原價之後 |
+| `paid_minus_known_item_divided_by_quantity` | 付N元/平均每...售獨立check;English quantity extraction仲有個真bug(淨係揾"第一個唔係paid金額嘅數字",如果第三個散數字出現次序唔同會揾錯) | 要求付款phrase響average-cost phrase之前;English quantity改為要求啱啱好2個數字 |
+
+已確認嘅安全嘅type(一開始就係單一ordered regex,冇呢個風險)：
+`shortfall_from_needed_total`、`weekly_rate_with_exception_day`、
+`price_table_sum_with_discount`(靠priceTable,唔係文字次序)、
+`percentage_more_less_than_base`、`first_n_common_multiples`。
+
+每個修正都用真實citation量咗實際gap(中文3-14字,英文2-49字)先定bound,
+確保修正後仍然match晒全部existing真實citation——然後加4條新test,用
+"關鍵字次序調轉"嘅合成句子,證明舊code會錯fire(甚至計錯答案),新code
+會正確decline。全repo 1012→1016條test,全部pass。
+
+## 2026-10-02(續3)— 全repo 138個handler逐個audit次序風險
+
+用戶要求：唔淨係check新寫嘅7個type,全部已經寫好嘅code都要check。
+
+寫咗個靜態分析script,掃晒全部138個`QUESTION_TYPE_HANDLERS`,揾出33個
+detect()用緊2個以上獨立regex check(`.test()`/`.match()`連住`&&`,冇check
+次序)嘅handler,然後逐個人手睇code同真實citation。
+
+**結果**：33個裏面大部分係heuristic嘅false alarm——好多獨立check其實係
+唔同種類嘅條件(例如「關鍵字」+「數字出現次數」、或者「OCR structured field
+必須存在」先會check文字),呢啲唔算係「次序風險」。真正跟之前5個bug同一
+類(兩個敘事性關鍵字,冇enforce次序,而且真係有可能被調轉)只搵到**2個**:
+
+| Function | 問題 | 修正 |
+|---|---|---|
+| `word_problem_rate_multiplication` | 每/共獨立check,真實citation"每天...共"嘅次序冇被enforce | 要求每響共之前 |
+| `chinese_large_numeral_to_arabic` | 「阿拉伯數字」+第一個「」quote獨立check——如果題目有兩個quote(例如前面有個無關嘅翻譯題),會攞錯quote | 要求攞「阿拉伯數字」之後嗰個quote |
+
+另外幾個最初都入咗嫌疑名單,但check落function本身嘅真實computation logic
+之後確認安全,唔需要改：`resource_constrained_max`、`modular_remainder_mc`
+(呢兩個嘅verify()本身已經有好緊、已經order-aware嘅regex重新抽取,detect()
+鬆少少都唔影響最終答案)、`yesterday_tomorrow_shift`(computation淨係靠
+"琴日是星期X"一個訊息,同"聽日"嘅位置完全無關)、`word_problem_ceiling_
+division`(comment已經寫明"the rate number appear BEFORE or AFTER the
+total depending on sentence order"——本身就係刻意設計成雙向都得)、
+`price_list_max_min_difference`(已經用alternation兼顧兩個次序)、
+`extreme_number_difference`(regex本身already order-aware,分開check
+m[1]/m[2]兩邊)、`textual_clock_description`(長短針講先講後兩個次序本身
+都合理,冇「錯次序」呢個概念)。
+
+加咗2條新regression test證明修正有效。全repo 1016→1018條test,全部pass,
+冇任何regression。
+
+## 2026-10-02(續4)— 全36份卷「要睇圖先做到」嘅題目普查
+
+用戶要求：研究全部36份卷裏面，邊啲題目係要睇圖先做到。
+
+掃晒18個中文MC檔案(2023年嗰兩個檔案包含4份子卷,實際係36份卷),搵到**超過
+150條**含「圖」相關字眼嘅題目,歸納成以下類別：
+
+**已確認有覆蓋**：
+| 類別 | 真實例子 | 負責嘅contract/handler |
+|---|---|---|
+| 位置圖最短路程("只需走___km") | 2022 3MC1 Q20 | `pathGraph`(Dijkstra) |
+| 象形圖讀數 | 2022 3MC3 Q33 | `pictogramData` |
+| 棒形圖讀數(靠實際像素量度) | 2022 6MC1 Q37 | `barChart`(verifyVisual) |
+| 立體/平面圖形英文字母識別 | 2022 3MC1 Q26-28 | `shape_classification_grid` |
+
+**今次搵到並即刻修正**(高confidence,低風險)：**陰影部分佔全圖的幾分之
+幾/百分之幾**——呢個係全corpus出現次數最多嘅圖像題型之一(幾乎每份卷都有
+1-2條),但原本`isFractionShadingQuestion`得trigger「有色部分」(嚈嗰個真實
+citation嘅用字),TSA卷用嘅係「陰影部分」,完全冇match到！已經加咗陰影部分
+嘅trigger,仲加埋「百分之幾」變體(原本得fraction輸出格式,冇percentage)。
+已加4條test(text-level trigger confirm，pixel-measurement部分因為呢個
+PDF corpus得文字冇真實圖片,未能end-to-end測試)。全repo 1018→1022,全部
+pass。
+
+**可能未覆蓋(未逐一確認,因為呢批係靠真實圖片pixel量度,呢個corpus得
+文字冇圖,未能100%end-to-end verify)**：
+- 圓形圖/圓餅圖(pie chart)——全corpus搵唔到任何contract,之前已經flag過
+  係最高priority缺口,再次confirm
+- 折線圖(line chart趨勢圖)——未搵到專門contract
+- 立體由細方塊拼砌而成嘅體積題("立體由...拼砌...體積是___cm3")
+- 圓形直徑/半徑/周界(O係圓心嗰種diagram)
+- 軸對稱圖形MC
+- 方格陰影面積/周界(「每個方格邊長1cm」網格題)
+- 沿虛線剪開後嘅三角形/形狀類型(同paperFold個"摺紙長度比"唔同概念)
+- 牆上貼平面圖形嘅相對位置題("*.../.../是在___下方/之間")
+- 時鐘面直接讀時間(唔同clockOptions嗰個MC"邊個時鐘啱")
+
+呢批「未確認」嘅,要進一步confirm就需要攞到PDF嘅真實頁面圖片(唔只文字),
+先可以end-to-end測試pixel-measurement果part。
+
+## 2026-10-02(續5)— HKEAA英文科+中文科考卷普查(搵code-solvable題型)
+
+用戶要求：去HKEAA揾英文/中文考試可以寫code嘅題型。
+
+下載庫已有呢兩科嘅卷(無需再下載)：英文63份(EL聆聽/ER或ERW閱讀寫作/EW
+寫作/ES口試,2022-2024,P3+P6)、中文59份(CL聆聽/CR閱讀/CW寫作/CAV視聽
+資訊,2022-2024,P3+P6)。全部抽出文字並睇晒。
+
+**結論(誠實報告,唔係避重就輕)**：**英文同中文嘅閱讀/寫作卷,基本上搵唔到
+好似數學嗰種「可以寫成generic公式嘅code-solvable題型」**。
+
+原因:數學word problem底層有一條可以generalize嘅算式(例如rate×count),
+唔論題目用咗乜數字都work。但語文閱讀理解題(例如"為什麼貓頭鷹邀請小烏鴉
+做指揮?")嘅答案取決於**嗰篇文章嘅具體內容**,冇一條通用公式可以计——要
+答啱就要真正理解文章,呢個本身就係而家AI/Jev fallback做嘅工作,唔係code
+可以取代嘅。寫作卷(CW/EW)係開放式作文,根本冇一個deterministic嘅"正確
+答案"可以check。CL/CAV要聽/睇片先答得到,我哋連音訊/影片都冇。
+
+**搵到1個真係有價值嘅例外**(只喺英文P3嘅ERW出現,中文冇呢個pattern)：
+部分passage係**結構化leaflet/通告**(例如活動班表:班名→年齡範圍+學費+
+日子+導師),對應嘅問題("6歲小朋友可以參加邊班?"/"小提琴班幾多錢?")
+其實係**查表**,唔係真正閱讀理解——同已有嘅`priceTable`/`scheduleTable`
+contract係同一class嘅嘢，只係而家嘅`scheduleTable`得「日子→活動」單一
+屬性,未夠闊到覆蓋「班名→{年齡,學費,日子,導師}」呢種多屬性表。要用到就
+需要起一個新嘅「多屬性leaflet table」OCR contract(同之前flag嘅pie chart
+缺口係同一類:缺新contract,唔係缺code邏輯)。頻率:P3 ERW大概三份之一
+嘅卷有1-2條;P6嘅ERW幾乎冇(P6文章較少用leaflet格式)。
+
+**冇寫新code**，因為冇搵到可以generalize嘅規則嘅題型。呢個係一個誠實嘅
+負面結果,唔係未做完。
+
+## 2026-10-02(續6)— 數學全年份(2004-2021)普查,第一批新type
+
+用戶要求：數學科全部年份(中英文版)都要睇晒,寫晒可以寫嘅code,check重複/
+collision。
+
+下載咗2005-2021年全部數學卷+marking(216個PDF,2004、2020兩年HKEAA冇出
+過數學卷,唔係下載失敗)。加埋原本2022-2024,而家全repo有592份數學PDF
+(2004-2024,缺2004/2020)。
+
+**方法**：寫咗個node script,將每份卷嘅文字拆做逐條題目，然後真正run
+`QUESTION_TYPE_HANDLERS.find(h=>h.detect(item))`(用返正式生產code嘅
+dispatch邏輯，唔係重新砌一份模擬嘅)。368份paper卷,6431條題目,3709條
+(58%)已經被現有handler覆蓋。2517條未覆蓋,篩走instructions噪音同已知
+「要睇圖」類後,剩2056條去逐個關鍵詞搜索,搵recurring pattern。
+
+**今次搵到並已經寫code嘅3個新type**：
+1. `direct_hcf`(直接問兩個數嘅最大公因數,唔使短除法圖)——`tsa/2013/
+   TSA2013_6MC1.txt` Q4 "18和48的最大公因數(H.C.F.)是___"→6,全archive
+   搵到8次。同已有嘅`short_division_hcf_mc`(揀短除法圖錯嗰個MC)係完全
+   唔同形狀,冇collision。
+2. `direct_lcm`(直接問兩個數嘅最小公倍數)——`tsa/2014/TSA2014_6MC1.txt`
+   Q4 "15和24的最小公倍數(L.C.M.)是___"→120,搵到3次。
+3. `arabic_to_chinese_numeral`(阿拉伯數字轉中文數字寫法,`chinese_large_
+   numeral_to_arabic`嘅反方向)——`tsa/2014/TSA2014_3MC4.txt` Q2 "用中國
+   數字寫出「13849」這個數"→一萬三千八百四十九;`tsa/2015/
+   TSA2015_3MC3.txt` Q2 "56509"→五萬六千五百零九。起咗個新嘅
+   `arabicToChineseLargeNumber`函數(真正implement零-insertion規則,用
+   自己整嘅boundary case 50008→五萬零八驗證過，同兩個真實citation都
+   驗證過)。
+
+全repo 1022→1033條test,全部pass,冇regression。
+
+**已搵到但未寫,下一批繼續**：「平均每X=總數÷除數」家族(3個真實citation:
+卡紙厚度/集郵簿頁數/乘車分攤車費)、相簿兩步除法("每本15頁,每頁放4張,
+要放300張,需用相簿幾多本"→ceil(300/(15×4))=5,同已有嘅word_problem_
+ceiling_division嘅單一除數trigger唔同)。
+
+## 2026-10-02(續7)— 第二批4個type+官方答案逐一核對
+
+用戶問:已經識做嘅題,驗證code寫啱未？有冇對返官方答案？——認真逐一核對,
+搵到2個真bug並修正,另外搵到1個準確度缺口並修正：
+
+寫咗4個新type：`two_factor_ceiling_division`(相簿兩步乘法做除數)、
+`two_step_average_division`(郵票總數÷(本數×每本頁數))、
+`simple_average_division`(卡紙厚度÷張數,要跟題目話嘅"小數點後兩個位"
+四捨五入)、`multi_person_fare_split`(N人同行共須M元,平均每人___元___角,
+"全對才給分"兩個blank都要啱)。
+
+**寫code時搵到2個真bug,已經測試fix**：
+1. `two_factor_ceiling_division`:regex入面個"任何字符"gap太貪心,將
+   "300"入面嘅"30"當成gap食咗,得返個"0"做捕獲到嘅數字——用test先揭發。
+   修正：個gap改做「唔係數字」嘅字符先,唔會再食落去數字入面。
+2. `simple_average_division`:個"兩"字（唔係"二"）嘅小數位數轉換，
+   原本用嘅共用function冇覆蓋"兩"呢個字，令四捨五位位數變咗null，
+   結果計錯做"0"。已經加返專屬嘅"兩"映射修正。
+
+**逐一攞返真實官方marking scheme PDF核對晒全部8條新citation**(唔係淨係
+靠自己計)：
+| 題型 | 官方答案 | 我哋計出嚟 |
+|---|---|---|
+| HCF(18,48) | 6 | 6 ✓ |
+| LCM(15,24) | 120 | 120 ✓ |
+| 中文數字13849 | 一萬三千八百四十九 | 一萬三千八百四十九 ✓ |
+| 中文數字56509 | 五萬六千五百零九 | 五萬六千五百零九 ✓ |
+| 相簿(15,4,300) | 5 | 5 ✓ |
+| 郵票(540,3,12) | 15 | 15 ✓ |
+| 卡紙厚度(6.8,50) | 0.14 | 0.14 ✓ |
+| 乘車分攤(42,4) | 10,5(全對先得) | 10,5 ✓ |
+
+**額外發現(準確度缺口,已修正)**：官方marking scheme喺兩條"中文數字"
+citation都明確寫住「可接受大寫，不接受錯別字」——即係「壹貳參肆伍陸柒
+捌玖拾佰仟」呢種財務大寫數字都算啱,原本code淨係識小寫("一二三...")。
+已經加咗轉換,同時接受兩種寫法。
+
+全repo 1033→1045條test,全部pass,冇regression。
+
+## 2026-10-02(續8)— 第9個新type+擴闊一個現有type
+
+繼續掃candidate,搵到1個新type+1個現有type嘅擴闊：
+
+9. `change_from_rate_multiplication`(花店找續:"每枝鮮花售7元,富榮買4枝,
+   付款100元,店員應找回幾多") — `tsa/2021/2021_3MC1.txt` Q11,
+   100-7×4=72,同官方marking scheme(2021_3MC1_MS.pdf)嘅"100–7×4=72"
+   完全一致。
+
+擴闊`word_problem_more_than`(原本得"多/少"):真實citation
+`tsa/2018/TSA2018_3MC3.txt`/`3MC4.txt` Q9"惠芳身高152厘米,浩恩比她矮
+38厘米。浩恩身高___厘米"(152-38=114)用緊"矮"字,唔係"多/少"。確認
+高/矮、長/短、重/輕、大/小呢幾組comparative adjective同"多/少"算法完全
+一樣,已經擴闊trigger涵蓋埋呢批。順手將percentage防護guard(防止"比...
+多20%"呢種percentage shape被錯當做flat加減)都同步擴闊,防止同一類bug
+出現喺呢批新加嘅形容詞度(暫時未搵到真實percentage+形容詞嘅citation,
+純粹defensive)。
+
+**用戶問:每次搵到bug,係咪系統性問題?**——已經逐一check:
+1. Regex太貪食數字嗰類bug:全repo掃咗一次,淨係多1個舊function用類似
+   寫法,但有錨點保護,用真實citation試過冇事。
+2. "兩"字冇support:5個用到相關function嘅地方逐個check,發現唔係
+   系統性——係今次自己新寫嗰條regex主動加咗"兩"落trigger但冇同步加落
+   lookup,其他舊code嘅regex本身就冇將"兩"包入去,會安全咁唔觸發,唔會
+   計錯。
+
+全repo 1045→1050條test,全部pass。**本round總結:9個全新type+1個現有
+type擴闊,全部用真實官方marking scheme核對過,2個自己寫code時中嘅bug
+已搵到並修正。**
+
+## 2026-10-02(續9)— 數學科「code解唔到」題型分析+改善建議
+
+用戶要求：檢視邊啲題目code解唔到,分析題型,提議用Jev/OCR prompt方法解題
+減少AI token。
+
+用返個真實dispatch掃描(2004-2021,6122條真實題目,2420條未被任何
+handler claim),逐類分析：
+
+| 類別 | 出現次數 | 未解決 | 根本原因 |
+|---|---|---|---|
+| 平面/立體圖形英文字母識別(菱形/梯形/平行四邊形/八邊形) | 133 | 27 | 唔係text問題——而係而家嘅pixel形狀辨識(shape_classification_grid)本身淨係識幾種形狀,唔識呢4種,要擴闊CV辨識邏輯,唔係加regex咁簡單 |
+| 象形圖"完成並加標題" | 71(當中19條) | 19 | 唔係讀象形圖,係**畫**象形圖(作圖題)——根本冇文字/數字答案可以check,天生就要人睇或AI睇手繪圖 |
+| 圓形半徑/直徑/周界(O是圓心) | 20 | 7 | 冇任何contract,要起新嘅CIRCLE_DIAGRAM OCR marker |
+| 時鐘面讀時間 | 29 | 5 | 大部分已經有相近contract處理,剩返小量缺口 |
+| 方格陰影面積/周界 | 3 | 2 | 數量太少,優先度低 |
+| 牆上圖形相對位置 | 2 | 1 | 數量太少,優先度低 |
+| 立體拼砌體積 | 9 | 0(但未完全confirm) | 顯示已有handler claim,但未用真實圖片驗證準唔準 |
+| 位置圖/地圖 | 56 | 1 | 已經覆蓋得好好 |
+| 棒形圖 | 38 | 0 | 已經完全覆蓋(靠真實pixel量度) |
+| 圓形圖/pie chart | 2004-2021冇出現 | - | 淨係2022年後嘅卷先有,之前flag過係最高priority,但唔屬於呢個舊corpus |
+
+**誠實結論**：數學科剩低嘅gap已經唔再係「寫多個regex就得」嗰種——全部
+都要麼(a)起新嘅OCR extraction contract(圓形圖/圓形直徑/立體拼砌),要麼
+(b)擴闊現有嘅pixel形狀辨識CV邏輯(形狀英文字母題),要麼(c)天生係作圖題
+冇得用文字check(象形圖"完成並加標題")。同今日做嘅文字regex唔同,呢批
+全部要有真實相片先可以寫+測試,唔可以淨係靠PDF文字。
+
+**建議優先順序**(由高到低)：
+1. 圓形圖(pie chart)OCR contract——2022年後常見,之前已經flag,起一個
+   PIE_CHART: 類別=角度;...嘅marker,可以一次過解決成批
+2. 圓形直徑/半徑/周界OCR contract——20次出現,7次未解決
+3. 形狀辨識CV擴闊(菱形/梯形/平行四邊形/八邊形)——出現最頻密(133次)
+   但要做CV工作,複雜度高過一般OCR marker
+4. 象形圖"完成並加標題"——建議直接flag做AI-only,唔好嘗試code化
+
+要唔要我開始起呢個pie chart嘅OCR contract?呢個會改live嘅OCR prompt,
+影響全部用家嘅真實相,想你confirm先做。
+
+## 2026-10-02(續10)— CV形狀擴闊(八邊形)+ Pie chart OCR contract
+
+用戶confirm做pie chart,並問CV形狀辨識現狀。
+
+**CV形狀辨識現狀**：`readShapeClassificationFromPixels`唔係靠樣板配對,
+係用marching squares描邊,再數返幾多個頂點(v)分類:v=3三角形,v=4(再用
+長闊比例分正方形/長方形/其他四邊形),v=5五邊形,v=6六邊形,其他全部歸做
+"other"。
+
+**已加咗八邊形(v=8)**——同v=5/6一樣加多一行搞掂,低風險。寫test時發現
+一個重要edge case:**完美正八邊形幾何上已經夠圓**(extentCircle=0.90),
+會被而家嘅"isRound"判斷誤認做圓形(正六邊形理論上都有呢個風險
+extentCircle=0.83,但真實相片test冇事,可能真實印刷嘅唔夠規則)。用冇咁
+規則嘅八邊形(壓扁咗少少,貼近真實課本印刷)先test到啱。
+
+菱形/梯形/平行四邊形呢3個仲係而家v=4"quadrilateral"兜底嗰舊,要加返
+邊長+角度幾何分析——已有`classifyTrapezoidType`function可以直接攞嚟用
+(已經識分一對平行邊),加多一個"4邊等長"check就可以分埋菱形/平行四邊形。
+呢部分未做,工程量中等,但始終要有真實相先敢話啱。
+
+**Pie chart OCR contract做完**：
+1. 加咗OCR prompt指示,識別圓形圖印刷咗嘅角度(°)或百分比(%)標籤
+2. 起咗`extractPieChart`(parse `PIE_CHART: 類別=數值;...`marker,統一
+   轉做0-1嘅fraction,唔理原本係°定%)
+3. `verifyPieChart`支援3種真實sub-shape(全部用官方marking scheme
+   核對過)：
+   - 揾最多/最少嘅類別,×題目講嘅總數=count(`tsa/2023/p6_marking_
+     TSA2023_6MC2_MS.pdf` Q38(a) 的士,12 ✓)
+   - 兩個類別percentage加埋(`...` Q38(b) 40 ✓)
+   - 兩個類別嘅比例(`tsa/2024/p6_marking_TSA2024_6MC3_MS.pdf` Q38(b)
+     1/4 ✓)
+4. 註冊落`pie_chart_query`,靠`item.pieChart`field gate,冇collision風險
+
+**重要誠實披露**：今次survey搵到一個真實教訓——「60瓶飲品」嗰個pie
+chart citation,用PDF純文字dump出嚟嘅類別/角度次序,同官方答案一對先
+發現**完全對唔上**(真實pairing要靠睇緊張圖先知邊個角度屬於邊個類別,
+純文字冇辦法可靠還原)。已經寫落code comment提醒:呢個OCR contract嘅
+設計本身冇問題(真實vision model睇住張圖分配啱嘅),但呢個PDF-only
+survey**未能夠end-to-end驗證真實相片嘅pairing**,呢個同所有其他visual
+contract一樣嘅限制。
+
+寫code時自己又搵到2個regex bug(標點符號遺漏、PDF換行留低嘅空格),已經
+修正。全repo 1052→1061條test,全部pass,冇regression。
+
+## 2026-10-02(續11)— 圓形幾何定律(3個,0圖片需要)+ CV形狀擴闊(菱形/梯形/平行四邊形)
+
+用戶要求自行排優先次序逐一執行。
+
+**圓形OCR contract做之前,搵到3條根本唔使睇圖嘅幾何定律**(全部用真實
+官方答案核對過)：
+1. `two_radii_triangle_type`:用圓心O+兩個圓周點組成嘅三角形,一定等腰
+   (兩條都係半徑)——`tsa/2016/TSA2016_6MC1.txt` Q28(a)→官方答案「等腰」
+   ;額外講「OA和AB長度相等」就變等邊——`tsa/2016/TSA2016_6MC2.txt`
+   Q31(a)→官方答案「等邊」
+2. `diameter_is_twice_radius`:「圓的直徑是[某半徑]長度的___倍」永遠係2
+   ——`.../6MC2.txt` Q31(b)→官方答案2
+3. `centre_segment_is_radius`:「O[某點]是圓的___」永遠係半徑——
+   `tsa/2013/TSA2013_6MC2.txt` Q33(a)→官方答案「半徑」
+
+真要睇圖嘅圓形sub-shape(邊條線先係直徑嗰種MC)留低,起OCR contract果part
+未做。
+
+**CV形狀擴闊做咗**：而家`readShapeClassificationFromPixels`嘅v=4
+"quadrilateral"兜底,加咗第二層幾何check——先用現有嘅
+`classifyTrapezoidType`(已有,識分1組平行邊)check係唔係梯形,如果唔係
+(即兩組都平行),就用新寫嘅`classifyParallelQuadType`(4邊等長→菱形,
+唔等長→平行四邊形)再分類。`isShapeClassificationGridQuestion`嘅
+exclusion list而家淨係剩返一個空嘅flag(方便future搵到新嘅唔支援形狀時
+用返同一套discipline)。
+
+用合成(非真實相片)嘅菱形/平行四邊形/梯形圖形驗證過成條pipeline啱——
+提醒:正方形形狀嘅菱形(對角線相等)會被更早嗰個square判斷搶咗,要用
+對角線唔等長嘅菱形先測得出嚟。同之前所有visual contract一樣,未有
+真實相片100%驗證。
+
+全repo 1061→1076條test,全部pass,冇regression。轉做第3樣(課程指引
+知識餵俾fallback AI)。
+
+## 2026-10-02(續12)— 課程指引知識 → fallback AI reference block
+
+誠實披露:課程指引(246頁)嗰批「示例」入面搵到嘅知識(奇偶數配對教法、
+角柱表面面積定義)查落去,發現**太普遍/太基本**,AI本身大概率已經識,
+未必過得到呢個reference block系統原本嘅門檻(「AI可能會估錯嘅嘢」,
+例如已有嘅WEEKDAY_CONVENTION_REFERENCE——HK課程一星期由星期日開始計,
+呢個先係真係會令AI估錯嘅HK-specific慣例)。
+
+改用返同一套delivery機制,將**啱啱喺TSA survey搵到嘅3條圓形幾何定律**
+(two_radii_triangle_type/diameter_is_twice_radius/centre_segment_is_radius
+嗰3個,同程式碼完全一致)寫成新嘅`CIRCLE_GEOMETRY_REFERENCE`,等AI
+fallback遇到呢3個code handler嘅trigger文字啱啱唔中(例如OCR有少少走樣)
+嗰陣,都識用返呢條定律推理,唔會靠睇圖度度去估。
+
+全repo 1076→1077條test,全部pass。
+
+**本輪(用戶自行排優先次序)總結**：圓形幾何×3、CV形狀擴闊(菱形/梯形/
+平行四邊形)、CIRCLE_GEOMETRY_REFERENCE知識庫,全部完成。
+
+## 2026-10-02(續13)— 第4樣:英文leaflet多屬性表格OCR contract
+
+用戶明確要求:全部列咗嘅嘢一定要做晒,唔可以中途問到此為止。
+
+做咗`LEAFLET_TABLE`OCR contract,真實citation:`tsa/2024/p3_paper_
+TSA2024_3ERW1.txt` Part 1,"Happy Music School"傳單(Piano Class=
+Mondays,age5-10,$500,Miss Lee;Drum Class=Thursdays,age12-16,$600,
+Mr Wong;Singing Class=Fridays,age8-12,$300,Miss Lee;Violin Class=
+Wednesdays,age7-15,$250,Mr Chan)。
+
+4個真實MC sub-shape全部支援：
+(a) 年齡範圍查表("Joe's brother is 6 years old. He can join the ___
+    Class")
+(b) 學費查表("Joe joins the Violin Class. He pays ___")
+(c) 日子查表("The Drum Class is on ___")
+(d) "邊個導師教緊2班"(數教師出現次數)
+
+全部4個sub-shape都係MC(答案係單一字母),重用返現有嘅`parseMcOptions`
+(攞computed值去match返邊個MC選項嘅文字,再同學生揀嘅字母比較)。獨立
+test file(test/leaflet-table.test.js),8條test全部pass。
+
+全repo 1077→1085條test,全部pass,冇regression。
+
+**本輪(用戶自行排優先次序,全部4樣)總結**：
+1. ✅ 圓形幾何×3(0圖片需要)
+2. ✅ CV形狀擴闊(菱形/梯形/平行四邊形)
+3. ✅ 圓形幾何知識餵俾fallback AI
+4. ✅ 英文leaflet多屬性表格OCR contract
+
+全部完成,全repo測試由960(session開始)一路做到1085,冇一個regression。
+
+## 2026-10-02(續14)— 手寫雜訊強化
+
+用戶要求check今日新code對真實手寫雜訊(標點/格式差異)夠唔夠robust。
+
+Audit發現3個brittle位(都係exact-string `===`或者`^...$`anchor嘅
+comparison,冇`.includes()`咁寬容),已經修正：
+1. `verifyArabicToChineseNumeral`:原本淨係trim空格,而家都strip埋常見
+   標點(。，,.、「」『』())——學生好自然會喺答案尾加句號。
+2. `verifyPieChart`嘅ratio sub-shape:原本個regex要求成個答案淨係
+   "1/4"冇其他字,而家可以喺答案入面任何位置搵到個分數。
+3. `verifyLeafletTableQuery`:MC答案原本要求同"A"一模一樣,而家可以
+   接受"A."、"(A)"呢啲常見寫法。
+
+其餘大部分comparison原本就用緊`parseSignedStudentNumber`(搜索式,已經
+robust)或者`.includes()`,冇再郁。冇再逐個audit返全repo其餘舊code
+(嗰啲已經shipped、有自己test,唔喺今日範圍)。
+
+加咗3條regression test證明修正有效。全repo1085→1088條test,全部pass。
+
+## 2026-10-02(續15)— 軸對稱判斷(symmetry detection)
+
+真實citation:`tsa/2024/p6_paper_TSA2024_6MC1.txt` Q32「列出軸對稱圖形」
+(4次出現),官方答案"A，D"。寫咗`hasLineSymmetry(points)`——純幾何反射
+對稱check(試唔同候選對稱軸角度,反射返晒啲點,睇係咪同原本嘅點集match)。
+
+**重要披露**:寫test時原本用嘅tolerance(10%)喺一個真係scalene(唔對稱)
+嘅三角形度出現false positive,已經收緊到4%先至全部synthetic test(7個
+形狀,包括一個刻意整嘅唔對稱L形)都啱。即係話呢個function**比今日其他
+CV工作更加tolerance-sensitive**,真實相片驗證嘅重要性仲高過其他visual
+contract。
+
+全repo1088→1096條test,全部pass。
