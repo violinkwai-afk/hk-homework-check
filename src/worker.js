@@ -1839,6 +1839,8 @@ const OCR_ONLY_PROMPT = (pageCount) => `你唔使判斷啱定錯，淨係負責�
 
 **如果呢頁印刷咗一個完整月份嘅日曆表格(有日一二三四五六做欄標題,逐個格仔填住日子數字)**，喺回覆最開始加一行「CALENDAR_GRID: 月份=<幾月>;首日星期=<日/一/二/三/四/五/六,即係呢個月1號係星期幾>;日數=<呢個月總共幾多日>」。如果冇呢類完整日曆表格就完全唔使加呢行。
 
+**如果呢頁有一個「跑步/運動紀錄」表格,列出兩個或以上嘅人名/角色,每個各自有「距離」同「時間」兩項數據(例如比較邊個跑得快嗰種題目)**，喺回覆最開始加一行「DISTANCE_TIME_TABLE: 甲=距離數字,時間數字;乙=距離數字,時間數字;...」(淨係照抄印刷嘅數字,唔使計算)。如果冇呢類距離/時間紀錄表就完全唔使加呢行。
+
 **如果呢頁係一張「傳單/通告」(leaflet/notice)，列出幾個項目(例如興趣班/活動)，每個項目各自印刷咗幾項資料(例如上堂日子、年齡範圍、費用、導師名)**，喺回覆最開始加一行「LEAFLET_TABLE: 項目1名=日子,年齡範圍,費用,導師;項目2名=...」(年齡範圍用"數字-數字"格式例如"5-10"；費用照抄原文數字，連埋貨幣符號都可以；如果某一項資料冇印刷出嚈，嗰個位置留空但保留"," 分隔)。四項資料(日子、年齡範圍、費用、導師)缺少任何一項都照寫"LEAFLET_TABLE:"呢行,淨係嗰個位置留空。如果冇呢類傳單/通告,或者項目冇列出呢4種資料,就完全唔使加呢行。
 
 **如果呢頁印刷咗一個「星期時間表」(逐日星期配對一樣嘢，可以係活動/科目，都可以係甜品/食物/其他規律配對，例如「星期日=英文班,星期一=游泳班...」或者「星期日=蛋卷,星期一=紙杯蛋糕...」)**，喺回覆最開始加一行「SCHEDULE_TABLE: 星期日=活動1;星期一=活動2;...」（星期同活動用"="連接，唔同日之間用";"分隔）。如果表下面嘅問題入面又見到同一組圖示（例如問題度話「如果今天的甜品是[圖示]」而個圖示同上面個表其中一格一樣），要將個圖示換做同上面表入面完全一樣嘅文字寫入printedQuestion（例如寫做「如果今天的甜品是蛋卷」），唔好淨係寫「圖示」兩個字。如果冇呢類時間表就完全唔使加呢行。
@@ -2254,6 +2256,91 @@ function extractScheduleTable(text) {
 // genuine code-solvable sub-pattern in otherwise-uncodeable reading-
 // comprehension passages (the comprehension itself still needs AI; only
 // the "look up a stated attribute" sub-questions reduce to a lookup).
+// Found 2026-10-02 (real citation: the user's own photo from EDB's
+// ME_KLACG_chi_2017_12_08.pdf (the pedagogy-examples guide, NOT the
+// pmc2017_tc.pdf learning-content table), 示例6「橡皮筋動力車」worksheet
+// template, p.132 -- "以下是甲同學和乙同學的跑步紀錄：distance/time
+// table for 甲=100米/20秒,
+// 乙=150米/25秒", asking students to compare speed via two methods: (1)
+// distance covered per second -- bigger is faster; (2) time needed per
+// metre -- SMALLER is faster, the inverse comparison direction). Unlike
+// every TSA citation this session, this is a TEACHING TEMPLATE (the
+// numbers shown are just this guide's own worked example; a real
+// worksheet based on it would use different numbers), so there's no
+// single official marking scheme to check against -- the maths itself
+// (rate = distance/time, pace = time/distance, compare which way "more"
+// means "faster") is unambiguous regardless.
+function extractDistanceTimeTable(text) {
+  const m = /^DISTANCE_TIME_TABLE:\s*(.+)$/m.exec(text);
+  const cleanedText = text.replace(/^DISTANCE_TIME_TABLE:.*$/gm, "");
+  if (!m) return { distanceTimeTable: null, cleanedText };
+  const table = {};
+  for (const row of m[1].split(";")) {
+    const eqIdx = row.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = row.slice(0, eqIdx).trim();
+    const nums = (row.slice(eqIdx + 1).match(/\d+(?:\.\d+)?/g) || []).map(Number);
+    if (!name || nums.length !== 2) continue;
+    table[name] = { distance: nums[0], time: nums[1] };
+  }
+  return { distanceTimeTable: Object.keys(table).length >= 2 ? table : null, cleanedText };
+}
+
+// Method 1 ("平均用1秒跑了___米...較___") -- rate = distance/time, LARGER
+// rate is faster. Method 2 ("平均跑1米用了___秒...較___") -- pace =
+// time/distance, SMALLER pace is faster (opposite comparison direction
+// from Method 1, the real citation's own point: the two methods must
+// reach the SAME faster-person conclusion via inverse quantities).
+function verifyDistanceTimeRateCompare(distanceTimeTable, printedQuestion, studentAnswer) {
+  const printed = String(printedQuestion || "");
+  const answer = String(studentAnswer || "").trim();
+  if (!answer || !distanceTimeTable) return { correct: null, correctAnswer: "" };
+  const names = Object.keys(distanceTimeTable);
+  if (names.length !== 2) return { correct: null, correctAnswer: "" };
+  const [nameA, nameB] = names;
+  const a = distanceTimeTable[nameA], b = distanceTimeTable[nameB];
+  const studentNums = (answer.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  if (studentNums.length < 2) return { correct: null, correctAnswer: "" };
+  const CLOSE = (x, y) => Math.abs(x - y) < Math.max(Math.abs(y), 1) * 0.02;
+  // The "who's faster" blank is immediately followed by the fixed
+  // template phrase "同學跑得較快" (or just "跑得較快") -- find whichever
+  // name sits closest before that phrase, rather than just checking the
+  // WHOLE answer contains the right name (which a complete sentence
+  // naturally does for BOTH names, since it also states each person's
+  // own rate/pace earlier). Falls back to the LAST name mention in the
+  // answer if that fixed phrase isn't present verbatim.
+  const fasterNameMatches = (name) => {
+    const phraseIdx = answer.search(/(?:同學)?跑得較快/);
+    if (phraseIdx !== -1) {
+      const before = answer.slice(0, phraseIdx);
+      return before.lastIndexOf(name) !== -1 && before.lastIndexOf(name) === Math.max(before.lastIndexOf(nameA), before.lastIndexOf(nameB));
+    }
+    return answer.lastIndexOf(name) === Math.max(answer.lastIndexOf(nameA), answer.lastIndexOf(nameB));
+  };
+
+  if (/平均.{0,4}1\s*秒.{0,6}[了咗]/.test(printed)) {
+    const rateA = a.distance / a.time, rateB = b.distance / b.time;
+    const fasterName = rateA > rateB ? nameA : nameB;
+    const moreOrLess = "多";
+    const nameOk = fasterNameMatches(fasterName);
+    const compareOk = answer.includes(moreOrLess) && !answer.includes("少");
+    const numsOk = CLOSE(studentNums[0], rateA) && CLOSE(studentNums[1], rateB);
+    const correct = nameOk && compareOk && numsOk;
+    return { correct, correctAnswer: correct ? "" : `${rateA},${rateB},${fasterName},${moreOrLess}` };
+  }
+  if (/平均.{0,4}1\s*米.{0,6}[了咗]/.test(printed)) {
+    const paceA = a.time / a.distance, paceB = b.time / b.distance;
+    const fasterName = paceA < paceB ? nameA : nameB;
+    const moreOrLess = "少";
+    const nameOk = fasterNameMatches(fasterName);
+    const compareOk = answer.includes(moreOrLess) && !answer.includes("多");
+    const numsOk = CLOSE(studentNums[0], paceA) && CLOSE(studentNums[1], paceB);
+    const correct = nameOk && compareOk && numsOk;
+    return { correct, correctAnswer: correct ? "" : `${paceA},${paceB},${fasterName},${moreOrLess}` };
+  }
+  return { correct: null, correctAnswer: "" };
+}
+
 function extractLeafletTable(text) {
   const m = /^LEAFLET_TABLE:\s*(.+)$/m.exec(text);
   const cleanedText = text.replace(/^LEAFLET_TABLE:.*$/gm, "");
@@ -3083,7 +3170,8 @@ async function callQwenOcrText(images, openrouterKey) {
   const { barChart, cleanedText: cleanedText24 } = extractBarChart(cleanedText23);
   const { stickLengths, cleanedText: cleanedText25 } = extractStickLengths(cleanedText24);
   const { pieChart, cleanedText: cleanedText26 } = extractPieChart(cleanedText25);
-  const { leafletTable, cleanedText } = extractLeafletTable(cleanedText26);
+  const { leafletTable, cleanedText: cleanedText27 } = extractLeafletTable(cleanedText26);
+  const { distanceTimeTable, cleanedText } = extractDistanceTimeTable(cleanedText27);
   const items = stripWorkedExampleEcho(reconstructSplitSentenceItems(parseOcrLine(cleanedText)));
   // Ticket 55: a page that's ENTIRELY sudoku puzzles legitimately has
   // zero normal items -- only treat this as a real OCR failure when
@@ -3091,7 +3179,7 @@ async function callQwenOcrText(images, openrouterKey) {
   if (!items.length && !sudokuPuzzles.length) {
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
   }
-  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths, pieChart, leafletTable };
+  return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths, pieChart, leafletTable, distanceTimeTable };
 }
 
 // Ticket 13 (2026-09-26): the final layer of the OCR -> code -> AI design
@@ -3121,7 +3209,9 @@ async function callQwenOcrText(images, openrouterKey) {
 // AI-fallback call with an irrelevant reference block.
 const HK_CURRENCY_REFERENCE = `參考資料——香港硬幣同紙幣真實資料（幫你分辨相入面嘅面額，唔好靠估）：
 硬幣（1993年洋紫荊系列）：1毫=金色細圓形(17.5mm)；2毫=金色花瓣形(18-19mm)；5毫=金色圓形(22.5mm)；$1=銀色圓形(25.5mm)；$2=銀色花瓣形(26.3-28mm)；$5=銀色圓形、邊有凹槽字(27mm)；$10=銀色圈+金色芯嘅雙色圓形(24mm)。全部正面都係洋紫荊花圖案。
-紙幣顏色：$20藍色、$50綠色、$100紅色、$500啡色、$1000金色。`;
+紙幣顏色：$20藍色、$50綠色、$100紅色、$500啡色、$1000金色。
+一個印住數字「10」嘅硬幣，中文寫法係「壹毫」，即係10仙（1角），唔係10元——睇硬幣上面印嘅數字時要留意，唔可以當佢係元嘅數目。$1硬幣中文寫法係「壹圓」。
+「$2.50」用中文寫/讀出嚟應該係「二元五角」（2元5角），唔係照住小數點讀；學生用「元」、「角」嚟表達金額都算啱，唔一定要用小數寫法。`;
 
 function mentionsMoneyDenomination(pendingItems) {
   const re = /\$|coin|note|cent|denomination|硬幣|紙幣|銀紙|面額|毫子|蚊/i;
@@ -3224,10 +3314,11 @@ const WEEKDAY_CONVENTION_REFERENCE = `參考資料——呢個課程嘅一星期
 const CIRCLE_GEOMETRY_REFERENCE = `參考資料——圓形嘅幾何定律（幫你答圓形題,呢啲係定義,唔使靠睇圖度度）：
 如果O係圓心，O到任何一個圓周上的點嘅線段，定義上一定係「半徑」。
 用圓心O加兩個圓周上的點組成嘅三角形，必然係等腰三角形（因為當中兩條邊都係半徑，長度一定相等），除非題目另外講明第三條邊同半徑一樣長（咁就係等邊三角形）。
-圓嘅直徑永遠係半徑長度嘅2倍（直徑=2×半徑），呢個係定義，唔受個圓實際大小影響。`;
+圓嘅直徑永遠係半徑長度嘅2倍（直徑=2×半徑），呢個係定義，唔受個圓實際大小影響。
+圓形圖（pie chart）喺小學程度，每個扇形嘅圓心角一定係30°或45°嘅倍數，學生唔需要自己用尺量度圓心角先可以計數——如果圖上印咗角度/百分比數值，直接用嗰個印刷數值計算就得，唔使靠睇圖估。`;
 
 function mentionsCircleGeometry(pendingItems) {
-  const re = /圓心|radius|diameter|半徑|直徑|圓周/i;
+  const re = /圓心|radius|diameter|半徑|直徑|圓周|圓形圖|扇形|pie chart/i;
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
@@ -3243,12 +3334,38 @@ function mentionsCircleGeometry(pendingItems) {
 // found in the same document (等腰直角三角形/直角等腰三角形 are the
 // SAME thing; 升/毫升 can be written in lowercase l/ml).
 const HK_TERMINOLOGY_LENIENCY_REFERENCE = `參考資料——呢個課程小學階段唔要求學生識嘅正式用詞（幫你判斷學生答案,唔好因為學生冇用返正式名詞就話佢錯）：
-小學階段唔要求學生識用呢啲正式名詞：「交換性質」、「結合性質」、「分配性質」、「正比例」、「序數」同「基數」二詞、「幾何圖形」、「端點」、「包含關係」、「凸四邊形」、「均勻截面」——學生淨係用返自己嘅講法解釋都算啱,唔使佢講出呢啲正式名詞先算啱。
+小學階段唔要求學生識用呢啲正式名詞：「交換性質」、「結合性質」、「分配性質」、「正比例」、「序數」同「基數」二詞、「幾何圖形」、「端點」、「包含關係」、「凸四邊形」、「均勻截面」、「質量」——學生淨係用返自己嘅講法解釋都算啱,唔使佢講出呢啲正式名詞先算啱（例如克、公斤應該講係重量單位，唔使特登講「質量」二字）。
 「等腰直角三角形」同「直角等腰三角形」係同一樣嘢，兩種講法都啱。
-「升(L)」和「毫升(mL)」嘅符號都可以用小寫字母表示（l、ml），兩種寫法都啱。`;
+「升(L)」和「毫升(mL)」嘅符號都可以用小寫字母表示（l、ml），兩種寫法都啱。
+「奇數」同「單數」係同一樣嘢，「偶數」同「雙數」係同一樣嘢，兩種講法都啱。
+「平均數」同「平均值」係同一樣嘢，兩種講法都啱。
+基本乘數應用題（例如「3組，每組2個，共幾個？」），學生寫「3×2」或「2×3」都算啱，唔限定邊個數字要擺前面。`;
 
 function mentionsHkTerminologyLeniency(pendingItems) {
-  const re = /交換性質|結合性質|分配性質|正比例|序數|基數|幾何圖形|端點|包含關係|凸四邊形|均勻截面|等腰直角三角形|直角等腰三角形/;
+  const re = /交換性質|結合性質|分配性質|正比例|序數|基數|幾何圖形|端點|包含關係|凸四邊形|均勻截面|等腰直角三角形|直角等腰三角形|質量|單數|雙數|平均數|平均值/;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Found 2026-10-03 (pmc2017_tc.pdf, P3/P4 units 3S2/4S1): the curriculum
+// explicitly teaches set-inclusion relationships between shape sub-types
+// via Venn/tree diagrams, e.g. "所有正方形皆是長方形" (every square IS a
+// rectangle), "所有正方形、長方形和菱形皆是平行四邊形" (square/rectangle/
+// rhombus are all ALSO parallelograms), "所有等邊三角形皆是等腰三角形"
+// (every equilateral triangle IS ALSO isosceles), "所有等腰直角三角形皆
+// 是直角三角形/等腰三角形". Real risk this addresses: an AI fallback judge
+// marking "是" (yes, it IS a parallelogram/isosceles-triangle) as WRONG
+// when the shape shown is actually the more specific sub-type (a square,
+// or an equilateral triangle) -- the curriculum says the broader name
+// should still be accepted as correct, not just the narrowest exact name.
+const SHAPE_INCLUSION_RELATIONSHIP_REFERENCE = `參考資料——小學課程教嘅形狀包含關係（幫你判斷「呢個係咪XX形」嘅答案,學生答啱都唔可以話佢錯）：
+正方形都係長方形嘅一種（即係問「呢個係咪長方形」，畫出嚟係正方形都應該答「係」）。
+正方形、長方形同菱形都係平行四邊形嘅一種（問「係咪平行四邊形」，呢三種形都應該答「係」）。
+正方形都係菱形嘅一種（問「係咪菱形」，正方形都應該答「係」）。
+等邊三角形都係等腰三角形嘅一種（問「係咪等腰三角形」，等邊三角形都應該答「係」）。
+等腰直角三角形同時都係直角三角形嗰種，又都係等腰三角形嗰種（兩樣都應該答「係」）。`;
+
+function mentionsShapeInclusionRelationship(pendingItems) {
+  const re = /正方形|長方形|菱形|平行四邊形|等腰三角形|等邊三角形|直角三角形/;
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
@@ -3398,6 +3515,7 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsCompleteSentenceReadingQuestion(pendingItems) ? COMPLETE_SENTENCE_READING_REFERENCE : null,
     mentionsCircleGeometry(pendingItems) ? CIRCLE_GEOMETRY_REFERENCE : null,
     mentionsHkTerminologyLeniency(pendingItems) ? HK_TERMINOLOGY_LENIENCY_REFERENCE : null,
+    mentionsShapeInclusionRelationship(pendingItems) ? SHAPE_INCLUSION_RELATIONSHIP_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -11089,7 +11207,26 @@ function readShapeClassificationFromPixels(pixels, w, h) {
     else if (v === 8) shape = "octagon";
     else shape = "other";
 
-    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area, points: finalPoints, isSymmetric: hasLineSymmetry(finalPoints) };
+    // Ticket (2026-10-03): pmc2017_tc.pdf's 對稱 unit gives a closed,
+    // curriculum-defined list of shapes that are axis-symmetric BY
+    // DEFINITION, regardless of exact proportions -- "正方形、長方形、
+    // 等腰三角形、等邊三角形、菱形和圓" (square/rectangle/isosceles
+    // triangle/equilateral triangle/rhombus/circle). For the 4 of those
+    // this classifier names directly (square/rectangle/rhombus/circle),
+    // use that definitional fact instead of the newer, more
+    // tolerance-sensitive hasLineSymmetry() reflection computation --
+    // this is strictly more reliable for these 4 shapes since it has no
+    // numerical tolerance to mis-calibrate. "triangle" is deliberately
+    // excluded here: this classifier doesn't sub-type triangles
+    // (isosceles/equilateral vs scalene), and only the first two of
+    // those are symmetric, so the geometric computation still does real
+    // work for triangles (and for ellipse/trapezoid/parallelogram/
+    // pentagon/hexagon/octagon, none of which are symmetric by shape
+    // name alone).
+    const isSymmetric = (shape === "square" || shape === "rectangle" || shape === "rhombus" || shape === "circle")
+      ? true
+      : hasLineSymmetry(finalPoints);
+    return { shape, vertices: v, cx: b.minX + bw / 2, cy: b.minY + bh / 2, area: b.area, points: finalPoints, isSymmetric };
   }
 
   const results = [];
@@ -12493,6 +12630,20 @@ const QUESTION_TYPE_HANDLERS = [
       return /years?\s+old[\s\S]{0,60}\bjoin\s+the\b/i.test(printed) || /joins?\s+the\s+[\s\S]{0,40}?\s+Class[\s\S]{0,30}\bpays?\b/i.test(printed) || /The\s+[\s\S]{0,40}?\s+Class\s+is\s+on\b/i.test(printed) || /who\s+teaches\s+two\s+classes/i.test(printed);
     },
     verify: (item) => verifyLeafletTableQuery(item.leafletTable, item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-02 (real citation: user-submitted photo of EDB's
+    // curriculum guide 示例6「橡皮筋動力車」worksheet template, see
+    // verifyDistanceTimeRateCompare's own comment for the full citation
+    // and the "teaching template, not a fixed exam" caveat). Needs
+    // item.distanceTimeTable (OCR DISTANCE_TIME_TABLE: marker).
+    name: "distance_time_rate_compare",
+    detect: (item) => {
+      if (!item.distanceTimeTable || typeof item.distanceTimeTable !== "object") return false;
+      const printed = String(item.printedQuestion || "");
+      return /平均.{0,4}1\s*秒.{0,6}[了咗]/.test(printed) || /平均.{0,4}1\s*米.{0,6}[了咗]/.test(printed);
+    },
+    verify: (item) => verifyDistanceTimeRateCompare(item.distanceTimeTable, item.printedQuestion, item.studentAnswer),
   },
   {
     // Found 2026-10-02 (TSA 2024 P6 maths archive, see
@@ -14320,7 +14471,7 @@ async function handleMark(request, env) {
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
     const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths, pieChart: r.pieChart, leafletTable: r.leafletTable }))
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths, pieChart: r.pieChart, leafletTable: r.leafletTable, distanceTimeTable: r.distanceTimeTable }))
       .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
@@ -14453,6 +14604,9 @@ async function handleMark(request, env) {
     // pattern as scheduleTable above.
     if (qwenOutcome.leafletTable) {
       qwenOutcome.items.forEach((item) => { item.leafletTable = qwenOutcome.leafletTable; });
+    }
+    if (qwenOutcome.distanceTimeTable) {
+      qwenOutcome.items.forEach((item) => { item.distanceTimeTable = qwenOutcome.distanceTimeTable; });
     }
     return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
   });
@@ -15376,6 +15530,8 @@ export {
   verifyPieChart,
   extractLeafletTable,
   verifyLeafletTableQuery,
+  extractDistanceTimeTable,
+  verifyDistanceTimeRateCompare,
   extractLocationGrid,
   verifyLocationGridQuery,
   extractFacingDirection,

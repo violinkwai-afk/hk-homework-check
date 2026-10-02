@@ -1568,3 +1568,67 @@ CV工作更加tolerance-sensitive**,真實相片驗證嘅重要性仲高過其�
 contract。
 
 全repo1088→1096條test,全部pass。
+
+## 2026-10-02(續16)— HK正式用詞寬容知識 + 距離時間比較contract
+
+讀咗第二份EDB文件「小學數學科學習內容」(pmc2017_tc.pdf,96頁,結構化
+學習內容表,唔同於之前嗰份教學活動指引)。搵到一致重複出現嘅pattern：
+「學生不須使用「X」一詞」,X包括交換性質/結合性質/分配性質/正比例/
+序數同基數/幾何圖形/端點/包含關係/凸四邊形/均勻截面。加埋2個真實
+名稱/符號對等事實(等腰直角三角形=直角等腰三角形;升/毫升可以用細
+楷l/ml)。已經加做`HK_TERMINOLOGY_LENIENCY_REFERENCE`俾AI fallback,
+等佢唔會因為學生冇用正式名詞就話佢錯。
+
+另外做埋`distance_time_rate_compare`——真實citation係用戶send嘅相
+(EDB課程指引示例6「橡皮筋動力車」P132,甲100米/20秒,乙150米/25秒,
+方法一:速率=距離÷時間,大嘅快;方法二:每米所需時間=時間÷距離,細嘅
+快)。呢個唔係固定考試題(係教學範本,真實工作紙會用唔同數字),但數學
+本身冇爭議。起咗`DISTANCE_TIME_TABLE` OCR marker。
+
+寫test時搵到1個真bug:原本"邊個較快"嘅字串match太寛(攞咗)成個答案
+check,但完整句子自然會提到兩個人名,令正確答案都match唔到。改用
+positional check(揾最接近"跑得較快"字眼之前嗰個名)解決。
+
+全repo1096→1103條test,全部pass。
+
+修正咗`distance_time_rate_compare`嗰個code comment嘅citation——原本
+含糊噉講「EDB課程指引」,用戶指出呢個「橡皮筋動力車」worksheet根本唔
+係`pmc2017_tc.pdf`(即係上面講嗰份96頁學習內容表),而係之前嗰份
+`ME_KLACG_chi_2017_12_08.pdf`(教學活動示例指引)。已經改正comment,
+明確寫返正確出處,同明確寫明唔係`pmc2017_tc.pdf`。
+
+## 2026-10-03(續17)— pmc2017_tc.pdf全書逐頁睇完,再搵新知識
+
+跟使用者明確指示「打開呢一份PDF詳細每一版去睇」,將上次(續16)淨係
+keyword grep睇過嗰份`pmc2017_tc.pdf`(96頁)**全部逐頁讀完**(P1-P2、
+P3-P4、P5-P6三段都有直接Read)。搵到幾個之前grep漏咗嘅新知識,即刻
+寫code：
+
+1. **形狀對稱嘅「定義性」ground truth**(P6 對稱單元):課程明文列出
+   「正方形、長方形、等腰三角形、等邊三角形、菱形和圓」係軸對稱圖形。
+   對當中classifyBlob已經直接認得嘅4種形狀(正方形/長方形/菱形/圓),
+   `isSymmetric`改用呢個定義直接判true,唔再淨係靠`hasLineSymmetry`
+   嗰個較易out-of-calibration嘅反射幾何計算——減低續15自己披露嗰個
+   「tolerance較敏感」風險。三角形刻意**冇**噉做(呢個classifier冇
+   分isosceles/equilateral/scalene,唔可以assume全部三角形都對稱)。
+
+2. **新增`SHAPE_INCLUSION_RELATIONSHIP_REFERENCE`**(P3/P4 3S2/4S1單
+   元):課程教「所有正方形皆是長方形」「正方形、長方形和菱形皆是平行
+   四邊形」「所有等邊三角形皆是等腰三角形」等包含關係。幫AI fallback
+   判斷「呢個係咪XX形」類題目——學生答較闕(generic)嗰個形狀名唔應該
+   被話錯。
+
+3. **擴充`HK_CURRENCY_REFERENCE`**(P1內容):10仙硬幣印嘅數字其實係
+   「10」(唔係「1」),中文寫法係「壹毫」;$1硬幣寫「壹圓」;「$2.50」
+   應讀/寫做「二元五角」唔係照小數點讀。
+
+4. **擴充`HK_TERMINOLOGY_LENIENCY_REFERENCE`**:加埋「質量」(唔使講,
+   「重量」得)、「單數/雙數」=奇數/偶數、「平均值」=平均數3個新名
+   詞對等事實,仲有基本乘數應用題3×2或2×3都啱嘅leniency。
+
+5. **擴充`CIRCLE_GEOMETRY_REFERENCE`**(P6 圓形圖單元):小學程度圓形
+   圖每個扇形嘅圓心角一定係30°或45°嘅倍數,學生唔需要自己度先可以計
+   數。trigger regex加埋"圓形圖|扇形|pie chart"。
+
+全部5項都加咗`test/mark.test.js`/`test/shape-classification.test.js`
+regression test。全repo1103→1108條test,全部pass。

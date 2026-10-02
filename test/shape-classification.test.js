@@ -279,6 +279,35 @@ test("readShapeClassificationFromPixels: synthetic rhombus (equal sides, unequal
   assert.equal(shapes[0].shape, "rhombus");
 });
 
+// Found 2026-10-03 (pmc2017_tc.pdf P6 對稱 unit, read page-by-page per
+// user request): the curriculum gives a closed, DEFINITIONAL list of
+// shapes that are always axis-symmetric regardless of exact proportions
+// -- 正方形/長方形/菱形/圓 among them. classifyBlob now shortcuts
+// isSymmetric=true for these 4 shape names instead of trusting the
+// newer, more tolerance-sensitive hasLineSymmetry() reflection check --
+// this test proves the shortcut fires even for the rhombus above, whose
+// unequal-diagonal construction is a real reflection (visually obvious)
+// but is exactly the kind of near-threshold case the raw geometric
+// computation could plausibly mis-calibrate on a real noisy photo.
+test("readShapeClassificationFromPixels: rhombus/square/circle get isSymmetric=true via curriculum definition, not just the geometric reflection check", async () => {
+  const worker = await import(TMP);
+  const rhombusPixels = drawFilledPolygon(120, 100, [{ x: 60, y: 10 }, { x: 80, y: 50 }, { x: 60, y: 90 }, { x: 40, y: 50 }]);
+  const rhombusShapes = worker.readShapeClassificationFromPixels(rhombusPixels, 120, 100);
+  assert.equal(rhombusShapes[0].shape, "rhombus");
+  assert.equal(rhombusShapes[0].isSymmetric, true);
+
+  const squarePixels = drawFilledPolygon(100, 100, [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }]);
+  const squareShapes = worker.readShapeClassificationFromPixels(squarePixels, 100, 100);
+  assert.equal(squareShapes[0].shape, "square");
+  assert.equal(squareShapes[0].isSymmetric, true);
+
+  const circle = regularPolygonPoints(50, 50, 40, 40, 32, 0);
+  const circlePixels = drawFilledPolygon(100, 100, circle);
+  const circleShapes = worker.readShapeClassificationFromPixels(circlePixels, 100, 100);
+  assert.equal(circleShapes[0].shape, "circle");
+  assert.equal(circleShapes[0].isSymmetric, true);
+});
+
 test("readShapeClassificationFromPixels: synthetic parallelogram (unequal adjacent sides, both pairs parallel) -> classified as parallelogram", async () => {
   const worker = await import(TMP);
   const w = 140, h = 100;

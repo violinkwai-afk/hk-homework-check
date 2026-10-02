@@ -1875,6 +1875,62 @@ test("mentionsHkTerminologyLeniency / HK_TERMINOLOGY_LENIENCY_REFERENCE: fires o
   assert.doesNotMatch(unrelated, /小學階段唔要求學生識用呢啲正式名詞/);
 });
 
+// Found 2026-10-03 (pmc2017_tc.pdf P1/P6 content, read page-by-page per
+// user request): odd/even alternative naming (單數/雙數) and 平均數/
+// 平均值 naming equivalence, both folded into the same leniency block.
+test("mentionsHkTerminologyLeniency / HK_TERMINOLOGY_LENIENCY_REFERENCE: fires on 單數/雙數/平均值/質量 wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "呢個係單數定雙數?", studentAnswer: "單數" },
+  ]);
+  assert.match(prompt, /「奇數」同「單數」係同一樣嘢/);
+  const prompt2 = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "呢組數嘅平均值係幾多?", studentAnswer: "5" },
+  ]);
+  assert.match(prompt2, /「平均數」同「平均值」係同一樣嘢/);
+});
+
+// Found 2026-10-03 (pmc2017_tc.pdf P3/P4 units 3S2/4S1, read page-by-page
+// per user request): the curriculum explicitly teaches set-inclusion
+// relationships between shape sub-types (square IS-A rectangle, etc) --
+// an AI fallback judge shouldn't mark "是" wrong just because the shape
+// shown is the narrower sub-type rather than the exact name asked about.
+test("mentionsShapeInclusionRelationship / SHAPE_INCLUSION_RELATIONSHIP_REFERENCE: fires on quadrilateral/triangle sub-type wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "呢個正方形係咪平行四邊形?", studentAnswer: "係" },
+  ]);
+  assert.match(prompt, /正方形、長方形同菱形都係平行四邊形嘅一種/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /正方形、長方形同菱形都係平行四邊形嘅一種/);
+});
+
+// Found 2026-10-03 (pmc2017_tc.pdf P1 content): real HK coin-notation
+// trap (a 10-cent coin prints "10", not "1") and the $X.XX-as-元角
+// reading convention, folded into the existing currency reference block
+// (same money/coin trigger, so no new detector needed).
+test("mentionsMoneyDenomination / HK_CURRENCY_REFERENCE: now also covers coin-notation and dollar-reading convention", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "呢個硬幣面額係幾多?", studentAnswer: "$1" },
+  ]);
+  assert.match(prompt, /一個印住數字「10」嘅硬幣，中文寫法係「壹毫」/);
+  assert.match(prompt, /「\$2\.50」用中文寫\/讀出嚟應該係「二元五角」/);
+});
+
+// Found 2026-10-03 (pmc2017_tc.pdf P6 圓形圖 unit, read page-by-page per
+// user request): primary-level pie charts always use sector angles that
+// are multiples of 30°/45°, and students never measure angles
+// themselves -- folded into the existing circle-geometry block, with its
+// trigger widened to also catch "圓形圖"/"扇形" wording.
+test("mentionsCircleGeometry / CIRCLE_GEOMETRY_REFERENCE: now also fires on 圓形圖/扇形 wording and covers the pie-chart-angle convention", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "下面圓形圖入面，貨車佔嘅扇形角度係幾多?", studentAnswer: "90" },
+  ]);
+  assert.match(prompt, /每個扇形嘅圓心角一定係30°或45°嘅倍數/);
+});
+
 // Ticket 108 (2026-09-28, real citations from a P2 3-D shapes unit
 // test's own answer key): reverse shape lookup from stated face
 // properties -- pure text reasoning, reuses the SHAPE_REFERENCE facts

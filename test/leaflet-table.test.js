@@ -107,3 +107,51 @@ test("leaflet_table_query handler: declines when item.leafletTable is absent (no
   const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
   assert.notEqual(winner && winner.name, "leaflet_table_query");
 });
+
+// ---------- distance_time_rate_compare ----------
+// Real citation: user-submitted photo of EDB's curriculum guide 示例6
+// 「橡皮筋動力車」worksheet template (p.132) -- "以下是甲同學和乙同學的
+// 跑步紀錄：distance/time table 甲=100米/20秒, 乙=150米/25秒" asking two
+// comparison methods. NOT a fixed exam with one official answer (it's a
+// teaching template -- real worksheets based on it use different
+// numbers), but the maths itself is unambiguous: rate=distance/time
+// (bigger=faster), pace=time/distance (smaller=faster).
+const RUNNING_TABLE = { 甲: { distance: 100, time: 20 }, 乙: { distance: 150, time: 25 } };
+
+test("extractDistanceTimeTable: parses a real DISTANCE_TIME_TABLE marker line", () => {
+  const { distanceTimeTable, cleanedText } = worker.extractDistanceTimeTable("DISTANCE_TIME_TABLE: 甲=100,20;乙=150,25\nmore text");
+  assert.deepEqual(distanceTimeTable, RUNNING_TABLE);
+  assert.ok(!cleanedText.includes("DISTANCE_TIME_TABLE"));
+});
+
+const METHOD1_Q = "甲平均用1秒跑了___米。乙平均用1秒跑了___米。___同學跑得較快，因為他平均1秒移動的距離較___。";
+
+test("verifyDistanceTimeRateCompare: Method 1 (rate=distance/time, bigger=faster), correct answer", () => {
+  // 甲: 100/20=5, 乙: 150/25=6 -> 乙 faster (bigger rate), "較多"
+  const r = worker.verifyDistanceTimeRateCompare(RUNNING_TABLE, METHOD1_Q, "甲平均5米，乙平均6米，乙同學跑得較快，較多");
+  assert.equal(r.correct, true);
+});
+
+test("verifyDistanceTimeRateCompare: Method 1, wrong answer (wrong faster name)", () => {
+  const r = worker.verifyDistanceTimeRateCompare(RUNNING_TABLE, METHOD1_Q, "甲平均5米，乙平均6米，甲同學跑得較快，較多");
+  assert.equal(r.correct, false);
+});
+
+const METHOD2_Q = "甲平均跑1米用了___秒。乙平均跑1米用了___秒。___同學跑得較快，因為平均1米用的時間較___。";
+
+test("verifyDistanceTimeRateCompare: Method 2 (pace=time/distance, SMALLER=faster, inverse direction from Method 1), correct answer", () => {
+  // 甲: 20/100=0.2, 乙: 25/150≈0.1667 -> 乙 still faster (smaller pace), "較少"
+  const r = worker.verifyDistanceTimeRateCompare(RUNNING_TABLE, METHOD2_Q, "甲用0.2秒，乙用0.1667秒，乙同學跑得較快，較少");
+  assert.equal(r.correct, true);
+});
+
+test("verifyDistanceTimeRateCompare: Method 2, wrong answer (used '較多' instead of '較少' -- wrong comparison direction)", () => {
+  const r = worker.verifyDistanceTimeRateCompare(RUNNING_TABLE, METHOD2_Q, "甲用0.2秒，乙用0.1667秒，乙同學跑得較快，較多");
+  assert.equal(r.correct, false);
+});
+
+test("distance_time_rate_compare handler: registered, reachable, wins dispatch", () => {
+  const item = { distanceTimeTable: RUNNING_TABLE, printedQuestion: METHOD1_Q, studentAnswer: "甲平均5米，乙平均6米，乙同學跑得較快，較多" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "distance_time_rate_compare");
+});
