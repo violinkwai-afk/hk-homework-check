@@ -160,30 +160,6 @@ export default {
       if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
       return handleTestFallbackCandidateReal(request, env);
     }
-    // TEMPORARY (2026-10-03): one-use, dumps the FULL raw Jev API response
-    // (not just data.answers) so we can see whether a usage/token-count
-    // field is actually present before deciding how to capture it in the
-    // real callJevPreCheck. Remove once checked.
-    if (url.pathname === "/api/test-jev-raw-response" && request.method === "POST") {
-      if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
-      const openrouterKey = !env.OPENROUTER_API_KEY ? null
-        : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
-        : await env.OPENROUTER_API_KEY.get();
-      if (!openrouterKey) return json({ error: "no_openrouter_key" }, 500);
-      const { pendingItems } = await request.json();
-      const body = {
-        model: JEV_MODEL,
-        state: "你正在批改香港小學生嘅功課。冇提供標準答案，每一題都要自己諗清楚正確答案先判斷。淨係得OCR轉錄嘅文字，冇張相可以睇——如果純粹睇文字都唔夠info判斷（例如要睇圖表/刻度/圖形），就要老實話唔知，唔可以靠估。",
-        questions: buildJevQuestions(pendingItems),
-      };
-      const res = await fetch("https://openrouter.ai/api/alpha/decisions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${openrouterKey}` },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      return json({ status: res.status, sentBody: body, rawResponse: data });
-    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -4023,6 +3999,12 @@ async function callJevPreCheck(pendingItems, openrouterKey) {
     if (!res.ok) { resolved.callStatus = "http_error_" + res.status; return resolved; }
     const data = await res.json();
     const answers = data.answers || {};
+    // 2026-10-03: real usage WAS present in the response all along
+    // (input_tokens/output_tokens/cost) -- confirmed via a raw-response
+    // dump -- just never read. Attached the same way .callStatus/
+    // .rawScores already are, so handleMark's mark_usage log can finally
+    // show Jev's real per-call cost instead of omitting it entirely.
+    resolved.usage = data.usage || null;
     // Ticket (2026-09-29): raw noul per item, attached the same way
     // .callStatus already is -- lets a caller (e.g. handleMark's debug
     // content log) see EVERY item's actual confidence score, not just
@@ -15767,7 +15749,7 @@ async function handleMark(request, env) {
   if (openrouterKey && allPendingFlat.length) {
     const tJev = Date.now();
     const jevResolved = await callJevPreCheck(allPendingFlat, openrouterKey);
-    jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev, callStatus: jevResolved.callStatus || "unknown" };
+    jevUsageLog = { items: allPendingFlat.length, resolved: jevResolved.size, ms: Date.now() - tJev, callStatus: jevResolved.callStatus || "unknown", usage: jevResolved.usage || null };
     // TEMPORARY (2026-09-29) -- one-use, real content visibility into a
     // live production request per explicit user request ("需要見到每一
     // 步嘅工具讀到咩字"). Logs what was actually SENT to Jev (the OCR'd

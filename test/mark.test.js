@@ -1232,6 +1232,7 @@ test("callJevPreCheck: resolves items with high confidence (>=0.9 or <=0.1), lea
     assert.deepEqual(resolved.get(0), { correct: true });
     assert.deepEqual(resolved.get(1), { correct: false });
     assert.equal(resolved.has(2), false, "mid-confidence item must stay unresolved, not guessed");
+    assert.deepEqual(resolved.usage, { input_tokens: 100, output_tokens: 0, cost: 0.0000042 }, "real usage/cost from the response must be captured, not dropped");
   } finally {
     global.fetch = originalFetch;
   }
