@@ -1312,6 +1312,48 @@ test("circumference_from_diameter_integer handler: English citation, registered,
   assert.equal(winner.name, "circumference_from_diameter_integer");
 });
 
+// circumference_from_diameter_mc -- found 2026-10-03: same circumference
+// computation, presented as a 4-option MC instead of a fill-blank with
+// "(以整數作答)". Real citation `tsa/2024/p6_paper_TSA2024_6MC1.pdf`
+// Q21 -> official answer C. Real bug found building this: 32×22/7≈100.57
+// rounds to 101, but 32×3.14=100.48 rounds to 100 -- the two
+// approximations genuinely disagree on the rounded integer, so the
+// fill-blank version's "both must agree" check would wrongly decline
+// this. Safe here because the 4 options (10/16/100/800) are spread far
+// enough apart that either approximation is unambiguously closest to
+// the same option -- fixed by finding the closest option instead of an
+// exact-match-after-rounding.
+const WHEEL_Q = "21. 一個車輪的直徑是32 cm。它轉動一圈，大約走了  A. 10 cm。  B. 16 cm。  C. 100 cm。  D. 800 cm。";
+const WHEEL_Q_EN = "21. The diameter of a wheel is 32 cm. It rolls one round to move about  A. 10 cm.  B. 16 cm.  C. 100 cm.  D. 800 cm.";
+
+test("verifyCircumferenceFromDiameterMc: real citation (tsa/2024/p6_paper_TSA2024_6MC1.pdf Q21), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterMc({ printedQuestion: WHEEL_Q, studentAnswer: "C" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyCircumferenceFromDiameterMc: real citation, wrong answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterMc({ printedQuestion: WHEEL_Q, studentAnswer: "A" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "C");
+});
+
+test("circumference_from_diameter_mc handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: WHEEL_Q, studentAnswer: "C" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circumference_from_diameter_mc");
+});
+
+test("verifyCircumferenceFromDiameterMc: English citation (tsa/2024/p6_paper_TSA2024_6ME1.pdf Q21), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterMc({ printedQuestion: WHEEL_Q_EN, studentAnswer: "C" });
+  assert.equal(r.correct, true);
+});
+
+test("circumference_from_diameter_mc handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: WHEEL_Q_EN, studentAnswer: "C" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circumference_from_diameter_mc");
+});
+
 const IRON_WIRE_Q_2018 = "把一條長15 cm 的鐵線，製成一個圓形的鐵圈。 鐵圈的直徑約是 cm。(以整數作答)";
 const IRON_WIRE_Q_2018_EN = "An iron wire 15 cm long is bent into a circular coil. The diameter of the circular coil is about cm. (Give the answer as a whole number)";
 const IRON_WIRE_Q_2019 = "把一個鐵圈剪開後，拉直成一條鐵線(如上圖所示)。 鐵線的長度是19 cm，鐵圈的直徑約是 cm。 (以整數作答)";

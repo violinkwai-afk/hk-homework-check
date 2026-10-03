@@ -12507,6 +12507,60 @@ function verifyCircumferenceFromDiameterInteger(item) {
   return { correct: studentNum === c1, correctAnswer: studentNum === c1 ? "" : String(c1) };
 }
 
+// Found 2026-10-03: same circumference-from-diameter computation as
+// above, but presented as a 4-option MC question instead of a
+// fill-blank with "(以整數作答)" -- a genuinely different real phrasing,
+// not covered by the fill-blank trigger. Real citation:
+// `tsa/2024/p6_paper_TSA2024_6MC1.pdf` Q21 "一個車輪的直徑是32cm。它
+// 轉動一圈，大約走了 A.10cm B.16cm C.100cm D.800cm" -> official answer C
+// (`2024/p6_marking_TSA2024_6MC1_MS.pdf`: 32×22/7≈100.57, 32×3.14=100.48,
+// both round to 100, matching option C); English equivalent
+// `tsa/2024/p6_paper_TSA2024_6ME1.pdf` Q21 "The diameter of a wheel is
+// 32 cm. It rolls one round to move about ___. A.10cm B.16cm C.100cm
+// D.800cm."
+function isCircumferenceFromDiameterMcQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const zh = /車輪的直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b[\s\S]{0,20}(?:轉動一圈|滾一圈)[\s\S]{0,10}(?:大約)?走了/.test(text);
+  const en = /diameter\s*of\s*a\s*wheel\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b[\s\S]{0,20}rolls?\s*one\s*round\s*to\s*move\s*about/i.test(text);
+  return (zh || en) && parseMcOptions(text).length >= 2;
+}
+function verifyCircumferenceFromDiameterMc(item) {
+  if (!isCircumferenceFromDiameterMcQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = text.match(/車輪的直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/) || text.match(/diameter\s*of\s*a\s*wheel\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const d = Number(m[1]);
+  // Unlike the fill-blank version above, this does NOT require 22/7 and
+  // 3.14 to round to the exact same integer -- real bug found while
+  // testing against the real citation: 32×22/7≈100.57 rounds to 101,
+  // but 32×3.14=100.48 rounds to 100, a genuine 1-apart disagreement,
+  // yet the official MC answer is unambiguously C (100cm) because the
+  // 4 printed options (10/16/100/800) are spread far enough apart that
+  // EITHER approximation is obviously closest to the same option. So
+  // instead this finds whichever option is numerically closest to the
+  // circumference (using the average of both approximations), and only
+  // trusts that pick when it's clearly closer than every other option
+  // (at least 3x closer than the runner-up) -- guards against a genuine
+  // near-tie between two options, which this wouldn't be safe to guess.
+  const c = (d * (22 / 7) + d * 3.14) / 2;
+  const options = parseMcOptions(text)
+    .map((o) => ({ ...o, value: Number((o.text.match(/\d+(?:\.\d+)?/) || [])[0]) }))
+    .filter((o) => Number.isFinite(o.value));
+  if (options.length < 2) return { correct: null, correctAnswer: "" };
+  const byDistance = [...options].sort((a, b) => Math.abs(a.value - c) - Math.abs(b.value - c));
+  const [best, runnerUp] = byDistance;
+  const bestDist = Math.abs(best.value - c);
+  const runnerUpDist = runnerUp ? Math.abs(runnerUp.value - c) : Infinity;
+  if (bestDist > 0 && runnerUpDist < bestDist * 3) return { correct: null, correctAnswer: "" };
+  const expectedLetter = best.letter;
+  const studentLetter = (answer.match(/[A-D]/i) || [])[0];
+  if (!studentLetter) return { correct: null, correctAnswer: "" };
+  const correct = studentLetter.toUpperCase() === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
 // (2) diameter_from_circumference_integer: a wire/coil's straightened
 // length (= its circumference) is given, the coil's diameter is asked --
 // same "22/7 or 3.14, both round to the same integer" logic, inverted
@@ -14096,6 +14150,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "circumference_from_diameter_integer",
     detect: (item) => isCircumferenceFromDiameterIntegerQuestion(item),
     verify: (item) => verifyCircumferenceFromDiameterInteger(item),
+  },
+  {
+    // Found 2026-10-03, see verifyCircumferenceFromDiameterMc's own comment.
+    name: "circumference_from_diameter_mc",
+    detect: (item) => isCircumferenceFromDiameterMcQuestion(item),
+    verify: (item) => verifyCircumferenceFromDiameterMc(item),
   },
   {
     // Found 2026-10-03, see verifyDiameterFromCircumferenceInteger's own comment.
@@ -16079,6 +16139,8 @@ export {
   verifyChordShorterThanDiameter,
   isCircumferenceFromDiameterIntegerQuestion,
   verifyCircumferenceFromDiameterInteger,
+  isCircumferenceFromDiameterMcQuestion,
+  verifyCircumferenceFromDiameterMc,
   isDiameterFromCircumferenceIntegerQuestion,
   verifyDiameterFromCircumferenceInteger,
   isCircleAreaFromRadiusExplicitPiQuestion,

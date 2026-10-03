@@ -1839,3 +1839,20 @@ citation:`tsa/2023/p6_paper_TSA2023_6ME2.pdf`Q38(a)/(b)(停車場嗰個)
    分子;中文A係分子,B係分母)——要刻意swap個capture group次序。
 
 全repo1157→1163條test,全部pass。
+
+## 2026-10-03(續27)— 新handler:circumference_from_diameter_mc
+
+繼續搜TSA archive揾圓周/直徑真實citation時搵到一個新phrasing:
+「車輪」MC題型(唔係fill-blank"(以整數作答)",係4個選項)。真實
+citation:`tsa/2024/p6_paper_TSA2024_6MC1.pdf`Q21「一個車輪的直徑是
+32cm。它轉動一圈，大約走了 A.10cm B.16cm C.100cm D.800cm」,官方答案
+C。中英文一次做齊。
+
+**搵到1個真bug**:32×22/7≈100.57四捨五入係101,但32×3.14=100.48四捨
+五入係100——兩個π近似值**唔一致**(差1)!之前fill-blank版本嗰個
+「兩個近似值必須一致」check會錯誤declines呢題。但MC選項本身(10/16/
+100/800)相隔好遠,任何一個近似值都明顯最接近C,所以改用「揾最接近
+嗰個選項」嘅方法(仲要confirm條gap夠大,runner-up選項嘅距離要係
+best距離3倍以上先信得過),而唔係再要求兩個近似值exact match。
+
+全repo1163→1168條test,全部pass。
