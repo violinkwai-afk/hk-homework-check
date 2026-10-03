@@ -1706,3 +1706,32 @@ triangle_type`嗰個real citation嘅**第3部分**(之前淨係用咗(a)):
 已經加埋落`CIRCLE_GEOMETRY_REFERENCE`俾AI fallback。
 
 全repo1117→1124條test,全部pass。
+
+## 2026-10-03(續21)— 2個新圓周/直徑handler(π近似值leniency)
+
+用戶自己send咗一句pmc2017_e.pdf原句,指出之前做knowledge搜索漏咗
+marking-scheme相關嘅重要constraint:「Students are only required to use
+22/7 or 3.14 as approximate values of π for calculations.」(小學階段
+圓周率只需要用22/7或3.14嚟計算)。檢查完發現**codebase之前完全冇任何
+handler驗證過圓周/直徑嘅學生答案**(淨係有4個圓形零圖像fact,冇一個
+牽涉實際π計算)。
+
+搜索真實archive搵到3個真實citation,全部都係「(以整數作答)」(答案
+取整數)嘅圓周/直徑運算,而且22/7同3.14兩個近似值四捨五入後**答案一
+致**(已經逐個驗證):
+- `tsa/2016/TSA2016_6MC3.pdf`Q21(a):直徑2cm,圓周約___cm→官方答案6
+- `tsa/2018/TSA2018_6MC1.pdf`Q25:鐵線長15cm制鐵圈,直徑約___cm→答案5
+- `tsa/2019/TSA2019_6MC1.pdf`Q25:鐵線長19cm(剪開鐵圈拉直),直徑約
+  ___cm→答案6
+
+寫咗2個新handler:`circumference_from_diameter_integer`(直徑→圓周)、
+`diameter_from_circumference_integer`(圓周→直徑,「鐵線/鐵圈」框架)。
+兩個都係一次過用兩個π近似值計算,如果四捨五入後唔一致就declines
+(null)唔估。一開始就做咗英文版(今日學咗嗰個教訓),3個citation嘅
+6ME英文對應版本全部搵到並加咗test。
+
+寫test時搵到1個真bug:detect()regex要求空格位一定有底線(_{2,})先
+算係「填空」,但真實PDF文字抽取出嚟嗰個空格位淨係得返一個空白,冇底
+線符號——已經改做底線可選,空白本身都接受。
+
+全repo1124→1139條test,全部pass。

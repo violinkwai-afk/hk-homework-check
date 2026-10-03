@@ -667,6 +667,37 @@ test("direct_lcm handler: registered, reachable, wins dispatch (not first_n_comm
   assert.equal(winner.name, "direct_lcm");
 });
 
+// English-coverage audit (2026-10-03): the registry's `detect` for both
+// of these is an INLINE Chinese-only regex (not a shared isXxxQuestion
+// function), so widening verifyDirectHcf/verifyDirectLcm's own regex
+// alone was not enough -- the registry entry itself needed widening too.
+// English equivalents: `tsa/2013/TSA2013_6ME1.pdf` Q4 "The Highest
+// Common Factor (H.C.F.) of 18 and 48 is ." (translation of this
+// function's own `tsa/2013/TSA2013_6MC1.pdf` Q4 citation), and
+// `tsa/2014/TSA2014_6ME1.pdf` Q4 "The Least Common Multiple (L.C.M.) of
+// 15 and 24 is ." (translation of `tsa/2014/TSA2014_6MC1.pdf` Q4).
+test("verifyDirectHcf: English citation (tsa/2013/TSA2013_6ME1.pdf Q4), correct answer", () => {
+  const r = worker.verifyDirectHcf("4. The Highest Common Factor (H.C.F.) of 18 and 48 is .", "6");
+  assert.equal(r.correct, true);
+});
+
+test("direct_hcf handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: "4. The Highest Common Factor (H.C.F.) of 18 and 48 is .", studentAnswer: "6" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "direct_hcf");
+});
+
+test("verifyDirectLcm: English citation (tsa/2014/TSA2014_6ME1.pdf Q4), correct answer", () => {
+  const r = worker.verifyDirectLcm("4. The Least Common Multiple (L.C.M.) of 15 and 24 is .", "120");
+  assert.equal(r.correct, true);
+});
+
+test("direct_lcm handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: "4. The Least Common Multiple (L.C.M.) of 15 and 24 is .", studentAnswer: "120" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "direct_lcm");
+});
+
 // ---------- arabic_to_chinese_numeral ----------
 // Real citations: tsa/2014/TSA2014_3MC4.txt Q2 "用中國數字寫出「13 849」
 // 這個數。" -> 一萬三千八百四十九; tsa/2015/TSA2015_3MC3.txt Q2 "用中國
@@ -1114,4 +1145,77 @@ test("chord_shorter_than_diameter handler: English citation, registered, reachab
 test("isChordShorterThanDiameterQuestion: does not fire when the compared segment includes the centre's own letter (it would be the diameter itself, not a chord)", () => {
   const notAChord = "老師畫了一個三角形和一個圓，O 是圓心。 (c) OA 的長度 * 小於 / 等於 / 大於 圓的直徑。 (*圈出答案)";
   assert.equal(worker.isChordShorterThanDiameterQuestion({ printedQuestion: notAChord }), false);
+});
+
+// circumference_from_diameter_integer / diameter_from_circumference_integer
+// -- found 2026-10-03, prompted directly by the user flagging pmc2017_e.pdf's
+// explicit constraint: "Students are only required to use 22/7 or 3.14
+// as approximate values of π for calculations." All 3 real citations
+// below give the SAME rounded integer under both approximations.
+const CIRCUMFERENCE_Q = "小亮在正方形內畫了一個最大的圓(如上圖)，圓的 直徑是2 cm。 (a) 圓周約是 cm。(以整數作答)";
+const CIRCUMFERENCE_Q_EN = "The diameter of the circle is 2 cm. (a) The circumference of the circle is about cm. (Give the answer as a whole number)";
+
+test("verifyCircumferenceFromDiameterInteger: real citation (tsa/2016/TSA2016_6MC3.pdf Q21a), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterInteger({ printedQuestion: CIRCUMFERENCE_Q, studentAnswer: "6" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyCircumferenceFromDiameterInteger: real citation, wrong answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterInteger({ printedQuestion: CIRCUMFERENCE_Q, studentAnswer: "7" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "6");
+});
+
+test("circumference_from_diameter_integer handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CIRCUMFERENCE_Q, studentAnswer: "6" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circumference_from_diameter_integer");
+});
+
+test("verifyCircumferenceFromDiameterInteger: English citation (tsa/2016/TSA2016_6ME3.pdf Q21a), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterInteger({ printedQuestion: CIRCUMFERENCE_Q_EN, studentAnswer: "6" });
+  assert.equal(r.correct, true);
+});
+
+test("circumference_from_diameter_integer handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CIRCUMFERENCE_Q_EN, studentAnswer: "6" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circumference_from_diameter_integer");
+});
+
+const IRON_WIRE_Q_2018 = "把一條長15 cm 的鐵線，製成一個圓形的鐵圈。 鐵圈的直徑約是 cm。(以整數作答)";
+const IRON_WIRE_Q_2018_EN = "An iron wire 15 cm long is bent into a circular coil. The diameter of the circular coil is about cm. (Give the answer as a whole number)";
+const IRON_WIRE_Q_2019 = "把一個鐵圈剪開後，拉直成一條鐵線(如上圖所示)。 鐵線的長度是19 cm，鐵圈的直徑約是 cm。 (以整數作答)";
+const IRON_WIRE_Q_2019_EN = "An iron wire is made by cutting an iron coil (as shown in the diagram above). The length of the iron wire is 19 cm. The diameter of the iron coil is about cm. (Give the answer as a whole number)";
+
+test("verifyDiameterFromCircumferenceInteger: real citation (tsa/2018/TSA2018_6MC1.pdf Q25, '長Xcm的鐵線' phrasing), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceInteger({ printedQuestion: IRON_WIRE_Q_2018, studentAnswer: "5" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyDiameterFromCircumferenceInteger: English citation (tsa/2018/TSA2018_6ME1.pdf Q25), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceInteger({ printedQuestion: IRON_WIRE_Q_2018_EN, studentAnswer: "5" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyDiameterFromCircumferenceInteger: real citation (tsa/2019/TSA2019_6MC1.pdf Q25, '鐵線的長度是X' phrasing), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceInteger({ printedQuestion: IRON_WIRE_Q_2019, studentAnswer: "6" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyDiameterFromCircumferenceInteger: real citation, wrong answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceInteger({ printedQuestion: IRON_WIRE_Q_2019, studentAnswer: "7" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "6");
+});
+
+test("verifyDiameterFromCircumferenceInteger: English citation (tsa/2019/TSA2019_6ME1.pdf Q25), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceInteger({ printedQuestion: IRON_WIRE_Q_2019_EN, studentAnswer: "6" });
+  assert.equal(r.correct, true);
+});
+
+test("diameter_from_circumference_integer handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: IRON_WIRE_Q_2019, studentAnswer: "6" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "diameter_from_circumference_integer");
 });

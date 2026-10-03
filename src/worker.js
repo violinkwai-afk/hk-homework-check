@@ -7999,7 +7999,12 @@ function verifyDirectHcf(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最大公因數\s*(?:\(H\.?\s*C\.?\s*F\.?\)|（H\.?\s*C\.?\s*F\.?）)?\s*是/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2013/TSA2013_6ME1.pdf` Q4 "The Highest Common Factor (H.C.F.)
+  // of 18 and 48 is ." -- the official translation of this function's
+  // own Chinese citation (`tsa/2013/TSA2013_6MC1.pdf` Q4).
+  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最大公因數\s*(?:\(H\.?\s*C\.?\s*F\.?\)|（H\.?\s*C\.?\s*F\.?）)?\s*是/)
+    || printed.match(/(?:Highest Common Factor|H\.?\s*C\.?\s*F\.?)[\s\S]{0,15}of\s*(\d+)\s*and\s*(\d+)\s*is/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const a = Number(m[1]);
   const b = Number(m[2]);
@@ -8023,7 +8028,12 @@ function verifyDirectLcm(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最小公倍數\s*(?:\(L\.?\s*C\.?\s*M\.?\)|（L\.?\s*C\.?\s*M\.?）)?\s*是/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2014/TSA2014_6ME1.pdf` Q4 "The Least Common Multiple (L.C.M.)
+  // of 15 and 24 is ." -- the official translation of this function's
+  // own Chinese citation (`tsa/2014/TSA2014_6MC1.pdf` Q4).
+  const m = printed.match(/(\d+)\s*和\s*(\d+)\s*的最小公倍數\s*(?:\(L\.?\s*C\.?\s*M\.?\)|（L\.?\s*C\.?\s*M\.?）)?\s*是/)
+    || printed.match(/(?:Least Common Multiple|L\.?\s*C\.?\s*M\.?)[\s\S]{0,15}of\s*(\d+)\s*and\s*(\d+)\s*is/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const a = Number(m[1]);
   const b = Number(m[2]);
@@ -12317,6 +12327,91 @@ function verifyChordShorterThanDiameter(item) {
   return { correct, correctAnswer: correct ? "" : "小於" };
 }
 
+// Found 2026-10-03, prompted by the user's own direct follow-up asking
+// to check the official curriculum doc for marking-scheme-relevant
+// constraints (specifically flagging pmc2017_e.pdf's note: "Students are
+// only required to use 22/7 or 3.14 as approximate values of π for
+// calculations"). This is a REAL constraint on how circumference/
+// diameter-rounding questions should be verified -- no existing handler
+// in this codebase checked circle circumference/diameter student
+// answers against π at all before this. Two real sub-patterns found,
+// both always round to an integer "(以整數作答)" answer that is IDENTICAL
+// whichever of the two curriculum-sanctioned π values (22/7 or 3.14) is
+// used (confirmed for all 3 real citations below) -- if a future
+// citation's two approximations ever disagreed on the rounded integer,
+// both functions correctly decline (null) rather than pick one.
+//
+// (1) circumference_from_diameter_integer: diameter given, circumference
+// asked. Real citation `tsa/2016/TSA2016_6MC3.pdf` Q21(a) "小亮在正方形
+// 內畫了一個最大的圓(如上圖)，圓的直徑是2cm。(a)圓周約是___cm。(以整數
+// 作答)" -> official answer 6 (`2016/TSA2016_6MC3_MS.pdf`); English
+// equivalent `tsa/2016/TSA2016_6ME3.pdf` Q21(a) "The diameter of the
+// circle is 2 cm. (a) The circumference of the circle is about ___ cm.
+// (Give the answer as a whole number)".
+function isCircumferenceFromDiameterIntegerQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const zh = /直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b/.test(text) && /圓周(?:約)?是\s*(?:_{2,}|＿{2,})?\s*(?:cm|米|mm|m)\b/.test(text) && /以整數作答/.test(text);
+  const en = /diameter\s*of\s*the\s*circle\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b/i.test(text) && /circumference\s*of\s*the\s*circle\s*is\s*about/i.test(text) && /whole\s*number/i.test(text);
+  return zh || en;
+}
+function verifyCircumferenceFromDiameterInteger(item) {
+  if (!isCircumferenceFromDiameterIntegerQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = text.match(/直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/) || text.match(/diameter\s*of\s*the\s*circle\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const d = Number(m[1]);
+  const c1 = Math.round(d * (22 / 7));
+  const c2 = Math.round(d * 3.14);
+  if (c1 !== c2) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === c1, correctAnswer: studentNum === c1 ? "" : String(c1) };
+}
+
+// (2) diameter_from_circumference_integer: a wire/coil's straightened
+// length (= its circumference) is given, the coil's diameter is asked --
+// same "22/7 or 3.14, both round to the same integer" logic, inverted
+// (diameter = circumference ÷ π). Two real citations, same shape, two
+// different printed phrasings for how the length is stated:
+// `tsa/2018/TSA2018_6MC1.pdf` Q25 "把一條長15cm的鐵線，製成一個圓形的
+// 鐵圈。鐵圈的直徑約是___cm。(以整數作答)" -> official answer 5
+// (`2018/TSA2018_6MC1_MS.pdf`); `tsa/2019/TSA2019_6MC1.pdf` Q25 "把一個
+// 鐵圈剪開後，拉直成一條鐵線(如上圖所示)。鐵線的長度是19cm，鐵圈的直徑
+// 約是___cm。(以整數作答)" -> official answer 6
+// (`2019/TSA2019_6MC1_MS.pdf`). English equivalents
+// `tsa/2018/TSA2018_6ME1.pdf` Q25 "An iron wire 15 cm long is bent into
+// a circular coil. The diameter of the circular coil is about ___ cm."
+// and `tsa/2019/TSA2019_6ME1.pdf` Q25 "The length of the iron wire is
+// 19 cm. The diameter of the iron coil is about ___ cm."
+function isDiameterFromCircumferenceIntegerQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const zh = /(?:長\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\s*(?:的)?鐵線|鐵線的?長度(?:是|為)\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m))/.test(text)
+    && /鐵圈/.test(text) && /直徑(?:約)?是\s*(?:_{2,}|＿{2,})?\s*(?:cm|米|mm|m)\b/.test(text) && /以整數作答/.test(text);
+  const en = /iron\s*wire\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\s*long|length\s*of\s*the\s*iron\s*wire\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)/i.test(text)
+    && /diameter\s*of\s*the\s*(?:circular\s*coil|iron\s*coil)\s*is\s*about/i.test(text) && /whole\s*number/i.test(text);
+  return zh || en;
+}
+function verifyDiameterFromCircumferenceInteger(item) {
+  if (!isDiameterFromCircumferenceIntegerQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = text.match(/長\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\s*(?:的)?鐵線/)
+    || text.match(/鐵線的?長度(?:是|為)\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)/)
+    || text.match(/iron\s*wire\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\s*long/i)
+    || text.match(/length\s*of\s*the\s*iron\s*wire\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const c = Number(m[1]);
+  const d1 = Math.round(c / (22 / 7));
+  const d2 = Math.round(c / 3.14);
+  if (d1 !== d2) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === d1, correctAnswer: studentNum === d1 ? "" : String(d1) };
+}
+
 // Same page, Q⑧: "下面的六邊形每條邊的長度都相等。[hexagon cut into
 // A/B/C/D, drawn separately, same shape as the letter-grid above] 圖A
 // 是（直角/等腰/等邊）三角形。(把答案圈起來)" -- unlike Q7/Q9 above, the
@@ -13271,7 +13366,10 @@ const QUESTION_TYPE_HANDLERS = [
     // short_division_hcf_mc's "最大公因數不是" trigger, so no ordering
     // risk against it.
     name: "direct_hcf",
-    detect: (item) => /\d+\s*和\s*\d+\s*的最大公因數/.test(String(item.printedQuestion || "")),
+    detect: (item) => {
+      const text = String(item.printedQuestion || "");
+      return /\d+\s*和\s*\d+\s*的最大公因數/.test(text) || /(?:Highest Common Factor|H\.?\s*C\.?\s*F\.?)[\s\S]{0,15}of\s*\d+\s*and\s*\d+\s*is/i.test(text);
+    },
     verify: (item) => verifyDirectHcf(item.printedQuestion, item.studentAnswer),
   },
   {
@@ -13281,7 +13379,10 @@ const QUESTION_TYPE_HANDLERS = [
     // literal text: 最小公倍數 vs 最初...個公倍數), listed as its own
     // standalone entry for clarity.
     name: "direct_lcm",
-    detect: (item) => /\d+\s*和\s*\d+\s*的最小公倍數/.test(String(item.printedQuestion || "")),
+    detect: (item) => {
+      const text = String(item.printedQuestion || "");
+      return /\d+\s*和\s*\d+\s*的最小公倍數/.test(text) || /(?:Least Common Multiple|L\.?\s*C\.?\s*M\.?)[\s\S]{0,15}of\s*\d+\s*and\s*\d+\s*is/i.test(text);
+    },
     verify: (item) => verifyDirectLcm(item.printedQuestion, item.studentAnswer),
   },
   {
@@ -13792,6 +13893,18 @@ const QUESTION_TYPE_HANDLERS = [
     name: "chord_shorter_than_diameter",
     detect: (item) => isChordShorterThanDiameterQuestion(item),
     verify: (item) => verifyChordShorterThanDiameter(item),
+  },
+  {
+    // Found 2026-10-03, see verifyCircumferenceFromDiameterInteger's own comment.
+    name: "circumference_from_diameter_integer",
+    detect: (item) => isCircumferenceFromDiameterIntegerQuestion(item),
+    verify: (item) => verifyCircumferenceFromDiameterInteger(item),
+  },
+  {
+    // Found 2026-10-03, see verifyDiameterFromCircumferenceInteger's own comment.
+    name: "diameter_from_circumference_integer",
+    detect: (item) => isDiameterFromCircumferenceIntegerQuestion(item),
+    verify: (item) => verifyDiameterFromCircumferenceInteger(item),
   },
   {
     // Ticket 222 ("Pattern 7"): hexagon-cut piece type -- reuses the
@@ -15761,6 +15874,10 @@ export {
   verifyCentreSegmentIsRadius,
   isChordShorterThanDiameterQuestion,
   verifyChordShorterThanDiameter,
+  isCircumferenceFromDiameterIntegerQuestion,
+  verifyCircumferenceFromDiameterInteger,
+  isDiameterFromCircumferenceIntegerQuestion,
+  verifyDiameterFromCircumferenceInteger,
   isHexagonCutPieceTypeQuestion,
   verifyHexagonCutPieceType,
   findLetterGridBbox,
