@@ -1031,6 +1031,54 @@ test("pie_chart_query handler: declines when item.pieChart is absent (no OCR mar
   assert.notEqual(winner && winner.name, "pie_chart_query");
 });
 
+// English-coverage audit (2026-10-03): verifyPieChart was entirely
+// Chinese-only across all 3 sub-shapes (and the registry's own separate
+// inline detect() regex). Real English equivalents:
+// `tsa/2023/p6_paper_TSA2023_6ME2.pdf` Q38(a)/(b) (min-category+total,
+// sum-of-two-categories) and `tsa/2024/p6_paper_TSA2024_6ME3.pdf`
+// Q38(b) (ratio). Unlike Chinese, English question prose pluralises
+// category names ("light buses") while the chart's own OCR'd labels are
+// singular ("Light Bus") -- handled via a case/plural-tolerant lookup.
+const CAR_PIE_Q_EN = "There were 120 vehicles parked in Sunshine Car Park yesterday. Mr Lee did a survey on the numbers of different types of vehicles and constructed a pie chart below. (a) Among the different types of vehicles parked in the car park, the least was __________. There were __________ vehicles only.";
+const CAR_PIE_CHART_EN = { Lorry: 0.20, Taxi: 0.10, "Light Bus": 0.25, "Private Car": 0.15, Van: 0.30 };
+
+test("verifyPieChart: English citation, min-category extraction, correct answer", () => {
+  const r = worker.verifyPieChart(CAR_PIE_CHART_EN, CAR_PIE_Q_EN, "Taxi, 12");
+  assert.equal(r.correct, true);
+});
+
+test("verifyPieChart: English citation, min-category extraction, wrong count", () => {
+  const r = worker.verifyPieChart(CAR_PIE_CHART_EN, CAR_PIE_Q_EN, "Taxi, 20");
+  assert.equal(r.correct, false);
+});
+
+const CAR_PIE_SUM_Q_EN = "(b) The number of light buses and private cars was __________% of the total number of vehicles.";
+
+test("verifyPieChart: English citation, sum-of-two-categories (plural/case-mismatched category names), correct answer", () => {
+  const r = worker.verifyPieChart(CAR_PIE_CHART_EN, CAR_PIE_SUM_Q_EN, "40");
+  assert.equal(r.correct, true);
+});
+
+const GAME_RATIO_Q_EN = "What fraction of the number of customers who favoured sport games was the number of customers who favoured puzzle games?";
+const GAME_PIE_CHART_EN = { Puzzle: 30 / 360, Sport: 120 / 360 };
+
+test("verifyPieChart: English citation, ratio sub-shape, correct answer", () => {
+  const r = worker.verifyPieChart(GAME_PIE_CHART_EN, GAME_RATIO_Q_EN, "1/4");
+  assert.equal(r.correct, true);
+});
+
+test("verifyPieChart: English citation, ratio sub-shape, wrong answer", () => {
+  const r = worker.verifyPieChart(GAME_PIE_CHART_EN, GAME_RATIO_Q_EN, "1/3");
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "1/4");
+});
+
+test("pie_chart_query handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { pieChart: CAR_PIE_CHART_EN, printedQuestion: CAR_PIE_Q_EN, studentAnswer: "Taxi, 12" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "pie_chart_query");
+});
+
 // ---------- Circle-geometry closed-form facts, 2026-10-02 ----------
 // Found while planning the circle-diagram OCR contract: these 3 shapes
 // turned out to need NO image/OCR data at all -- pure geometric facts

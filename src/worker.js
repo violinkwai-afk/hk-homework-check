@@ -2079,14 +2079,43 @@ function verifyPieChart(pieChart, printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer || !pieChart) return { correct: null, correctAnswer: "" };
+  // English coverage audit (2026-10-03): the question's English prose
+  // pluralises/lowercases category names ("light buses", "sport games")
+  // while the chart's own printed labels (and so the OCR'd pieChart
+  // keys) are singular and often capitalised ("Light Bus", "Sport") --
+  // unlike Chinese, which has no plural/capitalisation mismatch. This
+  // does a case-insensitive lookup that also tries stripping a trailing
+  // "s"/"es" before giving up. Only used for English-matched category
+  // names below -- Chinese keeps its original exact-match lookup.
+  const findPieChartCategoryEn = (name) => {
+    const target = String(name || "").trim().toLowerCase();
+    const candidates = [target, target.replace(/es$/, ""), target.replace(/s$/, "")];
+    for (const key of Object.keys(pieChart)) {
+      const keyLower = key.trim().toLowerCase();
+      if (candidates.includes(keyLower)) return pieChart[key];
+    }
+    return undefined;
+  };
   // Two real phrasings found for this sub-shape -- "茶的數量是果汁的
   // 幾分之幾" (plain) and "最喜愛拼圖遊戲的顧客人數是最喜愛體育遊戲的
   // 幾分之幾" (wrapped in 最喜愛.../遊戲/顧客人數) -- both stripped down
   // to the bare category name via the optional non-capturing groups.
-  const ratioMatch = printed.match(/(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的(?:數量|顧客人數)是(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的\s*幾分之幾/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2024/p6_paper_TSA2024_6ME3.pdf` Q38(b) "What fraction of the
+  // number of customers who favoured sport games was the number of
+  // customers who favoured puzzle games?" (the official translation of
+  // this function's own `tsa/2024/p6_marking_TSA2024_6MC3_MS.pdf` Q38(b)
+  // citation) -- note English states the DENOMINATOR category first
+  // ("fraction of sport") and the NUMERATOR second ("was puzzle"), the
+  // opposite order from the Chinese "A的數量是B的幾分之幾" (A=numerator
+  // first), so the capture groups are deliberately swapped below.
+  const ratioMatchZh = printed.match(/(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的(?:數量|顧客人數)是(?:最喜愛)?([一-鿿]+?)(?:遊戲)?的\s*幾分之幾/);
+  const ratioMatchEn = printed.match(/what\s*fraction\s*of[\s\S]{0,40}?favoured\s+([A-Za-z]+)[\s\S]{0,20}?was[\s\S]{0,40}?favoured\s+([A-Za-z]+)/i);
+  const ratioMatch = ratioMatchZh || (ratioMatchEn ? [ratioMatchEn[0], ratioMatchEn[2], ratioMatchEn[1]] : null);
   if (ratioMatch) {
     const [, nameA, nameB] = ratioMatch;
-    const fracA = pieChart[nameA], fracB = pieChart[nameB];
+    const fracA = ratioMatchZh ? pieChart[nameA] : findPieChartCategoryEn(nameA);
+    const fracB = ratioMatchZh ? pieChart[nameB] : findPieChartCategoryEn(nameB);
     if (!Number.isFinite(fracA) || !Number.isFinite(fracB) || !fracB) return { correct: null, correctAnswer: "" };
     // Both slices came from the SAME chart, so their absolute counts are
     // in direct proportion to their fractions -- the total cancels out.
@@ -2104,20 +2133,31 @@ function verifyPieChart(pieChart, printedQuestion, studentAnswer) {
     const correct = !!m && Number(m[1]) === num && Number(m[2]) === den;
     return { correct, correctAnswer: correct ? "" : expected };
   }
-  const sumMatch = printed.match(/([一-鿿]+)及([一-鿿]+?)佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/);
-  if (sumMatch) {
-    const [, nameA, nameB] = sumMatch;
-    const fracA = pieChart[nameA], fracB = pieChart[nameB];
+  const sumMatchZh = printed.match(/([一-鿿]+)及([一-鿿]+?)佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/);
+  // English equivalent: `tsa/2023/p6_paper_TSA2023_6ME2.pdf` Q38(b) "The
+  // number of light buses and private cars was ___% of the total number
+  // of vehicles." (translation of this function's own `tsa/2023/
+  // p6_marking_TSA2023_6MC2_MS.pdf` Q38(b) citation).
+  const sumMatchEn = printed.match(/the\s*number\s*of\s+([a-z\s]+?)\s*and\s+([a-z\s]+?)\s*was[\s\S]{0,25}%\s*of\s*the\s*total/i);
+  if (sumMatchZh || sumMatchEn) {
+    const fracA = sumMatchZh ? pieChart[sumMatchZh[1]] : findPieChartCategoryEn(sumMatchEn[1]);
+    const fracB = sumMatchZh ? pieChart[sumMatchZh[2]] : findPieChartCategoryEn(sumMatchEn[2]);
     if (!Number.isFinite(fracA) || !Number.isFinite(fracB)) return { correct: null, correctAnswer: "" };
     const expectedPct = Math.round((fracA + fracB) * 100);
     const studentNum = parseSignedStudentNumber(answer.replace(/%$/, ""));
     const correct = !Number.isNaN(studentNum) && studentNum === expectedPct;
     return { correct, correctAnswer: correct ? "" : String(expectedPct) };
   }
-  const extremeMatch = printed.match(/(最多|最少)的[一-鿿]*是[\s\S]{0,30}有\s*(\d+)\s*[一-鿿]/) || printed.match(/(最多|最少)的[一-鿿]*是/);
-  if (extremeMatch) {
-    const wantMax = extremeMatch[1] === "最多";
-    const totalMatch = printed.match(/有\s*(\d+)\s*[一-鿿]+[，,。][\s\S]{0,30}統計/);
+  const extremeMatchZh = printed.match(/(最多|最少)的[一-鿿]*是[\s\S]{0,30}有\s*(\d+)\s*[一-鿿]/) || printed.match(/(最多|最少)的[一-鿿]*是/);
+  // English equivalent: `tsa/2023/p6_paper_TSA2023_6ME2.pdf` Q38(a)
+  // "Among the different types of vehicles parked in the car park, the
+  // least was ___. There were ___ vehicles only."
+  const extremeMatchEn = printed.match(/the\s*(least|most)\s*was/i);
+  if (extremeMatchZh || extremeMatchEn) {
+    const wantMax = extremeMatchZh ? extremeMatchZh[1] === "最多" : extremeMatchEn[1].toLowerCase() === "most";
+    const totalMatch = extremeMatchZh
+      ? printed.match(/有\s*(\d+)\s*[一-鿿]+[，,。][\s\S]{0,30}統計/)
+      : printed.match(/there\s*were\s*(\d+)\s*[a-z]+\s*parked/i);
     if (!totalMatch) return { correct: null, correctAnswer: "" };
     const total = Number(totalMatch[1]);
     const entries = Object.entries(pieChart);
@@ -2126,7 +2166,7 @@ function verifyPieChart(pieChart, printedQuestion, studentAnswer) {
     const expectedCount = Math.round(total * bestFrac);
     const nums = (answer.match(/\d+/g) || []).map(Number);
     const studentCount = nums[nums.length - 1];
-    const correct = answer.includes(bestName) && studentCount === expectedCount;
+    const correct = answer.toLowerCase().includes(bestName.toLowerCase()) && studentCount === expectedCount;
     return { correct, correctAnswer: correct ? "" : `${bestName}，${expectedCount}` };
   }
   return { correct: null, correctAnswer: "" };
@@ -12934,7 +12974,8 @@ const QUESTION_TYPE_HANDLERS = [
     detect: (item) => {
       if (!item.pieChart || typeof item.pieChart !== "object") return false;
       const printed = String(item.printedQuestion || "");
-      return /的(?:數量|顧客人數)是(?:最喜愛)?[一-鿿]+?(?:遊戲)?的\s*幾分之幾/.test(printed) || /及[一-鿿]+?佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/.test(printed) || /(最多|最少)的[一-鿿]*是/.test(printed);
+      return /的(?:數量|顧客人數)是(?:最喜愛)?[一-鿿]+?(?:遊戲)?的\s*幾分之幾/.test(printed) || /及[一-鿿]+?佔全部[一-鿿]*的\s*(?:_{2,}|＿{2,})?\s*%/.test(printed) || /(最多|最少)的[一-鿿]*是/.test(printed)
+        || /what\s*fraction\s*of[\s\S]{0,40}?favoured/i.test(printed) || /the\s*number\s*of\s+[a-z\s]+?\s*and\s+[a-z\s]+?\s*was[\s\S]{0,25}%\s*of\s*the\s*total/i.test(printed) || /the\s*(least|most)\s*was/i.test(printed);
     },
     verify: (item) => verifyPieChart(item.pieChart, item.printedQuestion, item.studentAnswer),
   },

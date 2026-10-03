@@ -1821,3 +1821,21 @@ chinese_numeral`、`classifyParallelQuadType`等一睇就知冇英文對應概
 念(中文數字書寫、純CV幾何function冇語言)。
 
 全repo1156→1157條test,全部pass。
+
+## 2026-10-03(續26)— pie_chart_query全3個sub-shape英文覆蓋
+
+修正咗`verifyPieChart`(連埋registry個獨立inline detect)——之前3個
+sub-shape(最多/最少+總數、兩類別加埋%、比例)全部100%中文。真實英文
+citation:`tsa/2023/p6_paper_TSA2023_6ME2.pdf`Q38(a)/(b)(停車場嗰個)
+同`tsa/2024/p6_paper_TSA2024_6ME3.pdf`Q38(b)(遊戲比例嗰個)。
+
+搵到2個額外設計問題:
+1. 英文題目句子會將類別名詞多數化("light buses"、"sport games"),但
+   圖表本身(OCR marker)嘅label係單數("Light Bus")——加咗一個
+   case-insensitive+去多數s/es嘅`findPieChartCategoryEn`輔助function
+   先至揾到。
+2. 比例sub-shape英文版嗰句"what fraction of X was Y"——X同Y嘅次序
+   同中文版「A的數量是B的幾分之幾」**啱啱調轉**(英文X係分母,Y係
+   分子;中文A係分子,B係分母)——要刻意swap個capture group次序。
+
+全repo1157→1163條test,全部pass。
