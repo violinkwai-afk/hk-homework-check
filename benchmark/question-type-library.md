@@ -1762,3 +1762,16 @@ handler驗證過圓周/直徑嘅學生答案**(淨係有4個圓形零圖像fact,
    positional-reliability風險一樣,刻意唔起code(留俾AI fallback)。
 
 全repo1139→1146條test,全部pass。
+
+## 2026-10-03(續23)— 繼續英文覆蓋率audit:word_problem_more_than
+
+跟續19/續21嗰個方法，繼續檢查今日之前(2026-10-02)新寫嗰批handler嘅
+英文覆蓋。搵到：`word_problem_more_than`擴闊咗做全套comparative-
+adjective(高矮長短重輕大小)嗰陣,English trigger淨係跟返原本「more/
+fewer/less + than」,冇加埋「taller/shorter/bigger/smaller/longer/
+heavier/lighter」——真實英文citation`tsa/2018/TSA2018_3ME3.pdf`/
+`3ME4.pdf`Q9("Flora is 152cm tall. Brian is 38cm shorter than her.")
+一試,完全冇反應。已經修正(連埋registry嗰個獨立inline detect regex
+都要一齊改,同HCF/LCM嗰次一樣嘅教訓)。
+
+全repo1146→1148條test,全部pass。

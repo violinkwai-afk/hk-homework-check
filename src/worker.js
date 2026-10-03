@@ -7226,8 +7226,18 @@ function verifyWordProblemMoreThan(printedQuestion, studentAnswer) {
   // base±diff math applies to any comparative-adjective pair (高/矮,
   // 長/短, 重/輕, 大/小), not just 多/少 -- 矮 (shorter) means exactly
   // the same "fewer" relationship as 少 for this shape's arithmetic.
-  const isMore = /比[^，,。？?！!]{0,10}(多|高|長|重|大)/.test(printed) || /\bmore\b.{0,20}\bthan\b/i.test(printed);
-  const isFewer = /比[^，,。？?！!]{0,10}(少|矮|短|輕|小)/.test(printed) || /\b(fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+  // English-coverage audit (2026-10-03): the original English trigger
+  // only covered the literal words "more"/"fewer"/"less" + "than" (the
+  // 多/少 pair's direct translation), missing the comparative-adjective
+  // family's own English words (taller/shorter/heavier/lighter/bigger/
+  // smaller) -- the exact English equivalent of this function's own
+  // 矮/高/長/短/重/輕/大/小 widening. Confirmed gap against the real
+  // English citation `tsa/2018/TSA2018_3ME3.pdf`/`3ME4.pdf` Q9 "Flora is
+  // 152 cm tall. Brian is 38 cm shorter than her. Brian is ___ cm tall."
+  // (the official translation of this function's own `tsa/2018/
+  // TSA2018_3MC3.txt`/`3MC4.txt` Q9 citation) -> 114.
+  const isMore = /比[^，,。？?！!]{0,10}(多|高|長|重|大)/.test(printed) || /\b(?:more|taller|bigger|larger|longer|heavier)\b.{0,20}\bthan\b/i.test(printed);
+  const isFewer = /比[^，,。？?！!]{0,10}(少|矮|短|輕|小)/.test(printed) || /\b(?:fewer|less|shorter|smaller|lighter)\b.{0,20}\bthan\b/i.test(printed);
   if (isMore === isFewer) return { correct: null, correctAnswer: "" }; // neither, or both (ambiguous OCR) -- decline
   // Found 2026-10-02 (TSA 2023 P6 maths archive, real citation: "一包
   // 普通裝奶粉重800克，一包增量裝奶粉的重量比普通裝的多20%，增量裝
@@ -7244,7 +7254,7 @@ function verifyWordProblemMoreThan(printedQuestion, studentAnswer) {
   // but declining here is the SAFE direction (same lesson as the 800g
   // milk-powder bug this guard was originally built from) -- better to
   // decline an unseen shape than risk the same flat-addition mistake.
-  if (/[多少高矮長短重輕大小][^，,。？?！!]{0,10}\d+(?:\.\d+)?\s*%/.test(printed) || /\b(?:more|fewer|less)\b[^.?!]{0,15}%/i.test(printed)) {
+  if (/[多少高矮長短重輕大小][^，,。？?！!]{0,10}\d+(?:\.\d+)?\s*%/.test(printed) || /\b(?:more|fewer|less|taller|shorter|bigger|smaller|larger|longer|heavier|lighter)\b[^.?!]{0,15}%/i.test(printed)) {
     return { correct: null, correctAnswer: "" };
   }
   const nums = (printed.match(/\d+/g) || []).map(Number);
@@ -13275,7 +13285,7 @@ const QUESTION_TYPE_HANDLERS = [
     name: "word_problem_more_than",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      const hasMoreOrFewer = /比[^，,。？?！!]{0,10}(多|少|高|矮|長|短|重|輕|大|小)/.test(printed) || /\b(more|fewer|less)\b.{0,20}\bthan\b/i.test(printed);
+      const hasMoreOrFewer = /比[^，,。？?！!]{0,10}(多|少|高|矮|長|短|重|輕|大|小)/.test(printed) || /\b(?:more|fewer|less|taller|shorter|bigger|smaller|larger|longer|heavier|lighter)\b.{0,20}\bthan\b/i.test(printed);
       if (!hasMoreOrFewer) return false;
       return (printed.match(/\d+/g) || []).length === 2;
     },

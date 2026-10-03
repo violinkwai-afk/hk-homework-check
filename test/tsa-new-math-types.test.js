@@ -871,6 +871,24 @@ test("word_problem_more_than handler: 矮 citation wins dispatch", () => {
   assert.equal(winner.name, "word_problem_more_than");
 });
 
+// English-coverage audit (2026-10-03): the comparative-adjective
+// widening above was Chinese-only -- the English trigger only covered
+// the literal words "more"/"fewer"/"less", missing "shorter"/"taller"/
+// etc. English equivalent of the HEIGHT_Q citation:
+// `tsa/2018/TSA2018_3ME3.pdf`/`3ME4.pdf` Q9.
+const HEIGHT_Q_EN = "Flora is 152 cm tall. Brian is 38 cm shorter than her. Brian is cm tall.";
+
+test("verifyWordProblemMoreThan: English citation (tsa/2018/TSA2018_3ME3.pdf Q9, 'shorter than'), correct answer", () => {
+  const r = worker.verifyWordProblemMoreThan(HEIGHT_Q_EN, "114");
+  assert.equal(r.correct, true);
+});
+
+test("word_problem_more_than handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: HEIGHT_Q_EN, studentAnswer: "114" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "word_problem_more_than");
+});
+
 // ---------- pie_chart_query ----------
 // Real citation verified against the official marking scheme
 // (`tsa/2023/p6_marking_TSA2023_6MC2_MS.pdf` Q38, answers (a) 的士,12
