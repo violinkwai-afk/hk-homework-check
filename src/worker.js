@@ -147,6 +147,19 @@ export default {
       if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
       return handleTestFallbackCandidate(request, env);
     }
+    // TEMPORARY (2026-10-03): real-pipeline version -- runs the ACTUAL
+    // production OCR step (callQwenOcrText / OCR_TEXT_MODEL) to get real
+    // printedQuestion/studentAnswer text (no hand-written question text),
+    // then the ACTUAL buildAiFallbackPrompt() unmodified (real Cantonese
+    // prompt, no "ignore the marks" instruction added -- production
+    // doesn't have one), then sends that exact real prompt+image to the
+    // candidate model. User flagged the first debug route's hand-written
+    // English prompts/hints as not reflecting the real website. Remove
+    // once this candidate round is done (same TICKETS.md 待刪 line).
+    if (url.pathname === "/api/test-fallback-candidate-real" && request.method === "POST") {
+      if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+      return handleTestFallbackCandidateReal(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -340,6 +353,76 @@ async function handleTestFallbackCandidate(request, env) {
     results.push(record);
   }
   return json({ model, results });
+}
+
+// TEMPORARY (2026-10-03) -- see route registration comment above.
+async function handleTestFallbackCandidateReal(request, env) {
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_openrouter_key" }, 500);
+
+  const { model, maxTokens, image } = await request.json();
+  const downscaled = downscaleForCheapTier(image, 640);
+
+  const tOcr = Date.now();
+  let ocr;
+  try {
+    ocr = await callQwenOcrText([downscaled], openrouterKey);
+  } catch (e) {
+    return json({ error: "ocr_failed", detail: String((e && e.detail) || (e && e.message) || e) }, 500);
+  }
+  const ocrMs = Date.now() - tOcr;
+
+  const pendingItems = ocr.items
+    .filter((it) => !it.parseFailed)
+    .map((it, i) => ({ resultIndex: i, question: it.label, printedQuestion: it.printedQuestion || "", studentAnswer: it.studentAnswer || "" }));
+
+  if (!pendingItems.length) {
+    return json({ error: "no_items_from_real_ocr", ocrRawItems: ocr.items, ocrMs });
+  }
+
+  const prompt = buildAiFallbackPrompt(pendingItems);
+  const t0 = Date.now();
+  let record = { elapsedMs: null, finishReason: null, usage: null, rawText: null, error: null };
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${openrouterKey}`,
+        "http-referer": "https://hk-homework-check.violin-kwai.workers.dev",
+        "x-title": "hk-homework-check",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens || 4000,
+        temperature: 0,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${downscaled.mediaType || "image/jpeg"};base64,${downscaled.data}` } },
+          ],
+        }],
+      }),
+    });
+    record.elapsedMs = Date.now() - t0;
+    const data = await res.json();
+    if (!res.ok) {
+      record.error = JSON.stringify(data).slice(0, 500);
+    } else {
+      const choice = data.choices && data.choices[0];
+      record.finishReason = choice && choice.finish_reason;
+      record.usage = data.usage || null;
+      record.rawText = (choice && choice.message && choice.message.content) || "";
+    }
+  } catch (e) {
+    record.elapsedMs = Date.now() - t0;
+    record.error = String((e && e.message) || e);
+  }
+
+  return json({ model, ocrMs, realOcrItems: pendingItems, realPrompt: prompt, judge: record });
 }
 
 async function handleTestRotationLatency(request, env) {
