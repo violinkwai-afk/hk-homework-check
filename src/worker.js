@@ -12659,6 +12659,41 @@ function verifyWheelMultiLapDistance(item) {
   return { correct, correctAnswer: correct ? "" : String(expected) };
 }
 
+// Found 2026-10-03: a different circumference-based shape -- a total
+// wire length is given, each ring's diameter is given, asking the MAX
+// NUMBER of complete rings that can be made (floor division, not
+// rounding). Real citation: `tsa/2017/TSA2017_6MC1.pdf` Q25 "把一條長
+// 100cm的銅線，製成直徑為10cm的銅圈。最多可製成多少個銅圈?(以整數作
+// 答)" -> official answer 3 (`2017/TSA2017_6MC1_MS.pdf`:
+// floor(100/(10×22/7))=floor(3.18)=3, floor(100/(10×3.14))=floor(3.18)=3,
+// both agree); English equivalent `tsa/2017/TSA2017_6ME1.pdf` Q25 "A
+// piece of copper wire is 100 cm long. How many copper rings of
+// diameter 10 cm can be made at most? Answer: ___ copper rings can be
+// made at most. (Give the answer as a whole number)."
+function isWireToRingsMaxCountQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const zh = /長\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\s*的銅線[\s\S]{0,15}製成直徑為\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\s*的銅圈[\s\S]{0,15}最多可製成多少個銅圈/.test(text);
+  const en = /copper\s*wire\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\s*long[\s\S]{0,40}copper\s*rings\s*of\s*diameter\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\s*can\s*be\s*made\s*at\s*most/i.test(text);
+  return zh || en;
+}
+function verifyWireToRingsMaxCount(item) {
+  if (!isWireToRingsMaxCountQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = text.match(/長\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\s*的銅線[\s\S]{0,15}製成直徑為\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\s*的銅圈/)
+    || text.match(/copper\s*wire\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\s*long[\s\S]{0,40}copper\s*rings\s*of\s*diameter\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\s*can\s*be\s*made\s*at\s*most/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const totalLength = Number(m[1]);
+  const diameter = Number(m[2]);
+  const count1 = Math.floor(totalLength / (diameter * (22 / 7)));
+  const count2 = Math.floor(totalLength / (diameter * 3.14));
+  if (count1 !== count2) return { correct: null, correctAnswer: "" };
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  return { correct: studentNum === count1, correctAnswer: studentNum === count1 ? "" : String(count1) };
+}
+
 // (2) diameter_from_circumference_integer: a wire/coil's straightened
 // length (= its circumference) is given, the coil's diameter is asked --
 // same "22/7 or 3.14, both round to the same integer" logic, inverted
@@ -13496,6 +13531,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "wheel_multi_lap_distance",
     detect: (item) => isWheelMultiLapDistanceQuestion(item),
     verify: (item) => verifyWheelMultiLapDistance(item),
+  },
+  {
+    // Found 2026-10-03, see verifyWireToRingsMaxCount's own comment.
+    name: "wire_to_rings_max_count",
+    detect: (item) => isWireToRingsMaxCountQuestion(item),
+    verify: (item) => verifyWireToRingsMaxCount(item),
   },
   {
     name: "word_problem_total",
@@ -16259,6 +16300,8 @@ export {
   verifyDiameterFromCircumferenceMc,
   isWheelMultiLapDistanceQuestion,
   verifyWheelMultiLapDistance,
+  isWireToRingsMaxCountQuestion,
+  verifyWireToRingsMaxCount,
   isDiameterFromCircumferenceIntegerQuestion,
   verifyDiameterFromCircumferenceInteger,
   isCircleAreaFromRadiusExplicitPiQuestion,

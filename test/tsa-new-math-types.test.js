@@ -1447,6 +1447,41 @@ test("wheel_multi_lap_distance handler: English citation, registered, reachable,
   assert.equal(winner.name, "wheel_multi_lap_distance");
 });
 
+// wire_to_rings_max_count -- max number of complete rings (floor
+// division, not rounding) from a total wire length. Real citation
+// `tsa/2017/TSA2017_6MC1.pdf` Q25 -> official answer 3, bilingual from
+// the start (`tsa/2017/TSA2017_6ME1.pdf` Q25).
+const WIRE_RINGS_Q = "25. 把一條長100 cm 的銅線，製成直徑為10 cm 的銅圈。 最多可製成多少個銅圈? 答案﹕最多可製成 個銅圈。(以整數作答)";
+const WIRE_RINGS_Q_EN = "25. A piece of copper wire is 100 cm long. How many copper rings of diameter 10 cm can be made at most? Answer: copper rings can be made at most. (Give the answer as a whole number)";
+
+test("verifyWireToRingsMaxCount: real citation (tsa/2017/TSA2017_6MC1.pdf Q25), correct answer", () => {
+  const r = worker.verifyWireToRingsMaxCount({ printedQuestion: WIRE_RINGS_Q, studentAnswer: "3" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyWireToRingsMaxCount: real citation, wrong answer (unfloored)", () => {
+  const r = worker.verifyWireToRingsMaxCount({ printedQuestion: WIRE_RINGS_Q, studentAnswer: "4" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "3");
+});
+
+test("wire_to_rings_max_count handler: registered, reachable, wins dispatch (not word_problem_total/division)", () => {
+  const item = { printedQuestion: WIRE_RINGS_Q, studentAnswer: "3" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "wire_to_rings_max_count");
+});
+
+test("verifyWireToRingsMaxCount: English citation (tsa/2017/TSA2017_6ME1.pdf Q25), correct answer", () => {
+  const r = worker.verifyWireToRingsMaxCount({ printedQuestion: WIRE_RINGS_Q_EN, studentAnswer: "3" });
+  assert.equal(r.correct, true);
+});
+
+test("wire_to_rings_max_count handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: WIRE_RINGS_Q_EN, studentAnswer: "3" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "wire_to_rings_max_count");
+});
+
 const IRON_WIRE_Q_2018 = "把一條長15 cm 的鐵線，製成一個圓形的鐵圈。 鐵圈的直徑約是 cm。(以整數作答)";
 const IRON_WIRE_Q_2018_EN = "An iron wire 15 cm long is bent into a circular coil. The diameter of the circular coil is about cm. (Give the answer as a whole number)";
 const IRON_WIRE_Q_2019 = "把一個鐵圈剪開後，拉直成一條鐵線(如上圖所示)。 鐵線的長度是19 cm，鐵圈的直徑約是 cm。 (以整數作答)";

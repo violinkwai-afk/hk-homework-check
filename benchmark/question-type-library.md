@@ -1895,3 +1895,17 @@ p6_paper_TSA2023_6MC2.pdf`Q21「一個倉鼠轉輪的直徑是20cm。倉鼠在�
 **之前**解決。
 
 全repo1176→1181條test,全部pass。
+
+## 2026-10-03(續31)— 新handler:wire_to_rings_max_count
+
+繼續挖circumference家族,搵到最後一個真實變體:銅線總長除以每個銅圈
+嘅圓周,問最多可製成幾多個完整嘅圈(floor division,唔係四捨五入)。
+真實citation:`tsa/2017/TSA2017_6MC1.pdf`Q25「把一條長100cm的銅線，
+製成直徑為10cm的銅圈。最多可製成多少個銅圈?(以整數作答)」→
+floor(100/(10×π))=3。中英文一次做齊(`tsa/2017/TSA2017_6ME1.pdf`)。
+冇collision,已經confirm detect()唔會撞word_problem_total/division。
+
+全repo1181→1186條test,全部pass。今日圓周/直徑/面積family總共新增
+7個handler(circumference_from_diameter_integer/mc、diameter_from_
+circumference_integer/mc、circle_area_from_radius_explicit_pi、
+wheel_multi_lap_distance、wire_to_rings_max_count)。
