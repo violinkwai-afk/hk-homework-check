@@ -3296,8 +3296,14 @@ function mentionsQuantityWordOrClockMechanics(pendingItems) {
 // found: "一個星期中，第五天是星期五" is marked FALSE (the 5th day is
 // actually Thursday under this convention). An AI answering from general
 // knowledge alone would very plausibly get this wrong.
+// Caveat added 2026-10-03 (pmc2017_e.pdf Learning Unit 1M4.5): the
+// official curriculum text itself says "Whether Monday or Sunday is the
+// first day of the week need not to be stressed" -- i.e. this is an
+// observed real-workbook DEFAULT, not a universally mandated rule, so a
+// question that explicitly states which day is day 1 should override it.
 const WEEKDAY_CONVENTION_REFERENCE = `參考資料——呢個課程嘅一星期慣例（幫你答日曆/星期題,唔好靠估）：
-呢個課程慣例：一星期嘅第一天係星期日(Sunday)，第二天係星期一，...，第七天係星期六(Saturday)——唔好國際慣例嘅星期一開始計。`;
+呢個課程慣例：一星期嘅第一天係星期日(Sunday)，第二天係星期一，...，第七天係星期六(Saturday)——唔好國際慣例嘅星期一開始計。
+但注意：呢個淨係真實工作紙/workbook觀察到嘅預設慣例，官方課程文件講明「邊一日係一星期嘅第一日，唔需要特別強調」——即係話如果題目本身已經明確講咗邊一日係「第一天」，就跟返題目講嘅,唔好硬套呢個預設。`;
 
 // Found 2026-10-02 (TSA full-years diagram survey): 3 real圓形(circle)
 // geometry facts confirmed against official marking schemes (see
@@ -3367,6 +3373,27 @@ const SHAPE_INCLUSION_RELATIONSHIP_REFERENCE = `參考資料——小學課程�
 
 function mentionsShapeInclusionRelationship(pendingItems) {
   const re = /正方形|長方形|菱形|平行四邊形|等腰三角形|等邊三角形|直角三角形/;
+  return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
+}
+
+// Found 2026-10-03 (pmc2017_e.pdf, full read prompted by the user's own
+// request to check marking-scheme-relevant constraints carefully -- same
+// pass that found the π-approximation leniency). Learning Units 5N4
+// "Decimals (III)", 6N1 "Decimals (IV)" (decimal multiplication/
+// division word problems) and 6N2 "Decimals (V)" (fraction-to-decimal
+// conversion) all carry the SAME note: "Students may round off the
+// result of calculations to the nearest tenth or hundredth" and
+// "Students are required to recognise and use the symbol '≈'". Real risk
+// this addresses: an AI fallback judge expecting one single exact
+// decimal value for a division/conversion that doesn't terminate neatly
+// (e.g. 1/3, or 7÷6), when the curriculum explicitly allows a student to
+// round to 1 or 2 decimal places and write "≈" instead of "=".
+const DECIMAL_ROUNDING_LENIENCY_REFERENCE = `參考資料——小數除法/分數化小數嘅四捨五入寬容度（幫你判斷呢類答案,唔好要求淨係一個「啱」嘅小數位數）：
+如果除法或者分數化小數嘅結果除唔盡(例如1÷3、7÷6)，學生可以將答案四捨五入至一位小數或兩位小數,呢個係課程明文容許嘅,唔應該要求學生寫出好多位小數先算啱。
+學生用「≈」(大約等於)代替「=」嚟表達四捨五入後嘅答案，係啱嘅寫法，唔應該因為冇寫「=」就話佢錯。`;
+
+function mentionsDecimalRoundingLeniency(pendingItems) {
+  const re = /÷|除以|化.{0,2}小數|分數.{0,2}小數|小數.{0,2}分數|四捨五入|≈|recurring|repeating decimal/i;
   return pendingItems.some((it) => re.test(String(it.printedQuestion || "")) || re.test(String(it.studentAnswer || "")));
 }
 
@@ -3517,6 +3544,7 @@ function buildAiFallbackPrompt(pendingItems) {
     mentionsCircleGeometry(pendingItems) ? CIRCLE_GEOMETRY_REFERENCE : null,
     mentionsHkTerminologyLeniency(pendingItems) ? HK_TERMINOLOGY_LENIENCY_REFERENCE : null,
     mentionsShapeInclusionRelationship(pendingItems) ? SHAPE_INCLUSION_RELATIONSHIP_REFERENCE : null,
+    mentionsDecimalRoundingLeniency(pendingItems) ? DECIMAL_ROUNDING_LENIENCY_REFERENCE : null,
   ].filter(Boolean);
   const referenceBlock = referenceBlocks.length ? `\n${referenceBlocks.join("\n")}\n` : "";
   return `你是一位細心的小學老師，正在批改學生嘅功課相。冇提供標準答案，請你自己諗清楚每一題應該點答。已經有OCR幫手讀低咗以下呢幾條題目文字同學生答案（可能有少少OCR誤讀，如果同相片有出入請以相片為準，唔好盲信呢段文字）：
@@ -12412,6 +12440,52 @@ function verifyDiameterFromCircumferenceInteger(item) {
   return { correct: studentNum === d1, correctAnswer: studentNum === d1 ? "" : String(d1) };
 }
 
+// Found 2026-10-03, same π-leniency pass as circumference above: circle
+// AREA questions (pmc2017_e.pdf Learning Unit 6M5.2) carry the identical
+// "Students are only required to use 22/7 or 3.14 as approximate values
+// of π" note -- but unlike circumference, every real archive citation
+// found EXPLICITLY STATES which π value to use ("取π值為3.14"/"(Take π
+// as 3.14)"), so there is no rounding ambiguity to resolve -- just a
+// direct area=π×r² computation with the stated π. Real citation:
+// `tsa/2024/p6_paper_TSA2024_6MC1.pdf` Q23 "下圖中，O點是圓心。XY是一條
+// 圓內最長的線段。(a)圓的半徑是3cm，XY長___cm。(b)圓面積是___cm2。(取π
+// 值為3.14)" -> official answer 28.26 (`2024/p6_marking_TSA2024_6MC1_MS.pdf`);
+// English equivalent `tsa/2024/p6_paper_TSA2024_6ME1.pdf` Q23 "The
+// radius of the circle is 3 cm. ... The area of the circle is ___ cm2.
+// (Take π as 3.14)". Deliberately scoped to ONLY this directly-stated-
+// radius phrasing -- 2 other real area citations found
+// (`tsa/2023/p6_paper_TSA2023_6MC.pdf` Q24, inscribed-circle-in-square;
+// `tsa/2024/p6_paper_TSA2024_6MC3.pdf` Q24, semicircle) have their key
+// number positioned as a diagram label outside the question sentence
+// (same flat-PDF-text positional-reliability caveat already disclosed
+// for the pie-chart contract), so building a regex for those would be
+// guessing at an association a real vision model reads directly from
+// the image -- left to the AI fallback instead.
+function isCircleAreaFromRadiusExplicitPiQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const hasPi = /取\s*π\s*值為\s*(?:3\.14|22\s*\/\s*7)/.test(text) || /take\s*π\s*as\s*(?:3\.14|22\s*\/\s*7)/i.test(text);
+  if (!hasPi) return false;
+  const zh = /圓的半徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b/.test(text) && /圓面積是\s*(?:_{2,}|＿{2,})?\s*(?:cm2|cm²|平方(?:cm|厘米))/.test(text);
+  const en = /radius\s*of\s*the\s*circle\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b/i.test(text) && /area\s*of\s*the\s*circle\s*is/i.test(text);
+  return zh || en;
+}
+function verifyCircleAreaFromRadiusExplicitPi(item) {
+  if (!isCircleAreaFromRadiusExplicitPiQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const piMatch = text.match(/取\s*π\s*值為\s*(3\.14|22\s*\/\s*7)/) || text.match(/take\s*π\s*as\s*(3\.14|22\s*\/\s*7)/i);
+  const rMatch = text.match(/圓的半徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/) || text.match(/radius\s*of\s*the\s*circle\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
+  if (!piMatch || !rMatch) return { correct: null, correctAnswer: "" };
+  const pi = piMatch[1].includes("/") ? 22 / 7 : 3.14;
+  const r = Number(rMatch[1]);
+  const expected = Math.round(pi * r * r * 100) / 100;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.005;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 // Same page, Q⑧: "下面的六邊形每條邊的長度都相等。[hexagon cut into
 // A/B/C/D, drawn separately, same shape as the letter-grid above] 圖A
 // 是（直角/等腰/等邊）三角形。(把答案圈起來)" -- unlike Q7/Q9 above, the
@@ -13905,6 +13979,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "diameter_from_circumference_integer",
     detect: (item) => isDiameterFromCircumferenceIntegerQuestion(item),
     verify: (item) => verifyDiameterFromCircumferenceInteger(item),
+  },
+  {
+    // Found 2026-10-03, see verifyCircleAreaFromRadiusExplicitPi's own comment.
+    name: "circle_area_from_radius_explicit_pi",
+    detect: (item) => isCircleAreaFromRadiusExplicitPiQuestion(item),
+    verify: (item) => verifyCircleAreaFromRadiusExplicitPi(item),
   },
   {
     // Ticket 222 ("Pattern 7"): hexagon-cut piece type -- reuses the
@@ -15878,6 +15958,8 @@ export {
   verifyCircumferenceFromDiameterInteger,
   isDiameterFromCircumferenceIntegerQuestion,
   verifyDiameterFromCircumferenceInteger,
+  isCircleAreaFromRadiusExplicitPiQuestion,
+  verifyCircleAreaFromRadiusExplicitPi,
   isHexagonCutPieceTypeQuestion,
   verifyHexagonCutPieceType,
   findLetterGridBbox,

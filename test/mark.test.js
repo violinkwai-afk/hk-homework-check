@@ -1905,6 +1905,21 @@ test("mentionsShapeInclusionRelationship / SHAPE_INCLUSION_RELATIONSHIP_REFERENC
   assert.doesNotMatch(unrelated, /正方形、長方形同菱形都係平行四邊形嘅一種/);
 });
 
+// Found 2026-10-03 (pmc2017_e.pdf Learning Units 5N4/6N1/6N2, full read
+// prompted by the user flagging the earlier π-leniency note -- same
+// careful pass found this too): decimal division / fraction-to-decimal
+// conversion results that don't terminate neatly may be rounded to the
+// nearest tenth or hundredth, with "≈" instead of "=".
+test("mentionsDecimalRoundingLeniency / DECIMAL_ROUNDING_LENIENCY_REFERENCE: fires on division/fraction-to-decimal wording", async () => {
+  const worker = await import(TMP);
+  const prompt = worker.buildAiFallbackPrompt([
+    { question: "1", printedQuestion: "將7÷6化成小數,四捨五入至兩位小數。", studentAnswer: "1.17" },
+  ]);
+  assert.match(prompt, /學生可以將答案四捨五入至一位小數或兩位小數/);
+  const unrelated = worker.buildAiFallbackPrompt([{ question: "1", printedQuestion: "9 + 4 = ?", studentAnswer: "13" }]);
+  assert.doesNotMatch(unrelated, /學生可以將答案四捨五入至一位小數或兩位小數/);
+});
+
 // Found 2026-10-03 (pmc2017_tc.pdf P1 content): real HK coin-notation
 // trap (a 10-cent coin prints "10", not "1") and the $X.XX-as-元角
 // reading convention, folded into the existing currency reference block

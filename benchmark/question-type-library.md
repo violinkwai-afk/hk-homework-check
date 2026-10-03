@@ -1735,3 +1735,30 @@ handler驗證過圓周/直徑嘅學生答案**(淨係有4個圓形零圖像fact,
 線符號——已經改做底線可選,空白本身都接受。
 
 全repo1124→1139條test,全部pass。
+
+## 2026-10-03(續22)— pmc2017_e.pdf全書120頁逐頁睇完,再搵3個新發現
+
+跟續20延伸,呢次真係將pmc2017_e.pdf(120頁)**全部逐頁contiguous讀完**
+(之前續20淨係keyword search,呢次由page1讀到page120)。搵到：
+
+1. **星期慣例caveat**：官方課程原文講明「Whether Monday or Sunday is
+   the first day of the week need not to be stressed」。已有嘅
+   `WEEKDAY_CONVENTION_REFERENCE`(嚟自真實workbook觀察,唔係呢份課程
+   文件)依然保留做預設,但加咗一句caveat：如果題目本身已經講明邊一日
+   係「第一天」，就跟返題目講嘅,唔好硬套預設。
+
+2. **新reference block `DECIMAL_ROUNDING_LENIENCY_REFERENCE`**(學習
+   單位5N4/6N1/6N2):小數除法或者分數化小數除唔盡嗰陣,學生可以四捨
+   五入至一位或兩位小數,仲可以用「≈」代替「=」。之前codebase完全
+   冇呢類leniency知識。
+
+3. **圓面積π leniency延伸+新handler`circle_area_from_radius_explicit
+   _pi`**:確認咗6M5.2單元,圓面積計算一樣用「22/7或3.14」嗰條
+   leniency規則。但同圓周唔同，搵到嘅真實圓面積citation全部都**明文
+   指定用邊個π值**(「取π值為3.14」)，所以冇四捨五入歧義，淨係直接
+   計。真實citation:`tsa/2024/p6_paper_TSA2024_6MC1.pdf`Q23(b)半徑
+   3cm→28.26。中英文一次做齊。另外2個真實citation(正方形內嵌圓、
+   半圓)嘅關鍵數字係圖表標籤而唔係inline題目句子,同pie chart嗰個
+   positional-reliability風險一樣,刻意唔起code(留俾AI fallback)。
+
+全repo1139→1146條test,全部pass。

@@ -1219,3 +1219,45 @@ test("diameter_from_circumference_integer handler: registered, reachable, wins d
   const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
   assert.equal(winner.name, "diameter_from_circumference_integer");
 });
+
+// circle_area_from_radius_explicit_pi -- found 2026-10-03 while checking
+// whether the π-leniency fact also applies to circle AREA (it does, per
+// pmc2017_e.pdf 6M5.2), but every real area citation explicitly states
+// which π value to use, so there's no rounding-ambiguity to resolve --
+// just a direct computation.
+const CIRCLE_AREA_Q = "下圖中，O 點是圓心。XY 是一條圓內最長的線段。 (a) 圓的半徑是3 cm，XY 長 cm。 (b) 圓面積是 cm2。(取π 值為3.14)";
+const CIRCLE_AREA_Q_EN = "In the figure below, O is the centre of the circle. XY is a longest line segment in the circle. (a) The radius of the circle is 3 cm. XY is cm long. (b) The area of the circle is cm2. (Take π as 3.14)";
+
+test("verifyCircleAreaFromRadiusExplicitPi: real citation (tsa/2024/p6_paper_TSA2024_6MC1.pdf Q23b), correct answer", () => {
+  const r = worker.verifyCircleAreaFromRadiusExplicitPi({ printedQuestion: CIRCLE_AREA_Q, studentAnswer: "28.26" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyCircleAreaFromRadiusExplicitPi: real citation, wrong answer", () => {
+  const r = worker.verifyCircleAreaFromRadiusExplicitPi({ printedQuestion: CIRCLE_AREA_Q, studentAnswer: "18.84" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "28.26");
+});
+
+test("circle_area_from_radius_explicit_pi handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CIRCLE_AREA_Q, studentAnswer: "28.26" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circle_area_from_radius_explicit_pi");
+});
+
+test("verifyCircleAreaFromRadiusExplicitPi: English citation (tsa/2024/p6_paper_TSA2024_6ME1.pdf Q23b), correct answer", () => {
+  const r = worker.verifyCircleAreaFromRadiusExplicitPi({ printedQuestion: CIRCLE_AREA_Q_EN, studentAnswer: "28.26" });
+  assert.equal(r.correct, true);
+});
+
+test("circle_area_from_radius_explicit_pi handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CIRCLE_AREA_Q_EN, studentAnswer: "28.26" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circle_area_from_radius_explicit_pi");
+});
+
+test("verifyCircleAreaFromRadiusExplicitPi: uses 22/7 when the question states that approximation instead of 3.14", () => {
+  const q = "圓的半徑是7 cm。圓面積是 cm2。(取π 值為22/7)";
+  const r = worker.verifyCircleAreaFromRadiusExplicitPi({ printedQuestion: q, studentAnswer: "154" });
+  assert.equal(r.correct, true);
+});
