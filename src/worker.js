@@ -382,6 +382,24 @@ async function handleTestFallbackCandidateReal(request, env) {
     return json({ error: "no_items_from_real_ocr", ocrRawItems: ocr.items, ocrMs });
   }
 
+  // 2026-10-03: user asked to see Jev's real confidence (noul) per item
+  // alongside the candidate judge's verdict -- real callJevPreCheck,
+  // same pendingItems, purely observational (never filters what goes to
+  // the candidate below -- every item still gets judged by the
+  // candidate regardless of what Jev would have resolved on its own).
+  const tJev = Date.now();
+  const jevResolved = await callJevPreCheck(pendingItems, openrouterKey);
+  const jevMs = Date.now() - tJev;
+  const jevInfo = {
+    callStatus: jevResolved.callStatus || "unknown",
+    ms: jevMs,
+    perItem: pendingItems.map((it) => ({
+      resultIndex: it.resultIndex,
+      noul: jevResolved.rawScores ? jevResolved.rawScores[String(it.resultIndex)] : null,
+      jevVerdict: jevResolved.has(it.resultIndex) ? (jevResolved.get(it.resultIndex).correct ? "correct" : "incorrect") : "uncertain (below confidence threshold)",
+    })),
+  };
+
   const prompt = buildAiFallbackPrompt(pendingItems);
   const t0 = Date.now();
   let record = { elapsedMs: null, finishReason: null, usage: null, rawText: null, error: null };
@@ -422,7 +440,7 @@ async function handleTestFallbackCandidateReal(request, env) {
     record.error = String((e && e.message) || e);
   }
 
-  return json({ model, ocrMs, realOcrItems: pendingItems, realPrompt: prompt, judge: record });
+  return json({ model, ocrMs, realOcrItems: pendingItems, jev: jevInfo, realPrompt: prompt, judge: record });
 }
 
 async function handleTestRotationLatency(request, env) {
