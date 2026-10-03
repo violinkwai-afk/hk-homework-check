@@ -1354,6 +1354,28 @@ test("circumference_from_diameter_mc handler: English citation, registered, reac
   assert.equal(winner.name, "circumference_from_diameter_mc");
 });
 
+// Second real phrasing for the same handler, found 2026-10-03: no
+// wheel/rolling framing at all, just a plain "diameter -> circumference"
+// MC. Real citation `tsa/2021/2021_6MC4.pdf` Q21 -> official answer B.
+const GENERIC_CIRCUMFERENCE_Q = "21. 一個圓的直徑是10 cm，它的圓周約是  A. 3 cm。  B. 31 cm。  C. 40 cm。  D. 63 cm。";
+const GENERIC_CIRCUMFERENCE_Q_EN = "21. The diameter of a circle is 10 cm. Its circumference is about  A. 3 cm.  B. 31 cm.  C. 40 cm.  D. 63 cm.";
+
+test("verifyCircumferenceFromDiameterMc: real citation, generic (non-wheel) phrasing (tsa/2021/2021_6MC4.pdf Q21), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterMc({ printedQuestion: GENERIC_CIRCUMFERENCE_Q, studentAnswer: "B" });
+  assert.equal(r.correct, true);
+});
+
+test("circumference_from_diameter_mc handler: generic phrasing, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: GENERIC_CIRCUMFERENCE_Q, studentAnswer: "B" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "circumference_from_diameter_mc");
+});
+
+test("verifyCircumferenceFromDiameterMc: English citation, generic phrasing (tsa/2021/2021_6ME4.pdf Q21), correct answer", () => {
+  const r = worker.verifyCircumferenceFromDiameterMc({ printedQuestion: GENERIC_CIRCUMFERENCE_Q_EN, studentAnswer: "B" });
+  assert.equal(r.correct, true);
+});
+
 // diameter_from_circumference_mc -- MC variant (inverse direction) of
 // diameter_from_circumference_integer, same "closest option" approach
 // as circumference_from_diameter_mc. Real citation

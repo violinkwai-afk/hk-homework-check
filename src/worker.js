@@ -12510,18 +12510,25 @@ function verifyCircumferenceFromDiameterInteger(item) {
 // Found 2026-10-03: same circumference-from-diameter computation as
 // above, but presented as a 4-option MC question instead of a
 // fill-blank with "(以整數作答)" -- a genuinely different real phrasing,
-// not covered by the fill-blank trigger. Real citation:
-// `tsa/2024/p6_paper_TSA2024_6MC1.pdf` Q21 "一個車輪的直徑是32cm。它
-// 轉動一圈，大約走了 A.10cm B.16cm C.100cm D.800cm" -> official answer C
-// (`2024/p6_marking_TSA2024_6MC1_MS.pdf`: 32×22/7≈100.57, 32×3.14=100.48,
-// both round to 100, matching option C); English equivalent
+// not covered by the fill-blank trigger. Two real sub-phrasings found:
+// (1) `tsa/2024/p6_paper_TSA2024_6MC1.pdf` Q21 "一個車輪的直徑是32cm。
+// 它轉動一圈，大約走了 A.10cm B.16cm C.100cm D.800cm" -> official answer
+// C (`2024/p6_marking_TSA2024_6MC1_MS.pdf`: 32×22/7≈100.57, 32×3.14=
+// 100.48, both round to 100, matching option C); English equivalent
 // `tsa/2024/p6_paper_TSA2024_6ME1.pdf` Q21 "The diameter of a wheel is
 // 32 cm. It rolls one round to move about ___. A.10cm B.16cm C.100cm
-// D.800cm."
+// D.800cm." (2) a more generic phrasing with no wheel/rolling framing
+// at all: `tsa/2021/2021_6MC4.pdf` Q21 "一個圓的直徑是10cm，它的圓周約
+// 是 A.3cm B.31cm C.40cm D.63cm" -> official answer B
+// (`2021/2021_6MC4_MS.pdf`); English equivalent `tsa/2021/2021_6ME4.pdf`
+// Q21 "The diameter of a circle is 10 cm. Its circumference is about
+// ___. A.3cm B.31cm C.40cm D.63cm."
 function isCircumferenceFromDiameterMcQuestion(item) {
   const text = String(item.printedQuestion || "");
-  const zh = /車輪的直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b[\s\S]{0,20}(?:轉動一圈|滾一圈)[\s\S]{0,10}(?:大約)?走了/.test(text);
-  const en = /diameter\s*of\s*a\s*wheel\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b[\s\S]{0,20}rolls?\s*one\s*round\s*to\s*move\s*about/i.test(text);
+  const zh = /車輪的直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b[\s\S]{0,20}(?:轉動一圈|滾一圈)[\s\S]{0,10}(?:大約)?走了/.test(text)
+    || /圓的直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b[\s\S]{0,15}圓周約是/.test(text);
+  const en = /diameter\s*of\s*a\s*wheel\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b[\s\S]{0,20}rolls?\s*one\s*round\s*to\s*move\s*about/i.test(text)
+    || /diameter\s*of\s*a\s*circle\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b[\s\S]{0,20}circumference\s*is\s*about/i.test(text);
   return (zh || en) && parseMcOptions(text).length >= 2;
 }
 function verifyCircumferenceFromDiameterMc(item) {
@@ -12529,7 +12536,10 @@ function verifyCircumferenceFromDiameterMc(item) {
   const text = String(item.printedQuestion || "");
   const answer = String(item.studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = text.match(/車輪的直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/) || text.match(/diameter\s*of\s*a\s*wheel\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
+  const m = text.match(/車輪的直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/)
+    || text.match(/圓的直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/)
+    || text.match(/diameter\s*of\s*a\s*wheel\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i)
+    || text.match(/diameter\s*of\s*a\s*circle\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const d = Number(m[1]);
   // Unlike the fill-blank version above, this does NOT require 22/7 and

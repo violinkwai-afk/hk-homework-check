@@ -1870,3 +1870,13 @@ p6_paper_TSA2023_6MC.pdf`Q22「用一條長16cm的繩作一個最大的圓，圓
 呢個新handler共用,避免重複嗰段邏輯。
 
 全repo1168→1173條test,全部pass。
+
+## 2026-10-03(續29)— circumference_from_diameter_mc擴闊多一個真實phrasing
+
+搵到同一個handler嘅第二種真實phrasing:冇「車輪」/「轉動一圈」嗰種
+包裝,淨係最plain嗰種「一個圓的直徑是Xcm，它的圓周約是」。真實
+citation:`tsa/2021/2021_6MC4.pdf`Q21「一個圓的直徑是10cm，它的圓周
+約是 A.3cm B.31cm C.40cm D.63cm」,官方答案B。中英文一次做齊
+(`tsa/2021/2021_6ME4.pdf`)。
+
+全repo1173→1176條test,全部pass。
