@@ -12548,13 +12548,63 @@ function verifyCircumferenceFromDiameterMc(item) {
   const options = parseMcOptions(text)
     .map((o) => ({ ...o, value: Number((o.text.match(/\d+(?:\.\d+)?/) || [])[0]) }))
     .filter((o) => Number.isFinite(o.value));
-  if (options.length < 2) return { correct: null, correctAnswer: "" };
-  const byDistance = [...options].sort((a, b) => Math.abs(a.value - c) - Math.abs(b.value - c));
+  const expectedLetter = pickUnambiguousClosestMcOption(options, c);
+  if (!expectedLetter) return { correct: null, correctAnswer: "" };
+  const studentLetter = (answer.match(/[A-D]/i) || [])[0];
+  if (!studentLetter) return { correct: null, correctAnswer: "" };
+  const correct = studentLetter.toUpperCase() === expectedLetter;
+  return { correct, correctAnswer: correct ? "" : expectedLetter };
+}
+
+// Shared by circumference_from_diameter_mc and diameter_from_circumference_mc
+// (and any future π-approximation MC shape): picks the option letter
+// numerically closest to a computed target value, but only when it's
+// clearly closer than the runner-up (>=3x the gap) -- a genuine near-tie
+// between two options isn't safe to guess. Returns null (decline) when
+// there's no clear winner. See verifyCircumferenceFromDiameterMc's own
+// comment for why "closest option" rather than "exact match after
+// rounding" is the right check here.
+function pickUnambiguousClosestMcOption(options, target) {
+  if (!options || options.length < 2) return null;
+  const byDistance = [...options].sort((a, b) => Math.abs(a.value - target) - Math.abs(b.value - target));
   const [best, runnerUp] = byDistance;
-  const bestDist = Math.abs(best.value - c);
-  const runnerUpDist = runnerUp ? Math.abs(runnerUp.value - c) : Infinity;
-  if (bestDist > 0 && runnerUpDist < bestDist * 3) return { correct: null, correctAnswer: "" };
-  const expectedLetter = best.letter;
+  const bestDist = Math.abs(best.value - target);
+  const runnerUpDist = runnerUp ? Math.abs(runnerUp.value - target) : Infinity;
+  if (bestDist > 0 && runnerUpDist < bestDist * 3) return null;
+  return best.letter;
+}
+
+// Found 2026-10-03: MC variant of diameter_from_circumference_integer
+// above (diameter = circumference ÷ π), same "closest option" approach
+// as circumference_from_diameter_mc's own comment explains. Real
+// citation: `tsa/2023/p6_paper_TSA2023_6MC.pdf` Q22 "用一條長16cm的繩
+// 作一個最大的圓，圓的直徑約是 A.2.5cm B.5cm C.6cm D.50cm" -> official
+// answer B (`2023/p6_marking_TSA2023_6MC1_MS.pdf`: 16÷(22/7)≈5.09,
+// 16÷3.14≈5.10, both closest to option B=5); English equivalent
+// `tsa/2023/p6_paper_TSA2023_6ME.pdf` Q22 "A string 16 cm long is used
+// to make the largest circle. The diameter of the circle is about ___.
+// A.2.5cm B.5cm C.6cm D.50cm."
+function isDiameterFromCircumferenceMcQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const zh = /用一條長\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\s*的繩作一個最大的圓[\s\S]{0,10}圓的直徑約是/.test(text);
+  const en = /(?:string|rope)\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\s*long\s*is\s*used\s*to\s*make\s*the\s*largest\s*circle[\s\S]{0,10}diameter\s*of\s*the\s*circle\s*is\s*about/i.test(text);
+  return (zh || en) && parseMcOptions(text).length >= 2;
+}
+function verifyDiameterFromCircumferenceMc(item) {
+  if (!isDiameterFromCircumferenceMcQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const m = text.match(/用一條長\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\s*的繩作一個最大的圓/)
+    || text.match(/(?:string|rope)\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\s*long\s*is\s*used\s*to\s*make\s*the\s*largest\s*circle/i);
+  if (!m) return { correct: null, correctAnswer: "" };
+  const c = Number(m[1]);
+  const d = (c / (22 / 7) + c / 3.14) / 2;
+  const options = parseMcOptions(text)
+    .map((o) => ({ ...o, value: Number((o.text.match(/\d+(?:\.\d+)?/) || [])[0]) }))
+    .filter((o) => Number.isFinite(o.value));
+  const expectedLetter = pickUnambiguousClosestMcOption(options, d);
+  if (!expectedLetter) return { correct: null, correctAnswer: "" };
   const studentLetter = (answer.match(/[A-D]/i) || [])[0];
   if (!studentLetter) return { correct: null, correctAnswer: "" };
   const correct = studentLetter.toUpperCase() === expectedLetter;
@@ -14156,6 +14206,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "circumference_from_diameter_mc",
     detect: (item) => isCircumferenceFromDiameterMcQuestion(item),
     verify: (item) => verifyCircumferenceFromDiameterMc(item),
+  },
+  {
+    // Found 2026-10-03, see verifyDiameterFromCircumferenceMc's own comment.
+    name: "diameter_from_circumference_mc",
+    detect: (item) => isDiameterFromCircumferenceMcQuestion(item),
+    verify: (item) => verifyDiameterFromCircumferenceMc(item),
   },
   {
     // Found 2026-10-03, see verifyDiameterFromCircumferenceInteger's own comment.
@@ -16141,6 +16197,8 @@ export {
   verifyCircumferenceFromDiameterInteger,
   isCircumferenceFromDiameterMcQuestion,
   verifyCircumferenceFromDiameterMc,
+  isDiameterFromCircumferenceMcQuestion,
+  verifyDiameterFromCircumferenceMc,
   isDiameterFromCircumferenceIntegerQuestion,
   verifyDiameterFromCircumferenceInteger,
   isCircleAreaFromRadiusExplicitPiQuestion,

@@ -1354,6 +1354,41 @@ test("circumference_from_diameter_mc handler: English citation, registered, reac
   assert.equal(winner.name, "circumference_from_diameter_mc");
 });
 
+// diameter_from_circumference_mc -- MC variant (inverse direction) of
+// diameter_from_circumference_integer, same "closest option" approach
+// as circumference_from_diameter_mc. Real citation
+// `tsa/2023/p6_paper_TSA2023_6MC.pdf` Q22 -> official answer B.
+const ROPE_Q = "22. 用一條長16 cm 的繩作一個最大的圓，圓的直徑約是  A. 2.5 cm。  B. 5 cm。  C. 6 cm。  D. 50 cm。";
+const ROPE_Q_EN = "22. A string 16 cm long is used to make the largest circle. The diameter of the circle is about  A. 2.5 cm.  B. 5 cm.  C. 6 cm.  D. 50 cm.";
+
+test("verifyDiameterFromCircumferenceMc: real citation (tsa/2023/p6_paper_TSA2023_6MC.pdf Q22), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceMc({ printedQuestion: ROPE_Q, studentAnswer: "B" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyDiameterFromCircumferenceMc: real citation, wrong answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceMc({ printedQuestion: ROPE_Q, studentAnswer: "A" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "B");
+});
+
+test("diameter_from_circumference_mc handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: ROPE_Q, studentAnswer: "B" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "diameter_from_circumference_mc");
+});
+
+test("verifyDiameterFromCircumferenceMc: English citation (tsa/2023/p6_paper_TSA2023_6ME.pdf Q22), correct answer", () => {
+  const r = worker.verifyDiameterFromCircumferenceMc({ printedQuestion: ROPE_Q_EN, studentAnswer: "B" });
+  assert.equal(r.correct, true);
+});
+
+test("diameter_from_circumference_mc handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: ROPE_Q_EN, studentAnswer: "B" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "diameter_from_circumference_mc");
+});
+
 const IRON_WIRE_Q_2018 = "把一條長15 cm 的鐵線，製成一個圓形的鐵圈。 鐵圈的直徑約是 cm。(以整數作答)";
 const IRON_WIRE_Q_2018_EN = "An iron wire 15 cm long is bent into a circular coil. The diameter of the circular coil is about cm. (Give the answer as a whole number)";
 const IRON_WIRE_Q_2019 = "把一個鐵圈剪開後，拉直成一條鐵線(如上圖所示)。 鐵線的長度是19 cm，鐵圈的直徑約是 cm。 (以整數作答)";

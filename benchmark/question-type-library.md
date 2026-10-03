@@ -1856,3 +1856,17 @@ C。中英文一次做齊。
 best距離3倍以上先信得過),而唔係再要求兩個近似值exact match。
 
 全repo1163→1168條test,全部pass。
+
+## 2026-10-03(續28)— 新handler:diameter_from_circumference_mc
+
+跟續27同一個方向,搵到個鏡像題型:「用一條繩作最大嘅圓,圓嘅直徑約
+是」MC(直徑從圓周計返,唔係之前嗰個方向)。真實citation:`tsa/2023/
+p6_paper_TSA2023_6MC.pdf`Q22「用一條長16cm的繩作一個最大的圓，圓的
+直徑約是 A.2.5cm B.5cm C.6cm D.50cm」,官方答案B。中英文一次做齊
+(`tsa/2023/p6_paper_TSA2023_6ME.pdf`Q22)。
+
+順便抽咗個共用helper`pickUnambiguousClosestMcOption`(揾最接近嗰個
+選項,仲要confirm夠明顯先信),俾`circumference_from_diameter_mc`同
+呢個新handler共用,避免重複嗰段邏輯。
+
+全repo1168→1173條test,全部pass。
