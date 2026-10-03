@@ -400,3 +400,14 @@ test("isSymmetricShapesGridQuestion: real citation matches, a plain shape-naming
   const unrelated = "觀察下面的平面圖形，寫出所有代表答案的英文字母。(a)正方形 (b)長方形";
   assert.equal(worker.isSymmetricShapesGridQuestion({ printedQuestion: unrelated }), false);
 });
+
+// English-coverage audit (2026-10-03): English equivalent found in
+// `tsa/2024/p6_paper_TSA2024_6ME1.pdf` Q32 "Study the 2-D shapes below.
+// Write all the letter(s) for the answer. List the axially symmetric
+// shape(s)." (the official translation of this function's own
+// `tsa/2024/p6_paper_TSA2024_6MC1.txt` Q32 citation).
+test("isSymmetricShapesGridQuestion: English citation matches", async () => {
+  const worker = await import(TMP);
+  const real = "Study the 2-D shapes below. Write all the letter(s) for the answer. List the axially symmetric shape(s). Answer: ____________________";
+  assert.equal(worker.isSymmetricShapesGridQuestion({ printedQuestion: real }), true);
+});

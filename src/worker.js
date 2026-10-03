@@ -11964,7 +11964,14 @@ function isShapeClassificationGridQuestion(item) {
 // than a SHAPE_CN_TO_CANONICAL category.
 function isSymmetricShapesGridQuestion(item) {
   const printed = String(item.printedQuestion || "");
-  return /英文字母|代表答案/.test(printed) && /列出軸對稱圖形/.test(printed);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2024/p6_paper_TSA2024_6ME1.pdf` Q32 "Study the 2-D shapes
+  // below. Write all the letter(s) for the answer. List the axially
+  // symmetric shape(s)." (the official translation of this function's
+  // own `tsa/2024/p6_paper_TSA2024_6MC1.txt` Q32 citation).
+  const zh = /英文字母|代表答案/.test(printed) && /列出軸對稱圖形/.test(printed);
+  const en = /letter\(?s?\)?\s*for\s*the\s*answer/i.test(printed) && /axially\s*symmetric/i.test(printed);
+  return zh || en;
 }
 
 function verifySymmetricShapesGrid(item, crop) {

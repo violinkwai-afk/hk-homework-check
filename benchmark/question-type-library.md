@@ -1798,3 +1798,26 @@ heavier/lighter」——真實英文citation`tsa/2018/TSA2018_3ME3.pdf`/
   次序。
 
 全repo1148→1156條test,全部pass。
+
+## 2026-10-03(續25)— symmetric_shapes_grid英文覆蓋 + audit範圍重新評估
+
+修正咗`symmetric_shapes_grid`(今日續19先寫嗰個"列出軸對稱圖形"
+handler)——真實英文equivalent:`tsa/2024/p6_paper_TSA2024_6ME1.pdf`
+Q32"Study the 2-D shapes below...List the axially symmetric
+shape(s)."。呢個handler本身係pixel-based visual function,淨係
+detect()個trigger要改。
+
+**重新評估咗「~127條舊handler」audit嘅實際適用範圍**:逐個check咗幾
+條舊(2026-09-22至2026-09-30)ticket嗰啲handler(`weekday_offset`、
+`price_table_lookup`等),發現佢哋嘅真實citation嚟源**唔係**TSA官方
+archive,而係用戶自己上傳嗰啲真實工作紙相片/商業補充練習(例如
+「26週數學訓練」、QuizGo pdf)——呢類source**冇官方中英對照版本**可
+以攞嚟check,所以「搵6ME equivalent試dispatch」呢個方法對佢哋完全
+唔適用(唔係漏做,係根本冇對應英文版可查)。
+
+真正啱用呢個audit方法嘅,淨係嗰批「2026-10-02 TSA full-years survey」
+嗰陣搵到嘅~20幾個handler(今日已經大部分檢查並修正)。`arabic_to_
+chinese_numeral`、`classifyParallelQuadType`等一睇就知冇英文對應概
+念(中文數字書寫、純CV幾何function冇語言)。
+
+全repo1156→1157條test,全部pass。
