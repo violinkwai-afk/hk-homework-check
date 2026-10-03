@@ -1775,3 +1775,26 @@ heavier/lighter」——真實英文citation`tsa/2018/TSA2018_3ME3.pdf`/
 都要一齊改,同HCF/LCM嗰次一樣嘅教訓)。
 
 全repo1146→1148條test,全部pass。
+
+## 2026-10-03(續24)— 繼續英文覆蓋率audit:4個handler(今日之前新寫嗰批)
+
+繼續checking今日(2026-10-02)新寫嗰批handler嘅英文覆蓋,全部搵到真實
+英文citation並修正(detect()同verify()都係inline Chinese-only regex,
+一齊改):
+
+- `two_factor_ceiling_division`:`tsa/2012/2012_TSA_6ME2.pdf`Q17
+  "There are 15 pages in a photo album..."
+- `two_step_average_division`:`tsa/2013/TSA2013_6ME4.pdf`Q14 "John
+  has collected 540 stamps..."
+- `simple_average_division`:`tsa/2012/2012_TSA_6ME4.pdf`Q14 "The
+  thickness of 50 cards is 6.8cm..."(連埋個「小數點後兩位」rounding
+  指示都加咗英文版"Correct the answer to two decimal places")
+- `multi_person_fare_split`:`tsa/2013/TSA2013_3ME2.pdf`Q15 "Brian
+  and his three friends..."——搵到一個額外嘅真實bug:英文版PDF版面
+  嗰個圖表caption("Special Train Fare Only 42 dollars for 4 people")
+  同主句嘅相對位置,同中文版剛好**掉轉**(中文caption喺句子之前,
+  英文caption喺句子之後，仲夾喺下一題中間)。原本嗰個sequential
+  regex假設固定次序,已經改做兩個fragment獨立檢查,唔再要求固定
+  次序。
+
+全repo1148→1156條test,全部pass。

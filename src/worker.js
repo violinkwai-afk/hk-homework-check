@@ -7586,7 +7586,13 @@ function verifyTwoFactorCeilingDivision(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/每本[^\d]{0,6}有\s*(\d+)\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}(\d+)\s*張[\s\S]{0,20}要放[^\d]{0,6}(\d+)\s*張/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2012/2012_TSA_6ME2.pdf` Q17 "There are 15 pages in a photo
+  // album. Each page holds 4 photos. How many photo albums are needed
+  // to hold 300 photos?" (the official translation of this function's
+  // own `tsa/2012/2012_TSA_6MC2.txt` Q17 citation).
+  const m = printed.match(/每本[^\d]{0,6}有\s*(\d+)\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}(\d+)\s*張[\s\S]{0,20}要放[^\d]{0,6}(\d+)\s*張/)
+    || printed.match(/(\d+)\s*pages\s*in\s*a\s*\S+\s*album[\s\S]{0,15}each\s*page\s*holds\s*(\d+)[\s\S]{0,60}hold\s*(\d+)/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const perBook = Number(m[1]);
   const perPage = Number(m[2]);
@@ -7609,8 +7615,16 @@ function verifyTwoFactorCeilingDivision(printedQuestion, studentAnswer) {
 function verifyTwoStepAverageDivision(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
-  if (!answer || !/平均每.{0,6}有多少/.test(printed)) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}(\d+)\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*(\d+)\s*[頁個張]/);
+  const hasTrigger = /平均每.{0,6}有多少/.test(printed) || /on\s*average/i.test(printed);
+  if (!answer || !hasTrigger) return { correct: null, correctAnswer: "" };
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2013/TSA2013_6ME4.pdf` Q14 "John has collected 540 stamps. He
+  // puts all the stamps in 3 stamp albums. Each stamp album has 12
+  // pages. How many stamps does each page have on average?" (the
+  // official translation of this function's own `tsa/2013/
+  // TSA2013_6MC4.txt` Q14 citation).
+  const m = printed.match(/(\d+)\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}(\d+)\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*(\d+)\s*[頁個張]/)
+    || printed.match(/collected\s*(\d+)[\s\S]{0,20}puts\s*all[\s\S]{0,20}in\s*(\d+)\s*\S+\s*albums?\.\s*each\s*\S+\s*album\s*has\s*(\d+)\s*pages?/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const total = Number(m[1]);
   const containers = Number(m[2]);
@@ -7633,7 +7647,13 @@ function verifySimpleAverageDivision(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*張[\s\S]{0,10}厚度是\s*(\d+(?:\.\d+)?)[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2012/2012_TSA_6ME4.pdf` Q14 "The thickness of 50 cards is
+  // 6.8 cm. On average the thickness of each card is ___ cm. (Correct
+  // the answer to two decimal places)" (the official translation of
+  // this function's own `tsa/2012/2012_TSA_6MC4.txt` Q14 citation).
+  const m = printed.match(/(\d+)\s*張[\s\S]{0,10}厚度是\s*(\d+(?:\.\d+)?)[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/)
+    || printed.match(/thickness\s*of\s*(\d+)\s*\S+\s*is\s*(\d+(?:\.\d+)?)\s*cm[\s\S]{0,20}on\s*average\s*the\s*thickness\s*of\s*each/i);
   if (!m) return { correct: null, correctAnswer: "" };
   const count = Number(m[1]);
   const total = Number(m[2]);
@@ -7643,10 +7663,12 @@ function verifySimpleAverageDivision(printedQuestion, studentAnswer) {
   // variant, out of that function's scope), so this uses its own small
   // local map instead of silently passing NaN/null into toFixed().
   const ROUND_PLACES_CN = { 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
-  const roundMatch = printed.match(/小數點後\s*([一二兩三四五六七八九]|\d+)\s*個位/);
+  const ROUND_PLACES_EN = { one: 1, two: 2, three: 3, four: 4 };
+  const roundMatch = printed.match(/小數點後\s*([一二兩三四五六七八九]|\d+)\s*個位/)
+    || printed.match(/correct\s*(?:the\s*answer\s*)?to\s*(one|two|three|four|\d+)\s*decimal\s*places?/i);
   let expected = total / count;
   if (roundMatch) {
-    const places = /^\d+$/.test(roundMatch[1]) ? Number(roundMatch[1]) : ROUND_PLACES_CN[roundMatch[1]];
+    const places = /^\d+$/.test(roundMatch[1]) ? Number(roundMatch[1]) : (ROUND_PLACES_CN[roundMatch[1]] ?? ROUND_PLACES_EN[roundMatch[1].toLowerCase()]);
     if (Number.isFinite(places)) expected = Number(expected.toFixed(places));
   }
   const studentNum = parseSignedStudentNumber(answer);
@@ -7667,8 +7689,38 @@ function verifyMultiPersonFareSplit(printedQuestion, studentAnswer) {
   const printed = String(printedQuestion || "");
   const answer = String(studentAnswer || "").trim();
   if (!answer) return { correct: null, correctAnswer: "" };
-  const m = printed.match(/(\d+)\s*人同行共須\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,40}平均每人須付/);
+  // English coverage audit (2026-10-03): English equivalent found in
+  // `tsa/2013/TSA2013_3ME2.pdf` Q15 -- diagram caption "Special Train
+  // Fare Only 42 dollars for 4 people" + main sentence "Brian and his
+  // three friends take the train. Each of them pays ___ dollars and
+  // ___ cents on average." (the official translation of this function's
+  // own `tsa/2013/TSA2013_3MC2.txt` Q15 citation). Unlike the Chinese
+  // layout (caption text comes BEFORE the sentence in reading order),
+  // the real English PDF's flat text has the sentence FIRST and the
+  // diagram caption appears later (interleaved with the NEXT question),
+  // so this checks the two fragments independently rather than requiring
+  // one fixed relative order.
+  const mZh = printed.match(/(\d+)\s*人同行共須\s*(\d+(?:\.\d+)?)\s*元[\s\S]{0,40}平均每人須付/);
+  const mEnAmount = printed.match(/only\s*(\d+(?:\.\d+)?)\s*dollars?\s*for\s*(\d+)\s*people/i);
+  const mEnContext = /pays[\s\S]{0,20}dollars[\s\S]{0,20}cents[\s\S]{0,10}on\s*average/i.test(printed);
+  const m = mZh || (mEnAmount && mEnContext ? mEnAmount : null);
   if (!m) return { correct: null, correctAnswer: "" };
+  const isEnglish = !/[一-鿿]/.test(printed);
+  if (isEnglish) {
+    // English match groups are (total, people) -- reversed order from
+    // the Chinese pattern's (people, total), since "only 42 dollars for
+    // 4 people" states the money first.
+    const total = Number(m[1]);
+    const people = Number(m[2]);
+    if (!people || !total) return { correct: null, correctAnswer: "" };
+    const perPerson = total / people;
+    const yuan = Math.floor(perPerson + 1e-9);
+    const jiao = Math.round((perPerson - yuan) * 10);
+    const nums = (answer.match(/\d+/g) || []).map(Number);
+    if (nums.length !== 2) return { correct: null, correctAnswer: "" };
+    const correct = nums[0] === yuan && nums[1] === jiao;
+    return { correct, correctAnswer: correct ? "" : `${yuan};${jiao}` };
+  }
   const people = Number(m[1]);
   const total = Number(m[2]);
   if (!people || !total) return { correct: null, correctAnswer: "" };
@@ -13228,7 +13280,11 @@ const QUESTION_TYPE_HANDLERS = [
     // which would wrongly sum 4+42=46 instead of the real 42÷4=10.5 --
     // must run BEFORE word_problem_total.
     name: "multi_person_fare_split",
-    detect: (item) => /\d+\s*人同行共須\s*\d+(?:\.\d+)?\s*元[\s\S]{0,40}平均每人須付/.test(String(item.printedQuestion || "")),
+    detect: (item) => {
+      const text = String(item.printedQuestion || "");
+      return /\d+\s*人同行共須\s*\d+(?:\.\d+)?\s*元[\s\S]{0,40}平均每人須付/.test(text)
+        || (/only\s*\d+(?:\.\d+)?\s*dollars?\s*for\s*\d+\s*people/i.test(text) && /pays[\s\S]{0,20}dollars[\s\S]{0,20}cents[\s\S]{0,10}on\s*average/i.test(text));
+    },
     verify: (item) => verifyMultiPersonFareSplit(item.printedQuestion, item.studentAnswer),
   },
   {
@@ -13345,7 +13401,11 @@ const QUESTION_TYPE_HANDLERS = [
     // ordering risk against word_problem_ceiling_division above (that one
     // requires 至少/最少, this one doesn't -- different literal trigger).
     name: "two_factor_ceiling_division",
-    detect: (item) => /每本[^\d]{0,6}有\s*\d+\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}\d+\s*張[\s\S]{0,20}要放[^\d]{0,6}\d+\s*張/.test(String(item.printedQuestion || "")),
+    detect: (item) => {
+      const text = String(item.printedQuestion || "");
+      return /每本[^\d]{0,6}有\s*\d+\s*頁[\s\S]{0,10}每頁[^\d]{0,6}放[^\d]{0,6}\d+\s*張[\s\S]{0,20}要放[^\d]{0,6}\d+\s*張/.test(text)
+        || /\d+\s*pages\s*in\s*a\s*\S+\s*album[\s\S]{0,15}each\s*page\s*holds\s*\d+[\s\S]{0,60}hold\s*\d+/i.test(text);
+    },
     verify: (item) => verifyTwoFactorCeilingDivision(item.printedQuestion, item.studentAnswer),
   },
   {
@@ -13354,8 +13414,9 @@ const QUESTION_TYPE_HANDLERS = [
     name: "two_step_average_division",
     detect: (item) => {
       const printed = String(item.printedQuestion || "");
-      if (!/平均每.{0,6}有多少/.test(printed)) return false;
-      return /\d+\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}\d+\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*\d+\s*[頁個張]/.test(printed);
+      if (!/平均每.{0,6}有多少/.test(printed) && !/on\s*average/i.test(printed)) return false;
+      return /\d+\s*[枚個張][\s\S]{0,20}放[進在][\s\S]{0,10}\d+\s*[本個盒][\s\S]{0,20}每[本個盒][\s\S]{0,6}有\s*\d+\s*[頁個張]/.test(printed)
+        || /collected\s*\d+[\s\S]{0,20}puts\s*all[\s\S]{0,20}in\s*\d+\s*\S+\s*albums?\.\s*each\s*\S+\s*album\s*has\s*\d+\s*pages?/i.test(printed);
     },
     verify: (item) => verifyTwoStepAverageDivision(item.printedQuestion, item.studentAnswer),
   },
@@ -13363,7 +13424,11 @@ const QUESTION_TYPE_HANDLERS = [
     // Found 2026-10-02 (TSA full-years survey, see
     // verifySimpleAverageDivision's own comment for citation).
     name: "simple_average_division",
-    detect: (item) => /\d+\s*張[\s\S]{0,10}厚度是\s*\d+(?:\.\d+)?[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/.test(String(item.printedQuestion || "")),
+    detect: (item) => {
+      const text = String(item.printedQuestion || "");
+      return /\d+\s*張[\s\S]{0,10}厚度是\s*\d+(?:\.\d+)?[\s\S]{0,10}平均每張[\s\S]{0,10}厚度是/.test(text)
+        || /thickness\s*of\s*\d+\s*\S+\s*is\s*\d+(?:\.\d+)?\s*cm[\s\S]{0,20}on\s*average\s*the\s*thickness\s*of\s*each/i.test(text);
+    },
     verify: (item) => verifySimpleAverageDivision(item.printedQuestion, item.studentAnswer),
   },
   {

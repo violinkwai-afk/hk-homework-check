@@ -766,6 +766,21 @@ test("two_factor_ceiling_division handler: registered, reachable, wins dispatch"
   assert.equal(winner.name, "two_factor_ceiling_division");
 });
 
+// English-coverage audit (2026-10-03): English equivalent
+// `tsa/2012/2012_TSA_6ME2.pdf` Q17.
+const ALBUM_Q_EN = "There are 15 pages in a photo album. Each page holds 4 photos. How many photo albums are needed to hold 300 photos? Answer: __________ photo albums are needed to hold 300 photos.";
+
+test("verifyTwoFactorCeilingDivision: English citation, correct answer", () => {
+  const r = worker.verifyTwoFactorCeilingDivision(ALBUM_Q_EN, "5");
+  assert.equal(r.correct, true);
+});
+
+test("two_factor_ceiling_division handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: ALBUM_Q_EN, studentAnswer: "5" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "two_factor_ceiling_division");
+});
+
 // ---------- two_step_average_division ----------
 // Real citation: tsa/2013/TSA2013_6MC4.txt Q14 "哥哥收集了540枚郵票。
 // 他把郵票放在3本集郵簿內，每本集郵簿有12頁。平均每頁有多少枚郵票？"
@@ -779,6 +794,21 @@ test("verifyTwoStepAverageDivision: real citation, correct answer", () => {
 
 test("two_step_average_division handler: registered, reachable, wins dispatch", () => {
   const item = { printedQuestion: STAMP_Q, studentAnswer: "15" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "two_step_average_division");
+});
+
+// English-coverage audit (2026-10-03): English equivalent
+// `tsa/2013/TSA2013_6ME4.pdf` Q14.
+const STAMP_Q_EN = "John has collected 540 stamps. He puts all the stamps in 3 stamp albums. Each stamp album has 12 pages. How many stamps does each page have on average? Answer: Each page has __________ stamps on average.";
+
+test("verifyTwoStepAverageDivision: English citation, correct answer", () => {
+  const r = worker.verifyTwoStepAverageDivision(STAMP_Q_EN, "15");
+  assert.equal(r.correct, true);
+});
+
+test("two_step_average_division handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: STAMP_Q_EN, studentAnswer: "15" };
   const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
   assert.equal(winner.name, "two_step_average_division");
 });
@@ -806,6 +836,21 @@ test("simple_average_division handler: registered, reachable, wins dispatch", ()
   assert.equal(winner.name, "simple_average_division");
 });
 
+// English-coverage audit (2026-10-03): English equivalent
+// `tsa/2012/2012_TSA_6ME4.pdf` Q14.
+const CARDSTOCK_Q_EN = "The thickness of 50 cards is 6.8 cm. On average the thickness of each card is __________ cm. (Correct the answer to two decimal places)";
+
+test("verifySimpleAverageDivision: English citation, correct answer (rounded to 2dp)", () => {
+  const r = worker.verifySimpleAverageDivision(CARDSTOCK_Q_EN, "0.14");
+  assert.equal(r.correct, true);
+});
+
+test("simple_average_division handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CARDSTOCK_Q_EN, studentAnswer: "0.14" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "simple_average_division");
+});
+
 // ---------- multi_person_fare_split ----------
 // Real citation: tsa/2013/TSA2013_3MC2.txt Q15 (image caption) "乘車優惠
 // 4人同行共須42元" + "子恩和三位朋友一起乘車，平均每人須付___元___角。"
@@ -825,6 +870,24 @@ test("verifyMultiPersonFareSplit: real citation, wrong answer", () => {
 
 test("multi_person_fare_split handler: registered, reachable, wins dispatch", () => {
   const item = { printedQuestion: FARE_Q, studentAnswer: "10,5" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "multi_person_fare_split");
+});
+
+// English-coverage audit (2026-10-03): English equivalent
+// `tsa/2013/TSA2013_3ME2.pdf` Q15 -- real PDF layout has the sentence
+// BEFORE the diagram caption (opposite order from the Chinese version),
+// so the fix checks both fragments independently rather than requiring
+// one fixed relative order.
+const FARE_Q_EN = "15. Brian and his three friends take the train. Each of them pays __________ dollars and __________ cents on average. 16. William buys a pizza at the special price. He saves __________ dollars and __________ cents. Special Train Fare Only 42 dollars for 4 people Original Price: 159 dollars Special Price: 98 dollars 80 cents";
+
+test("verifyMultiPersonFareSplit: English citation, correct answer", () => {
+  const r = worker.verifyMultiPersonFareSplit(FARE_Q_EN, "10,5");
+  assert.equal(r.correct, true);
+});
+
+test("multi_person_fare_split handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: FARE_Q_EN, studentAnswer: "10,5" };
   const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
   assert.equal(winner.name, "multi_person_fare_split");
 });
