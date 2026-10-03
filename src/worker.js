@@ -3315,6 +3315,7 @@ const CIRCLE_GEOMETRY_REFERENCE = `參考資料——圓形嘅幾何定律（幫
 如果O係圓心，O到任何一個圓周上的點嘅線段，定義上一定係「半徑」。
 用圓心O加兩個圓周上的點組成嘅三角形，必然係等腰三角形（因為當中兩條邊都係半徑，長度一定相等），除非題目另外講明第三條邊同半徑一樣長（咁就係等邊三角形）。
 圓嘅直徑永遠係半徑長度嘅2倍（直徑=2×半徑），呢個係定義，唔受個圓實際大小影響。
+喺一個圓入面，連接圓周上任何兩點嘅線段（弦），淨係經過圓心嗰條（即係直徑）先至係最長——冇經過圓心嘅弦一定短過直徑。
 圓形圖（pie chart）喺小學程度，每個扇形嘅圓心角一定係30°或45°嘅倍數，學生唔需要自己用尺量度圓心角先可以計數——如果圖上印咗角度/百分比數值，直接用嗰個印刷數值計算就得，唔使靠睇圖估。`;
 
 function mentionsCircleGeometry(pendingItems) {
@@ -12273,6 +12274,49 @@ function verifyCentreSegmentIsRadius(item) {
   return { correct, correctAnswer: correct ? "" : "半徑" };
 }
 
+// (4) Found 2026-10-03 while reading the official English curriculum doc
+// (pmc2017_e.pdf), which states the general rule explicitly: "with line
+// segments joining any two end points on a circle, those passing through
+// the centre are the longest" -- i.e. the diameter is the LONGEST
+// possible chord. Same real diagram/citation family as (1) above (the
+// triangle formed by centre O plus two circle points): the triangle's
+// third side (the chord between the two circle points) can never itself
+// pass through the centre -- if it did there'd be no triangle, just a
+// straight line -- so it is ALWAYS strictly shorter than the diameter.
+// Real citation: `tsa/2016/TSA2016_6MC1.pdf` Q28(c) "AB的長度 * 小於 /
+// 等於 / 大於 圓的直徑。" -> official answer "小於" (圈出「小於」,
+// `2016/TSA2016_6MC1_MS.pdf`); English equivalent `2016/TSA2016_6ME1.pdf`
+// Q28(c) "The length of AB is * smaller than / equal to / larger than
+// the diameter of the circle." Guards against the segment happening to
+// include the centre's own letter (which would make it the diameter
+// itself, not a chord) the same way isCentreSegmentIsRadiusQuestion does.
+function isChordShorterThanDiameterQuestion(item) {
+  const text = String(item.printedQuestion || "").replace(/\s+/g, "");
+  const centreMatchZh = text.match(/([A-Z])(?:是|點是)圓心/);
+  if (centreMatchZh) {
+    const cmp = text.match(/([A-Z]{2})的長度\*?(?:小於[\/／]等於[\/／]大於)圓的直徑/);
+    if (cmp && !cmp[1].includes(centreMatchZh[1])) return true;
+  }
+  const centreMatchEn = text.match(/([A-Z])isthecentre/i);
+  if (centreMatchEn) {
+    const cmp = text.match(/lengthof([A-Z]{2})is\*?(?:smallerthan\/equalto\/largerthan)thediameter/i);
+    if (cmp && !cmp[1].toUpperCase().includes(centreMatchEn[1].toUpperCase())) return true;
+  }
+  return false;
+}
+function verifyChordShorterThanDiameter(item) {
+  if (!isChordShorterThanDiameterQuestion(item)) return { correct: null, correctAnswer: "" };
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  if (!/[一-鿿]/.test(String(item.printedQuestion || ""))) {
+    const lower = answer.toLowerCase();
+    const correct = lower.includes("smaller") && !/equal|larger/.test(lower);
+    return { correct, correctAnswer: correct ? "" : "smaller" };
+  }
+  const correct = answer.includes("小於") && !/等於|大於/.test(answer);
+  return { correct, correctAnswer: correct ? "" : "小於" };
+}
+
 // Same page, Q⑧: "下面的六邊形每條邊的長度都相等。[hexagon cut into
 // A/B/C/D, drawn separately, same shape as the letter-grid above] 圖A
 // 是（直角/等腰/等邊）三角形。(把答案圈起來)" -- unlike Q7/Q9 above, the
@@ -13742,6 +13786,12 @@ const QUESTION_TYPE_HANDLERS = [
     name: "centre_segment_is_radius",
     detect: (item) => isCentreSegmentIsRadiusQuestion(item),
     verify: (item) => verifyCentreSegmentIsRadius(item),
+  },
+  {
+    // Found 2026-10-03, see verifyChordShorterThanDiameter's own comment.
+    name: "chord_shorter_than_diameter",
+    detect: (item) => isChordShorterThanDiameterQuestion(item),
+    verify: (item) => verifyChordShorterThanDiameter(item),
   },
   {
     // Ticket 222 ("Pattern 7"): hexagon-cut piece type -- reuses the
@@ -15709,6 +15759,8 @@ export {
   verifyDiameterIsTwiceRadius,
   isCentreSegmentIsRadiusQuestion,
   verifyCentreSegmentIsRadius,
+  isChordShorterThanDiameterQuestion,
+  verifyChordShorterThanDiameter,
   isHexagonCutPieceTypeQuestion,
   verifyHexagonCutPieceType,
   findLetterGridBbox,

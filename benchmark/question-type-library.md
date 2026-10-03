@@ -1678,3 +1678,31 @@ fall through去AI fallback**,即係話英文版學生做緊一樣嘅題,卻享�
 呢個methodology依家已經unblock,其餘~127條舊中文verify function嘅
 英文覆蓋率audit仍然未做,屬於一個大型、重複性嘅工作,之後可以用同一
 個「搵6ME對應citation試dispatch」方法逐批繼續。
+
+## 2026-10-03(續20)— pmc2017_e.pdf(英文版課程)全文睇完,搵到第4個圓形零圖像事實
+
+用戶send咗同一份課程文件嘅**英文版**(`pmc2017_e.pdf`,120頁,
+https://www.edb.gov.hk/attachment/en/curriculum-development/kla/ma/curr/pmc2017_e.pdf)。
+全文抽取咗(92,408字)逐個關鍵詞section讀過。絕大部分內容同中文版
+(續17/續19)係同一份知識嘅官方英文翻譯,互相cross-validate咗——冇
+發現任何中英版本有矛盾嘅地方,之前寫嘅`SHAPE_INCLUSION_RELATIONSHIP_
+REFERENCE`、對稱形狀清單、pie chart角度convention、$2.50讀法全部
+喺英文版都有對應嘅官方原句確認。
+
+但搵到1個中文版grep漏咗嘅**新**零圖像事實:英文版直接寫明"with line
+segments joining any two end points on a circle, those passing through
+the centre are the longest"(圓入面連接任何兩點嘅線段,淨係經過圓心
+嗰條至係最長)。對返TSA真實archive,呢個fact剛好就係`two_radii_
+triangle_type`嗰個real citation嘅**第3部分**(之前淨係用咗(a)):
+`tsa/2016/TSA2016_6MC1.pdf`Q28(c)「AB的長度*小於/等於/大於*圓的
+直徑」,官方答案「小於」(`2016/TSA2016_6MC1_MS.pdf`)——同一幅圖,
+用返同一個「O是圓心+三角形」trigger context,AB(三角形第三邊,
+肯定唔會經過O)一定短過直徑。
+
+即刻寫咗第4個handler `chord_shorter_than_diameter`,中英文版都做咗
+(中文citation+對應嘅`2016/TSA2016_6ME1.pdf`Q28(c)英文版,一次過確認
+咗)。已經加咗guard防止segment字母包含圓心字母(咁就唔係弦,係直徑本
+身)。7條新test全部過(中文2條+英文2條+handler dispatch2條+guard1條)。
+已經加埋落`CIRCLE_GEOMETRY_REFERENCE`俾AI fallback。
+
+全repo1117→1124條test,全部pass。

@@ -1064,3 +1064,54 @@ test("centre_segment_is_radius handler: English citation, registered, reachable,
   const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
   assert.equal(winner.name, "centre_segment_is_radius");
 });
+
+// chord_shorter_than_diameter -- found 2026-10-03 while reading the
+// official English curriculum doc (pmc2017_e.pdf), which states the
+// general rule: "line segments joining any two end points on a circle,
+// those passing through the centre are the longest" (diameter = longest
+// chord). Same real diagram as two_radii_triangle_type above, part (c)
+// of the SAME real question -- `tsa/2016/TSA2016_6MC1.pdf` Q28(c) "AB
+// 的長度 * 小於 / 等於 / 大於 圓的直徑。" -> official answer "小於"
+// (`2016/TSA2016_6MC1_MS.pdf`); English equivalent
+// `tsa/2016/TSA2016_6ME1.pdf` Q28(c).
+const CHORD_Q = "老師畫了一個三角形和一個圓，O 是圓心。 (c) AB 的長度 * 小於 / 等於 / 大於 圓的直徑。 (*圈出答案)";
+const CHORD_Q_EN = "A teacher drew a triangle and a circle. O is the centre of the circle. (c) The length of AB is * smaller than / equal to / larger than the diameter of the circle. (*Circle the answer)";
+
+test("verifyChordShorterThanDiameter: real citation, correct answer 小於", () => {
+  const r = worker.verifyChordShorterThanDiameter({ printedQuestion: CHORD_Q, studentAnswer: "小於" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyChordShorterThanDiameter: real citation, wrong answer 等於 declined as incorrect", () => {
+  const r = worker.verifyChordShorterThanDiameter({ printedQuestion: CHORD_Q, studentAnswer: "等於" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "小於");
+});
+
+test("chord_shorter_than_diameter handler: registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CHORD_Q, studentAnswer: "小於" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "chord_shorter_than_diameter");
+});
+
+test("verifyChordShorterThanDiameter: English citation, correct answer", () => {
+  const r = worker.verifyChordShorterThanDiameter({ printedQuestion: CHORD_Q_EN, studentAnswer: "smaller" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyChordShorterThanDiameter: English citation, wrong answer declined as incorrect", () => {
+  const r = worker.verifyChordShorterThanDiameter({ printedQuestion: CHORD_Q_EN, studentAnswer: "larger" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "smaller");
+});
+
+test("chord_shorter_than_diameter handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: CHORD_Q_EN, studentAnswer: "smaller" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "chord_shorter_than_diameter");
+});
+
+test("isChordShorterThanDiameterQuestion: does not fire when the compared segment includes the centre's own letter (it would be the diameter itself, not a chord)", () => {
+  const notAChord = "老師畫了一個三角形和一個圓，O 是圓心。 (c) OA 的長度 * 小於 / 等於 / 大於 圓的直徑。 (*圈出答案)";
+  assert.equal(worker.isChordShorterThanDiameterQuestion({ printedQuestion: notAChord }), false);
+});
