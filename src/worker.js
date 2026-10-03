@@ -148,7 +148,7 @@ export default {
       return handleTestFallbackCandidate(request, env);
     }
     // TEMPORARY (2026-10-03): real-pipeline version -- runs the ACTUAL
-    // production OCR step (callQwenOcrText / OCR_TEXT_MODEL) to get real
+    // production OCR step (callOcrTranscribe / OCR_TEXT_MODEL) to get real
     // printedQuestion/studentAnswer text (no hand-written question text),
     // then the ACTUAL buildAiFallbackPrompt() unmodified (real Cantonese
     // prompt, no "ignore the marks" instruction added -- production
@@ -161,7 +161,7 @@ export default {
       return handleTestFallbackCandidateReal(request, env);
     }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
-    // see the block comment above callQwenOcrText for why. Separate from
+    // see the block comment above callOcrTranscribe for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
     // so the two can be compared/switched between without one breaking
     // the other.
@@ -368,7 +368,7 @@ async function handleTestFallbackCandidateReal(request, env) {
   const tOcr = Date.now();
   let ocr;
   try {
-    ocr = await callQwenOcrText([downscaled], openrouterKey);
+    ocr = await callOcrTranscribe([downscaled], openrouterKey);
   } catch (e) {
     return json({ error: "ocr_failed", detail: String((e && e.detail) || (e && e.message) || e) }, 500);
   }
@@ -1851,23 +1851,26 @@ function downscaleForCheapTier(img, maxDim) {
   }
 }
 
-// Single source of truth for the production OCR/vision model -- both
-// callQwen (used by /api/check's legacy pipeline AND Ticket 13's
-// AI-fallback JUDGE, callAiFallbackJudge) and callQwenOcrText (the pure
-// OCR-transcription step used by /api/mark) used to share one hardcoded
-// model string (flagged 2026-09-22, unified 2026-09-25 for easy swapping).
-// Ticket 25 (2026-09-27) SPLIT them back into two constants on purpose:
-// every real comparison this session (Tickets 23/24/25) only ever tested
-// Gemini 3.1 Flash Lite on the OCR-transcription task, never on the
-// JUDGMENT task callQwen also serves (deciding correct/incorrect from a
-// cropped image + question context) -- that's a different capability,
-// untested, and this project's 100%-accuracy-floor rule means an
-// untested swap doesn't ride along just because the code used to share
-// one line. So: OCR_TEXT_MODEL (below) is now Gemini, used only by
-// callQwenOcrText; PRODUCTION_OCR_MODEL stays Qwen, still used by
-// callQwen for /api/check and the AI-fallback judge.
-const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
-// Ticket 25 (2026-09-27): switched from PRODUCTION_OCR_MODEL to Gemini
+// STALE-COMMENT FIX (2026-10-03): this block originally said callQwen was
+// still used by /api/check's cheap tier AND callAiFallbackJudge. That was
+// true on 2026-09-27 when this was written, but Ticket (2026-09-29,
+// explicit user instruction "唔要qwen 唔要deepseek 換做gemini") replaced
+// BOTH of those call sites with callGemini and nobody updated this comment
+// to match -- exactly the kind of drift that caused real confusion when
+// re-reading this file later. Current reality, verified directly against
+// the code: callQwen has NO production call site at all -- its only
+// caller is handleTestRotationLatency (/api/test-rotation-latency,
+// DEBUG_TOKEN-gated), which piggybacks a real-Qwen timing check onto the
+// rotation-latency test. QWEN_VL_MODEL
+// below is kept only so that one diagnostic route can still measure the
+// real Qwen model's latency/accuracy on demand; it is not part of any
+// live grading path. The live grading path (/api/mark's callOcrTranscribe,
+// /api/check's cheap tier, and callAiFallbackJudge) all use OCR_TEXT_MODEL
+// (Gemini) via callGemini/callOcrTranscribe -- see each one's own call
+// site for current confirmation, not this comment, next time something
+// here seems to drift again.
+const QWEN_VL_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
+// Ticket 25 (2026-09-27): switched from QWEN_VL_MODEL to Gemini
 // 3.1 Flash Lite for the OCR-transcription step specifically, after two
 // rounds of real comparison (Tickets 23/24, 3+10 photos; Ticket 25, 6
 // user-curated photos) showed Gemini clearly more accurate on complex
@@ -1903,9 +1906,14 @@ const PRODUCTION_OCR_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 // rollback, not just "should be fine now".
 const OCR_TEXT_MODEL = "google/gemini-3.1-flash-lite";
 
+// DIAGNOSTIC ONLY (2026-10-03) -- real Qwen model, but not reachable from
+// any production route. Only caller is handleTestRotationLatency
+// (/api/test-rotation-latency, DEBUG_TOKEN-gated), which piggybacks a
+// real-Qwen-on-real-image timing check onto the rotation-latency test. Do
+// not treat this as part of the live grading pipeline.
 async function callQwen(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
-    model: PRODUCTION_OCR_MODEL,
+    model: QWEN_VL_MODEL,
     maxTokens: 4096,
     timeoutMs: 8000,
     // Ticket 21 (2026-09-26, explicit user decision): never route through
@@ -1919,11 +1927,17 @@ async function callQwen(images, prompt, openrouterKey) {
 }
 
 // Ticket 45 (2026-09-27): same "model name hardcoded in more than one
-// place" gap already fixed for Qwen/Gemini/Jev (PRODUCTION_OCR_MODEL /
+// place" gap already fixed for Qwen/Gemini/Jev (QWEN_VL_MODEL /
 // OCR_TEXT_MODEL / JEV_MODEL) -- this one had spread to 3 separate
 // literal copies of the DeepSeek model string (the real callDeepSeek()
 // below, plus 2 connectivity self-test routes). One shared constant so a
 // future DeepSeek version bump/swap is a one-line change.
+// DIAGNOSTIC ONLY (2026-10-03): DeepSeek was fully removed from the live
+// pipeline by the 2026-09-29 Qwen/DeepSeek->Gemini swap. callDeepSeek()
+// below has ZERO production call sites -- this constant is only read by
+// handleTestDeepSeekLatency's 2 inline connectivity checks
+// (/api/test-deepseek-latency, DEBUG_TOKEN-gated) and by callDeepSeek()
+// itself.
 const DEEPSEEK_MODEL = "deepseek/deepseek-v4.1-flash";
 
 // Reasoning-based second look, tried when Qwen fails/gives up. Real
@@ -1933,6 +1947,10 @@ const DEEPSEEK_MODEL = "deepseek/deepseek-v4.1-flash";
 // "Alibaba" route (an observed source of false-positive content-
 // moderation blocks on ordinary children's homework) and a generous
 // max_tokens noticeably reduces but does not eliminate this.
+// DIAGNOSTIC ONLY (2026-10-03) -- zero production call sites (verified by
+// grep). Kept only so PAID_CALL_MARKERS in
+// test/no-unguarded-paid-routes.test.js still recognizes it if a future
+// route ever reintroduces a real call.
 async function callDeepSeek(images, prompt, openrouterKey) {
   return callOpenRouterVisionModel(images, prompt, openrouterKey, {
     model: DEEPSEEK_MODEL,
@@ -3282,7 +3300,7 @@ function extractContinuationMarkers(text) {
 // the model replies with plain "label=printed|answer" lines rather than
 // JSON, so it needs its own response parsing rather than reusing that
 // function directly.
-async function callQwenOcrText(images, openrouterKey) {
+async function callOcrTranscribe(images, openrouterKey) {
   const prompt = OCR_ONLY_PROMPT(images.length);
   const body = {
     // 2026-09-22: back to the validated baseline. DeepSeek V4.1 Flash,
@@ -3326,7 +3344,7 @@ async function callQwenOcrText(images, openrouterKey) {
   const timeoutPromise = new Promise((_, reject) => {
     setTimeout(() => {
       controller.abort();
-      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_timeout", status: 502 });
+      reject({ kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "ocr_transcribe_timeout", status: 502 });
     }, 15000);
   });
   let res;
@@ -3346,17 +3364,17 @@ async function callQwenOcrText(images, openrouterKey) {
       timeoutPromise,
     ]);
   } catch (e) {
-    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_timeout", status: 502 };
+    throw (e && e.kind) ? e : { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "ocr_transcribe_timeout", status: 502 };
   }
   if (!res.ok) {
     const errText = await res.text();
-    console.log(JSON.stringify({ event: "qwen_ocr_error", status: res.status, detail: errText.slice(0, 500) }));
+    console.log(JSON.stringify({ event: "ocr_transcribe_error", status: res.status, detail: errText.slice(0, 500) }));
     throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: errText.slice(0, 300), status: 502 };
   }
   const data = await res.json();
   const choice = data.choices && data.choices[0];
   if (!choice || choice.finish_reason !== "stop") {
-    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_incomplete", status: 502 };
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "ocr_transcribe_incomplete", status: 502 };
   }
   const text = (choice.message && choice.message.content) || "";
   const { continuesFromPrevious, continuesToNext, cleanedText: cleanedText1 } = extractContinuationMarkers(text);
@@ -3392,7 +3410,7 @@ async function callQwenOcrText(images, openrouterKey) {
   // zero normal items -- only treat this as a real OCR failure when
   // BOTH are empty, not just items.
   if (!items.length && !sudokuPuzzles.length) {
-    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "qwen_ocr_empty", status: 502 };
+    throw { kind: "upstream_error", uiMessage: "改功課服務暫時無法使用，請稍後再試。", detail: "ocr_transcribe_empty", status: 502 };
   }
   return { items, usage: data.usage || null, continuesFromPrevious, continuesToNext, priceTable, passageText, wordBank, sudokuPuzzles, pictogramData, calendarGrid, scheduleTable, locationGrid, facingDirection, digitCards, shortDivisionMc, squaresDiagonal, trapezoidBaseline, parallelogramShadedWidth, rectCutKite, compassRoseMc, paperFold, pathGraph, clockOptions, coinBlanks, distanceValues, objectHeights, barChart, stickLengths, pieChart, leafletTable, distanceTimeTable };
 }
@@ -15124,7 +15142,7 @@ async function mapBounded(items, concurrency, fn) {
   return results;
 }
 
-// At most this many pages' Qwen calls run at once. Bounded (not
+// At most this many pages' OCR-transcribe calls run at once. Bounded (not
 // unlimited) so a large submission doesn't fire N simultaneous OpenRouter
 // requests; low enough to stay well inside real per-request timeouts,
 // high enough that pages still don't run fully sequentially.
@@ -15183,7 +15201,7 @@ async function handleMark(request, env) {
     return json({ error: "bad_request", message: "images is required" }, 400);
   }
   // Same cap as handleCheckInner's MAX_PAGES, for the same reason:
-  // rejected here, before mapBounded ever fires a single Qwen/Vision
+  // rejected here, before mapBounded ever fires a single OCR/Vision
   // call, not after -- an oversized submission must never reach the
   // AI-call stage just to be told no.
   const MARK_MAX_PAGES = 5;
@@ -15245,35 +15263,37 @@ async function handleMark(request, env) {
   // back to a Telegram user stayed sideways whenever the source photo
   // was, since nothing ever physically straightened it. Mutates `images`
   // in place (same contract as handleCheckInner's own call to this),
-  // so every downstream step (Qwen OCR, Vision bbox lookup) reads the
+  // so every downstream step (OCR transcribe, Vision bbox lookup) reads the
   // corrected bytes automatically -- ocrCache lets a page whose rotation
   // check found no rotation needed skip a second, redundant Vision call
   // below, same optimization /api/check already has.
   const { rotationApplied, ocrCache } = await detectAndCorrectRotation(images, visionKey);
 
   // Per-page pipeline (2026-09-21 rewrite, replacing one combined
-  // multi-image Qwen call): a real 4-page submission reliably hit
-  // callQwenOcrText's 15s per-call timeout when all 4 images went in one
-  // request, failing the ENTIRE submission with nothing recovered from
-  // any page. Calling Qwen once PER PAGE fixes that (a slow/failing page
-  // only costs that page) and also makes page identity structural --
-  // which call produced an item -- rather than guessed afterwards by
-  // matching against every page's Vision words. Pages run with bounded
-  // concurrency, each page's Qwen+Vision calls still running in parallel
-  // with each other (not sequential) as before.
+  // multi-image OCR call -- was Qwen at the time, is Gemini via
+  // callOcrTranscribe as of Ticket 25/27/29, 2026-09-27): a real 4-page
+  // submission reliably hit callOcrTranscribe's 15s per-call timeout when
+  // all 4 images went in one request, failing the ENTIRE submission with
+  // nothing recovered from any page. Calling callOcrTranscribe once PER
+  // PAGE fixes that (a slow/failing page only costs that page) and also
+  // makes page identity structural -- which call produced an item --
+  // rather than guessed afterwards by matching against every page's
+  // Vision words. Pages run with bounded concurrency, each page's
+  // OCR+Vision calls still running in parallel with each other (not
+  // sequential) as before.
   const tPages = Date.now();
   const pageResults = await mapBounded(images, MARK_PAGE_CONCURRENCY, async (img, pageIdx) => {
-    const tQwen = Date.now();
-    // Downscale ONLY the copy sent to Qwen -- the same 640px
+    const tOcr = Date.now();
+    // Downscale ONLY the copy sent to callOcrTranscribe -- the same 640px
     // downscaleForCheapTier() already validated for /api/check's fast
     // tier (its own git history root-caused real Qwen/DeepSeek "hangs"
     // to sending full-resolution images), which /api/mark had never
     // adopted. Vision's OWN copy (below) stays full-resolution and
     // unchanged -- bbox percentages are computed against whichever
     // image each model actually saw, so this can't skew bbox accuracy.
-    const qwenPromise = callQwenOcrText([downscaleForCheapTier(img, 640)], openrouterKey)
-      .then((r) => ({ ok: true, items: r.items, usage: r.usage, qwenMs: Date.now() - tQwen, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths, pieChart: r.pieChart, leafletTable: r.leafletTable, distanceTimeTable: r.distanceTimeTable }))
-      .catch((e) => ({ ok: false, error: e, qwenMs: Date.now() - tQwen }));
+    const ocrPromise = callOcrTranscribe([downscaleForCheapTier(img, 640)], openrouterKey)
+      .then((r) => ({ ok: true, items: r.items, usage: r.usage, ocrMs: Date.now() - tOcr, continuesFromPrevious: r.continuesFromPrevious, continuesToNext: r.continuesToNext, priceTable: r.priceTable, passageText: r.passageText, wordBank: r.wordBank, sudokuPuzzles: r.sudokuPuzzles, pictogramData: r.pictogramData, calendarGrid: r.calendarGrid, scheduleTable: r.scheduleTable, locationGrid: r.locationGrid, facingDirection: r.facingDirection, digitCards: r.digitCards, shortDivisionMc: r.shortDivisionMc, squaresDiagonal: r.squaresDiagonal, trapezoidBaseline: r.trapezoidBaseline, parallelogramShadedWidth: r.parallelogramShadedWidth, rectCutKite: r.rectCutKite, compassRoseMc: r.compassRoseMc, paperFold: r.paperFold, pathGraph: r.pathGraph, clockOptions: r.clockOptions, coinBlanks: r.coinBlanks, distanceValues: r.distanceValues, objectHeights: r.objectHeights, barChart: r.barChart, stickLengths: r.stickLengths, pieChart: r.pieChart, leafletTable: r.leafletTable, distanceTimeTable: r.distanceTimeTable }))
+      .catch((e) => ({ ok: false, error: e, ocrMs: Date.now() - tOcr }));
     const tVision = Date.now();
     const cachedOcr = ocrCache && ocrCache.get(pageIdx);
     const visionPromise = cachedOcr
@@ -15286,130 +15306,130 @@ async function handleMark(request, env) {
             console.log(JSON.stringify({ event: "mark_vision_page_error", page: pageIdx, error: String(e) }));
             return null; // this page's Vision failure costs only its own bbox data, not the page's OCR
           });
-    const [qwenOutcome, vision] = await Promise.all([qwenPromise, visionPromise]);
-    if (!qwenOutcome.ok) {
-      const e = qwenOutcome.error;
+    const [ocrOutcome, vision] = await Promise.all([ocrPromise, visionPromise]);
+    if (!ocrOutcome.ok) {
+      const e = ocrOutcome.error;
       console.log(JSON.stringify({ event: "mark_page_ocr_failed", page: pageIdx, error: (e && (e.detail || e.uiMessage)) || String(e) }));
-      return { page: pageIdx, failed: true, error: e, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null };
+      return { page: pageIdx, failed: true, error: e, ocrMs: ocrOutcome.ocrMs, visionMs: vision ? vision.visionMs : null };
     }
     // Ticket 52: price table is page-level shared context (one table,
     // many items reference it), attached directly onto each of this
     // page's own item objects -- simplest way to reach
     // classifyAndVerify(item) without changing its call signature, same
     // approach as every other per-item field (subject, handler, etc.).
-    if (qwenOutcome.priceTable) {
-      qwenOutcome.items.forEach((item) => { item.priceTable = qwenOutcome.priceTable; });
+    if (ocrOutcome.priceTable) {
+      ocrOutcome.items.forEach((item) => { item.priceTable = ocrOutcome.priceTable; });
     }
     // Ticket 222 "Pattern 5": same page-level shared-context pattern as
     // priceTable above.
-    if (qwenOutcome.stickLengths) {
-      qwenOutcome.items.forEach((item) => { item.stickLengths = qwenOutcome.stickLengths; });
+    if (ocrOutcome.stickLengths) {
+      ocrOutcome.items.forEach((item) => { item.stickLengths = ocrOutcome.stickLengths; });
     }
     // Ticket 53: same page-level shared-context pattern as priceTable above.
-    if (qwenOutcome.passageText) {
-      qwenOutcome.items.forEach((item) => { item.passageText = qwenOutcome.passageText; });
+    if (ocrOutcome.passageText) {
+      ocrOutcome.items.forEach((item) => { item.passageText = ocrOutcome.passageText; });
     }
     // Ticket 54: word bank is also page-level shared context, but (unlike
     // priceTable/passageText) is NOT consumed via a per-item
     // QUESTION_TYPE_HANDLERS entry -- see the dedicated "Module 2b" pass
     // below, which needs the bank list directly on the page result too.
-    if (qwenOutcome.wordBank) {
-      qwenOutcome.items.forEach((item) => { item.wordBank = qwenOutcome.wordBank; });
+    if (ocrOutcome.wordBank) {
+      ocrOutcome.items.forEach((item) => { item.wordBank = ocrOutcome.wordBank; });
     }
     // Ticket 68: pictogram data is page-level shared context, same
     // pattern as priceTable -- consumed via a per-item QUESTION_TYPE_HANDLERS
     // entry (pictogram_data_query), so a direct item attachment is enough.
-    if (qwenOutcome.pictogramData) {
-      qwenOutcome.items.forEach((item) => { item.pictogramData = qwenOutcome.pictogramData; });
+    if (ocrOutcome.pictogramData) {
+      ocrOutcome.items.forEach((item) => { item.pictogramData = ocrOutcome.pictogramData; });
     }
     // Ticket 134: calendar grid is page-level shared context, same
     // pattern as pictogramData above.
-    if (qwenOutcome.calendarGrid) {
-      qwenOutcome.items.forEach((item) => { item.calendarGrid = qwenOutcome.calendarGrid; });
+    if (ocrOutcome.calendarGrid) {
+      ocrOutcome.items.forEach((item) => { item.calendarGrid = ocrOutcome.calendarGrid; });
     }
     // Ticket 135: schedule table is page-level shared context, same
     // pattern as calendarGrid above.
-    if (qwenOutcome.scheduleTable) {
-      qwenOutcome.items.forEach((item) => { item.scheduleTable = qwenOutcome.scheduleTable; });
+    if (ocrOutcome.scheduleTable) {
+      ocrOutcome.items.forEach((item) => { item.scheduleTable = ocrOutcome.scheduleTable; });
     }
     // Location-grid direction reasoning: page-level shared context, same
     // pattern as scheduleTable above.
-    if (qwenOutcome.locationGrid) {
-      qwenOutcome.items.forEach((item) => { item.locationGrid = qwenOutcome.locationGrid; });
+    if (ocrOutcome.locationGrid) {
+      ocrOutcome.items.forEach((item) => { item.locationGrid = ocrOutcome.locationGrid; });
     }
     // Facing-direction reasoning: page-level shared context, same
     // pattern as locationGrid above.
-    if (qwenOutcome.facingDirection) {
-      qwenOutcome.items.forEach((item) => { item.facingDirection = qwenOutcome.facingDirection; });
+    if (ocrOutcome.facingDirection) {
+      ocrOutcome.items.forEach((item) => { item.facingDirection = ocrOutcome.facingDirection; });
     }
     // Digit-card combinatorial construction: page-level shared context,
     // same pattern as facingDirection above.
-    if (qwenOutcome.digitCards) {
-      qwenOutcome.items.forEach((item) => { item.digitCards = qwenOutcome.digitCards; });
+    if (ocrOutcome.digitCards) {
+      ocrOutcome.items.forEach((item) => { item.digitCards = ocrOutcome.digitCards; });
     }
     // Tickets 154/155/156/158: same page-level shared-context pattern.
-    if (qwenOutcome.shortDivisionMc) {
-      qwenOutcome.items.forEach((item) => { item.shortDivisionMc = qwenOutcome.shortDivisionMc; });
+    if (ocrOutcome.shortDivisionMc) {
+      ocrOutcome.items.forEach((item) => { item.shortDivisionMc = ocrOutcome.shortDivisionMc; });
     }
-    if (qwenOutcome.squaresDiagonal) {
-      qwenOutcome.items.forEach((item) => { item.squaresDiagonal = qwenOutcome.squaresDiagonal; });
+    if (ocrOutcome.squaresDiagonal) {
+      ocrOutcome.items.forEach((item) => { item.squaresDiagonal = ocrOutcome.squaresDiagonal; });
     }
-    if (qwenOutcome.trapezoidBaseline != null) {
-      qwenOutcome.items.forEach((item) => { item.trapezoidBaseline = qwenOutcome.trapezoidBaseline; });
+    if (ocrOutcome.trapezoidBaseline != null) {
+      ocrOutcome.items.forEach((item) => { item.trapezoidBaseline = ocrOutcome.trapezoidBaseline; });
     }
-    if (qwenOutcome.parallelogramShadedWidth != null) {
-      qwenOutcome.items.forEach((item) => { item.parallelogramShadedWidth = qwenOutcome.parallelogramShadedWidth; });
+    if (ocrOutcome.parallelogramShadedWidth != null) {
+      ocrOutcome.items.forEach((item) => { item.parallelogramShadedWidth = ocrOutcome.parallelogramShadedWidth; });
     }
     // Ticket 177: same page-level shared-context pattern.
-    if (qwenOutcome.rectCutKite) {
-      qwenOutcome.items.forEach((item) => { item.rectCutKite = qwenOutcome.rectCutKite; });
+    if (ocrOutcome.rectCutKite) {
+      ocrOutcome.items.forEach((item) => { item.rectCutKite = ocrOutcome.rectCutKite; });
     }
     // Ticket 179: same page-level shared-context pattern.
-    if (qwenOutcome.compassRoseMc) {
-      qwenOutcome.items.forEach((item) => { item.compassRoseMc = qwenOutcome.compassRoseMc; });
+    if (ocrOutcome.compassRoseMc) {
+      ocrOutcome.items.forEach((item) => { item.compassRoseMc = ocrOutcome.compassRoseMc; });
     }
     // Ticket 188: same page-level shared-context pattern.
-    if (qwenOutcome.paperFold) {
-      qwenOutcome.items.forEach((item) => { item.paperFold = qwenOutcome.paperFold; });
+    if (ocrOutcome.paperFold) {
+      ocrOutcome.items.forEach((item) => { item.paperFold = ocrOutcome.paperFold; });
     }
     // Ticket 185: same page-level shared-context pattern.
-    if (qwenOutcome.pathGraph) {
-      qwenOutcome.items.forEach((item) => { item.pathGraph = qwenOutcome.pathGraph; });
+    if (ocrOutcome.pathGraph) {
+      ocrOutcome.items.forEach((item) => { item.pathGraph = ocrOutcome.pathGraph; });
     }
     // Ticket 187: same page-level shared-context pattern.
-    if (qwenOutcome.clockOptions) {
-      qwenOutcome.items.forEach((item) => { item.clockOptions = qwenOutcome.clockOptions; });
+    if (ocrOutcome.clockOptions) {
+      ocrOutcome.items.forEach((item) => { item.clockOptions = ocrOutcome.clockOptions; });
     }
     // Ticket 189: same page-level shared-context pattern.
-    if (qwenOutcome.coinBlanks) {
-      qwenOutcome.items.forEach((item) => { item.coinBlanks = qwenOutcome.coinBlanks; });
+    if (ocrOutcome.coinBlanks) {
+      ocrOutcome.items.forEach((item) => { item.coinBlanks = ocrOutcome.coinBlanks; });
     }
     // Ticket 194: same page-level shared-context pattern.
-    if (qwenOutcome.distanceValues) {
-      qwenOutcome.items.forEach((item) => { item.distanceValues = qwenOutcome.distanceValues; });
+    if (ocrOutcome.distanceValues) {
+      ocrOutcome.items.forEach((item) => { item.distanceValues = ocrOutcome.distanceValues; });
     }
     // Ticket 195: same page-level shared-context pattern.
-    if (qwenOutcome.objectHeights) {
-      qwenOutcome.items.forEach((item) => { item.objectHeights = qwenOutcome.objectHeights; });
+    if (ocrOutcome.objectHeights) {
+      ocrOutcome.items.forEach((item) => { item.objectHeights = ocrOutcome.objectHeights; });
     }
     // Ticket 199: same page-level shared-context pattern.
-    if (qwenOutcome.barChart) {
-      qwenOutcome.items.forEach((item) => { item.barChart = qwenOutcome.barChart; });
+    if (ocrOutcome.barChart) {
+      ocrOutcome.items.forEach((item) => { item.barChart = ocrOutcome.barChart; });
     }
     // Found 2026-10-02: pie chart is page-level shared context, same
     // pattern as barChart above.
-    if (qwenOutcome.pieChart) {
-      qwenOutcome.items.forEach((item) => { item.pieChart = qwenOutcome.pieChart; });
+    if (ocrOutcome.pieChart) {
+      ocrOutcome.items.forEach((item) => { item.pieChart = ocrOutcome.pieChart; });
     }
     // Found 2026-10-02: leaflet table is page-level shared context, same
     // pattern as scheduleTable above.
-    if (qwenOutcome.leafletTable) {
-      qwenOutcome.items.forEach((item) => { item.leafletTable = qwenOutcome.leafletTable; });
+    if (ocrOutcome.leafletTable) {
+      ocrOutcome.items.forEach((item) => { item.leafletTable = ocrOutcome.leafletTable; });
     }
-    if (qwenOutcome.distanceTimeTable) {
-      qwenOutcome.items.forEach((item) => { item.distanceTimeTable = qwenOutcome.distanceTimeTable; });
+    if (ocrOutcome.distanceTimeTable) {
+      ocrOutcome.items.forEach((item) => { item.distanceTimeTable = ocrOutcome.distanceTimeTable; });
     }
-    return { page: pageIdx, failed: false, items: qwenOutcome.items, usage: qwenOutcome.usage, vision, qwenMs: qwenOutcome.qwenMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!qwenOutcome.continuesFromPrevious, continuesToNext: !!qwenOutcome.continuesToNext, wordBank: qwenOutcome.wordBank || null, sudokuPuzzles: qwenOutcome.sudokuPuzzles || [] };
+    return { page: pageIdx, failed: false, items: ocrOutcome.items, usage: ocrOutcome.usage, vision, ocrMs: ocrOutcome.ocrMs, visionMs: vision ? vision.visionMs : null, continuesFromPrevious: !!ocrOutcome.continuesFromPrevious, continuesToNext: !!ocrOutcome.continuesToNext, wordBank: ocrOutcome.wordBank || null, sudokuPuzzles: ocrOutcome.sudokuPuzzles || [] };
   });
   const pagesMs = Date.now() - tPages;
 
@@ -15685,7 +15705,7 @@ async function handleMark(request, env) {
   // completely different item shape (one 16-cell grid, not a
   // printedQuestion/studentAnswer pair), so these never went through
   // classifyAndVerify/QUESTION_TYPE_HANDLERS at all; extractSudokuPuzzles
-  // (called inside callQwenOcrText) already produced clean {label,
+  // (called inside callOcrTranscribe) already produced clean {label,
   // givenGrid, studentGrid} records, verified directly against the
   // existing (already tested) verifySudoku4x4. Per explicit user
   // decision: no correctAnswer generation yet for a wrong/incomplete
@@ -15893,7 +15913,7 @@ async function handleMark(request, env) {
     pagesFailed: pageErrors.length,
     needsReview: needsReviewCount,
     totalMs, pagesMs, verifyMs, mapMs,
-    perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, qwenMs: pr.qwenMs, visionMs: pr.visionMs, usage: pr.usage || null })),
+    perPage: pageResults.map((pr) => ({ page: pr.page, failed: pr.failed, ocrMs: pr.ocrMs, visionMs: pr.visionMs, usage: pr.usage || null })),
     jevPreCheck: jevUsageLog,
     aiFallback: aiFallbackUsage,
   }));

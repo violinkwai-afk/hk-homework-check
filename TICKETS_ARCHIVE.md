@@ -5,6 +5,12 @@ ticket and archive it, immediately」——每次做完一個ticket，即刻由
 TICKETS.md搬過嚟呢度，內容原封不動。TICKETS.md淨係留返未做嘅
 (🔲/⏸/⚪)。
 
+## 2026年10月3號：修正「Qwen」誤導命名（用戶要求「避免混淆」）
+
+用戶問起code入面點解仲成日講住Qwen,查live code先發現production其實一直用緊Gemini,Qwen/DeepSeek早喺09-29已經換走,但一堆function名/comment冇跟住update。
+
+- ✅ **223. 修正全部誤導嘅Qwen命名同過時comment。** `callQwenOcrText`(/api/mark真正production OCR call,實際一直用`OCR_TEXT_MODEL`=Gemini)改名`callOcrTranscribe`,連call site、error event名(`qwen_ocr_*`→`ocr_transcribe_*`)、`test/no-unguarded-paid-routes.test.js`嘅security guard list一齊改。`PRODUCTION_OCR_MODEL`(其實冇用喺production)改名`QWEN_VL_MODEL`,加comment話明淨係`/api/test-rotation-latency`呢個手動diagnostic route用緊。搵到源頭:1854行附近舊comment09-27寫「callQwen仲用喺/api/check同AI-fallback judge」,但09-29個gemini swap後冇人update過,就係呢句造成混淆——已更新做準確現狀。`callQwen`/`callDeepSeek`兩個function加咗「DIAGNOSTIC ONLY,零production call site」comment。Pipeline主流程成堆`qwenMs`/`qwenOutcome`等variable名同comment全部改做`ocr*`,歷史ticket記錄(邊次test過邊個model、點解switch)冇動。1186/1186測試通過,已push。
+
 ## 2026年9月30號：Code review + Challenge all（code-review-2axis / challenge-all，非explanation功能）
 
 用戶明確要求：對今日已完成嘅wrong-answer-explanation功能同BLUEPRINT.md決定做code review + challenge all，搵到嘅嘢（題目解釋本身除外）逐個處理。

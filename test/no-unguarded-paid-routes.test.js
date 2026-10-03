@@ -33,7 +33,7 @@ const GUARD_MARKERS = ["RATE_LIMIT_KV", "DEBUG_TOKEN", "TELEGRAM_WEBHOOK_SECRET"
 // external API, directly or via one of this file's own wrapper
 // functions -- not an exhaustive list of every possible future paid
 // call, but covers every real one in this codebase today.
-const PAID_CALL_MARKERS = ["fetch(", "callQwen(", "callDeepSeek(", "callQwenOcrText(", "callClaude(", "googleOcr(", "callAiFallbackJudge(", "callJevPreCheck("];
+const PAID_CALL_MARKERS = ["fetch(", "callQwen(", "callDeepSeek(", "callOcrTranscribe(", "callClaude(", "googleOcr(", "callAiFallbackJudge(", "callJevPreCheck("];
 
 function extractFunctionBody(src, fnName) {
   const startMatch = new RegExp(`(?:async )?function ${fnName}\\s*\\(`).exec(src);
