@@ -138,6 +138,15 @@ export default {
     if (url.pathname === "/api/test-vision-ocr-latency" && request.method === "POST") {
       return handleTestVisionOcrLatency(request, env);
     }
+    // TEMPORARY (2026-10-03): one-use debug route for testing AI-fallback
+    // candidate models (gpt-6-luna, kimi-k2.5, mimo-v2.6-flash, glm-5.3-flash)
+    // against real per-item judge prompts. Generic model+prompt+image passthrough,
+    // captures finish_reason/usage even on truncation (unlike callOpenRouterVisionModel,
+    // which throws away that info). Remove once the AI-fallback candidate round is done.
+    if (url.pathname === "/api/test-fallback-candidate" && request.method === "POST") {
+      if (request.headers.get("x-debug-token") !== DEBUG_TOKEN) return json({ error: "unauthorized" }, 401);
+      return handleTestFallbackCandidate(request, env);
+    }
     // New pipeline (2026-09-21): AI does OCR only, code does the math --
     // see the block comment above callQwenOcrText for why. Separate from
     // /api/check (which still does the older AI-judges-correctness flow)
@@ -266,6 +275,71 @@ async function handleTestVisionOcrLatency(request, env) {
     fullText,
     words: ocr && ocr.words ? ocr.words : [],
   });
+}
+
+// TEMPORARY (2026-10-03) -- see route registration comment above. Generic
+// model+prompt+image(s) passthrough for testing AI-fallback-judge candidate
+// models against real per-item judge prompts, one item at a time. Captures
+// finish_reason/usage/raw text even when the model doesn't cleanly finish
+// (callOpenRouterVisionModel throws that away) -- needed to see truncation/
+// reasoning-budget-exhaustion failures, a real recurring failure class for
+// several past candidates (see memory/project_ai_model_watch.md).
+async function handleTestFallbackCandidate(request, env) {
+  const openrouterKey = !env.OPENROUTER_API_KEY ? null
+    : typeof env.OPENROUTER_API_KEY === "string" ? env.OPENROUTER_API_KEY
+    : await env.OPENROUTER_API_KEY.get();
+  if (!openrouterKey) return json({ error: "no_openrouter_key" }, 500);
+
+  const { model, maxTokens, items } = await request.json();
+  const results = [];
+  for (const item of items) {
+    const body = {
+      model,
+      max_tokens: maxTokens || 1500,
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: item.prompt },
+            ...item.images.map((img) => ({
+              type: "image_url",
+              image_url: { url: `data:${img.mediaType || "image/jpeg"};base64,${img.data}` },
+            })),
+          ],
+        },
+      ],
+    };
+    const t0 = Date.now();
+    let record = { id: item.id, elapsedMs: null, finishReason: null, usage: null, rawText: null, error: null };
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${openrouterKey}`,
+          "http-referer": "https://hk-homework-check.violin-kwai.workers.dev",
+          "x-title": "hk-homework-check",
+        },
+        body: JSON.stringify(body),
+      });
+      record.elapsedMs = Date.now() - t0;
+      const data = await res.json();
+      if (!res.ok) {
+        record.error = JSON.stringify(data).slice(0, 500);
+      } else {
+        const choice = data.choices && data.choices[0];
+        record.finishReason = choice && choice.finish_reason;
+        record.usage = data.usage || null;
+        record.rawText = (choice && choice.message && choice.message.content) || "";
+      }
+    } catch (e) {
+      record.elapsedMs = Date.now() - t0;
+      record.error = String((e && e.message) || e);
+    }
+    results.push(record);
+  }
+  return json({ model, results });
 }
 
 async function handleTestRotationLatency(request, env) {
