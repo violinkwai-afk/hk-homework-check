@@ -1411,6 +1411,42 @@ test("diameter_from_circumference_mc handler: English citation, registered, reac
   assert.equal(winner.name, "diameter_from_circumference_mc");
 });
 
+// wheel_multi_lap_distance -- multi-lap total distance (circumference x
+// laps), with π explicitly stated so there's no rounding ambiguity.
+// Real citation `tsa/2023/p6_paper_TSA2023_6MC2.pdf` Q21 -> official
+// answer 628 (20x3.14x10), bilingual from the start
+// (`tsa/2023/p6_paper_TSA2023_6ME2.pdf`).
+const HAMSTER_Q = "21. 一個倉鼠轉輪的直徑是20 cm。倉鼠在轉輪內跑了 10 個圈，共跑了 cm。（取π 值為3.14）";
+const HAMSTER_Q_EN = "The diameter of a hamster wheel is 20 cm. A hamster ran for 10 rounds in the wheel. In total it ran cm. (Take π as 3.14)";
+
+test("verifyWheelMultiLapDistance: real citation (tsa/2023/p6_paper_TSA2023_6MC2.pdf Q21), correct answer", () => {
+  const r = worker.verifyWheelMultiLapDistance({ printedQuestion: HAMSTER_Q, studentAnswer: "628" });
+  assert.equal(r.correct, true);
+});
+
+test("verifyWheelMultiLapDistance: real citation, wrong answer", () => {
+  const r = worker.verifyWheelMultiLapDistance({ printedQuestion: HAMSTER_Q, studentAnswer: "600" });
+  assert.equal(r.correct, false);
+  assert.equal(r.correctAnswer, "628");
+});
+
+test("wheel_multi_lap_distance handler: registered, reachable, wins dispatch (not word_problem_total)", () => {
+  const item = { printedQuestion: HAMSTER_Q, studentAnswer: "628" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "wheel_multi_lap_distance");
+});
+
+test("verifyWheelMultiLapDistance: English citation (tsa/2023/p6_paper_TSA2023_6ME2.pdf), correct answer", () => {
+  const r = worker.verifyWheelMultiLapDistance({ printedQuestion: HAMSTER_Q_EN, studentAnswer: "628" });
+  assert.equal(r.correct, true);
+});
+
+test("wheel_multi_lap_distance handler: English citation, registered, reachable, wins dispatch", () => {
+  const item = { printedQuestion: HAMSTER_Q_EN, studentAnswer: "628" };
+  const winner = worker.QUESTION_TYPE_HANDLERS.find((h) => h.detect(item));
+  assert.equal(winner.name, "wheel_multi_lap_distance");
+});
+
 const IRON_WIRE_Q_2018 = "把一條長15 cm 的鐵線，製成一個圓形的鐵圈。 鐵圈的直徑約是 cm。(以整數作答)";
 const IRON_WIRE_Q_2018_EN = "An iron wire 15 cm long is bent into a circular coil. The diameter of the circular coil is about cm. (Give the answer as a whole number)";
 const IRON_WIRE_Q_2019 = "把一個鐵圈剪開後，拉直成一條鐵線(如上圖所示)。 鐵線的長度是19 cm，鐵圈的直徑約是 cm。 (以整數作答)";

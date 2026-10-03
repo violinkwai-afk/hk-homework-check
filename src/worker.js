@@ -12621,6 +12621,44 @@ function verifyDiameterFromCircumferenceMc(item) {
   return { correct, correctAnswer: correct ? "" : expectedLetter };
 }
 
+// Found 2026-10-03: multi-lap total-distance variant (circumference ×
+// number of laps), with π EXPLICITLY stated so there's no rounding
+// ambiguity to resolve at all -- same "explicit π -> direct computation"
+// shape as circle_area_from_radius_explicit_pi above, just for
+// circumference×laps instead of area. Real citation:
+// `tsa/2023/p6_paper_TSA2023_6MC2.pdf` Q21 "一個倉鼠轉輪的直徑是20cm。
+// 倉鼠在轉輪內跑了10個圈，共跑了___cm。（取π值為3.14）" -> official
+// answer 628 (`2023/p6_marking_TSA2023_6MC2_MS.pdf`: 20×3.14×10=628);
+// English equivalent `tsa/2023/p6_paper_TSA2023_6ME2.pdf` "The diameter
+// of a hamster wheel is 20 cm. A hamster ran for 10 rounds in the
+// wheel. In total it ran ___ cm. (Take π as 3.14)".
+function isWheelMultiLapDistanceQuestion(item) {
+  const text = String(item.printedQuestion || "");
+  const hasPi = /取\s*π\s*值為\s*(?:3\.14|22\s*\/\s*7)/.test(text) || /take\s*π\s*as\s*(?:3\.14|22\s*\/\s*7)/i.test(text);
+  if (!hasPi) return false;
+  const zh = /轉輪的直徑是\s*\d+(?:\.\d+)?\s*(?:cm|米|mm|m)\b[\s\S]{0,20}跑了\s*\d+\s*個圈/.test(text);
+  const en = /diameter\s*of\s*a\s*hamster\s*wheel\s*is\s*\d+(?:\.\d+)?\s*(?:cm|m|mm)\b[\s\S]{0,30}ran\s*for\s*\d+\s*rounds/i.test(text);
+  return zh || en;
+}
+function verifyWheelMultiLapDistance(item) {
+  if (!isWheelMultiLapDistanceQuestion(item)) return { correct: null, correctAnswer: "" };
+  const text = String(item.printedQuestion || "");
+  const answer = String(item.studentAnswer || "").trim();
+  if (!answer) return { correct: null, correctAnswer: "" };
+  const piMatch = text.match(/取\s*π\s*值為\s*(3\.14|22\s*\/\s*7)/) || text.match(/take\s*π\s*as\s*(3\.14|22\s*\/\s*7)/i);
+  const dMatch = text.match(/轉輪的直徑是\s*(\d+(?:\.\d+)?)\s*(?:cm|米|mm|m)\b/) || text.match(/diameter\s*of\s*a\s*hamster\s*wheel\s*is\s*(\d+(?:\.\d+)?)\s*(?:cm|m|mm)\b/i);
+  const lapsMatch = text.match(/跑了\s*(\d+)\s*個圈/) || text.match(/ran\s*for\s*(\d+)\s*rounds/i);
+  if (!piMatch || !dMatch || !lapsMatch) return { correct: null, correctAnswer: "" };
+  const pi = piMatch[1].includes("/") ? 22 / 7 : 3.14;
+  const d = Number(dMatch[1]);
+  const laps = Number(lapsMatch[1]);
+  const expected = pi * d * laps;
+  const studentNum = parseSignedStudentNumber(answer);
+  if (Number.isNaN(studentNum)) return { correct: null, correctAnswer: "" };
+  const correct = Math.abs(studentNum - expected) < 0.005;
+  return { correct, correctAnswer: correct ? "" : String(expected) };
+}
+
 // (2) diameter_from_circumference_integer: a wire/coil's straightened
 // length (= its circumference) is given, the coil's diameter is asked --
 // same "22/7 or 3.14, both round to the same integer" logic, inverted
@@ -13448,6 +13486,16 @@ const QUESTION_TYPE_HANDLERS = [
         || (/only\s*\d+(?:\.\d+)?\s*dollars?\s*for\s*\d+\s*people/i.test(text) && /pays[\s\S]{0,20}dollars[\s\S]{0,20}cents[\s\S]{0,10}on\s*average/i.test(text));
     },
     verify: (item) => verifyMultiPersonFareSplit(item.printedQuestion, item.studentAnswer),
+  },
+  {
+    // Found 2026-10-03, see verifyWheelMultiLapDistance's own comment.
+    // Must run BEFORE word_problem_total: the real citation's own "共跑
+    //了" phrase also matches that handler's generic "共" trigger, which
+    // would wrongly sum every number in the question (diameter+laps)
+    // instead of the real diameter×π×laps multiplication.
+    name: "wheel_multi_lap_distance",
+    detect: (item) => isWheelMultiLapDistanceQuestion(item),
+    verify: (item) => verifyWheelMultiLapDistance(item),
   },
   {
     name: "word_problem_total",
@@ -16209,6 +16257,8 @@ export {
   verifyCircumferenceFromDiameterMc,
   isDiameterFromCircumferenceMcQuestion,
   verifyDiameterFromCircumferenceMc,
+  isWheelMultiLapDistanceQuestion,
+  verifyWheelMultiLapDistance,
   isDiameterFromCircumferenceIntegerQuestion,
   verifyDiameterFromCircumferenceInteger,
   isCircleAreaFromRadiusExplicitPiQuestion,

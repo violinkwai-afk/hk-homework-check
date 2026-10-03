@@ -1880,3 +1880,18 @@ citation:`tsa/2021/2021_6MC4.pdf`Q21「一個圓的直徑是10cm，它的圓周
 (`tsa/2021/2021_6ME4.pdf`)。
 
 全repo1173→1176條test,全部pass。
+
+## 2026-10-03(續30)— 新handler:wheel_multi_lap_distance + 1個collision修正
+
+搵到新handler:倉鼠轉輪跑幾個圈,問共跑咗幾遠(直徑×π×圈數,π值
+明文指定,冇四捨五入歧義)。真實citation:`tsa/2023/
+p6_paper_TSA2023_6MC2.pdf`Q21「一個倉鼠轉輪的直徑是20cm。倉鼠在轉輪
+內跑了10個圈，共跑了___cm。（取π值為3.14）」→20×3.14×10=628。中英
+文一次做齊(`tsa/2023/p6_paper_TSA2023_6ME2.pdf`)。
+
+**寫test時搵到1個真collision**:呢個citation自己嗰句「共跑了」啱啱
+好match到`word_problem_total`嗰個generic「共」trigger,導致佢錯誤
+攔截咗(將20+10全部加埋)。已經將新handler擺去`word_problem_total`
+**之前**解決。
+
+全repo1176→1181條test,全部pass。
